@@ -245,13 +245,49 @@ def build_patient_record(patient_id: str, patient_dir: Path, ocr_lang: str) -> D
     eus_paths: List[Path] = []
 
     for img_path in png_files:
-        modality = detect_image_modality(img_path, ocr_lang=ocr_lang)
+        # 优先使用常见数据命名约定：1.png=报告，2.png=WLE，3~n.png=EUS
+        # 该规则用于弥补 OCR 对低清晰截图或版式变形报告页的识别不足。
+        stem = img_path.stem.strip()
+        modality: Optional[str] = None
+        if stem.isdigit():
+            image_idx = int(stem)
+            if image_idx == 1:
+                modality = "report"
+            elif image_idx == 2:
+                modality = "wle"
+            elif image_idx >= 3:
+                modality = "eus"
+
+        if modality is None:
+            modality = detect_image_modality(img_path, ocr_lang=ocr_lang)
+
         if modality == "report":
             report_paths.append(img_path)
         elif modality == "wle":
             wle_paths.append(img_path)
         else:
             eus_paths.append(img_path)
+
+    # 兜底：若完全未识别出报告，则按“OCR 报告关键词命中最多”的图片回填为 report。
+    # 这样可避免 report 被误归类导致字段几乎全空。
+    if not report_paths and png_files:
+        best_path: Optional[Path] = None
+        best_score = -1
+        report_keywords = ("姓名", "性别", "年龄", "检查号", "镜下诊断", "诊断描述", "申请科室")
+        for img_path in png_files:
+            text = extract_report_text(img_path, ocr_lang=ocr_lang)
+            score = sum(1 for k in report_keywords if k in text)
+            if score > best_score:
+                best_score = score
+                best_path = img_path
+
+        # 至少命中 1 个关键词才进行回填，避免把普通内镜图误判为报告。
+        if best_path is not None and best_score >= 1:
+            report_paths.append(best_path)
+            if best_path in wle_paths:
+                wle_paths.remove(best_path)
+            if best_path in eus_paths:
+                eus_paths.remove(best_path)
 
     report_text_raw = ""
     if report_paths:
