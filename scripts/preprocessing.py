@@ -6,8 +6,8 @@
 2. 基于图像内容启发式规则识别 report / wle / eus 模态。
 3. 对报告图进行 OCR（优先使用 pytesseract，失败时容错）。
 4. 从 OCR 文本中抽取结构化字段并解析四分类标签。
-5. 生成每位患者目录下的 report.csv。
-6. 生成全局 patient_manifest.csv 与 patient_labels.csv。
+5. 在每位患者目录下生成“纵向键值” report.csv（字段+取值两列）。
+6. 生成全局 patient_summary.csv（每位患者一行）。
 
 OCR 依赖说明：
 - Python 包：pytesseract、Pillow
@@ -126,7 +126,10 @@ def parse_structured_report_fields(report_text_raw: str) -> Dict[str, Optional[s
         "report_sex": find_with_patterns(text, [r"性别\s*[:：]\s*([男女])"]),
         "report_age": find_with_patterns(text, [r"年龄\s*[:：]\s*([0-9]{1,3})\s*岁?"]),
         "report_exam_no": find_with_patterns(text, [r"检查号\s*[:：]\s*([A-Za-z0-9\-]+)"]),
-        "report_bed_no": find_with_patterns(text, [r"病区床号\s*[:：]\s*([^\s]+)", r"床号\s*[:：]\s*([^\s]+)"]),
+        "report_ward_bed": find_with_patterns(
+            text,
+            [r"病区\s*[-－—]\s*床号\s*[:：]\s*([^\s]+)", r"病区床号\s*[:：]\s*([^\s]+)", r"床号\s*[:：]\s*([^\s]+)"],
+        ),
         "report_outpatient_no": find_with_patterns(text, [r"门诊号\s*[:：]\s*([A-Za-z0-9\-]+)"]),
         "report_medical_record_no": find_with_patterns(text, [r"病案号\s*[:：]\s*([A-Za-z0-9\-]+)"]),
         "report_exam_date": find_with_patterns(text, [r"检查日期\s*[:：]\s*([0-9]{4}[\-/\.][0-9]{1,2}[\-/\.][0-9]{1,2})"]),
@@ -134,6 +137,7 @@ def parse_structured_report_fields(report_text_raw: str) -> Dict[str, Optional[s
         "report_machine_model": find_with_patterns(text, [r"机型\s*[:：]\s*([^\s]+)", r"设备型号\s*[:：]\s*([^\s]+)"]),
         "report_description": find_with_patterns(text, [r"诊断描述\s*[:：]\s*(.+?)(?:镜下诊断|检查图像|$)"]),
         "report_endoscopic_impression": find_with_patterns(text, [r"镜下诊断\s*[:：]\s*(.+?)(?:检查图像|$)"]),
+        "report_exam_images": find_with_patterns(text, [r"检查图[象像]\s*[:：]\s*(.+)$"]),
     }
 
     summary_parts = []
@@ -307,12 +311,46 @@ def write_csv(file_path: Path, rows: Sequence[Dict[str, object]], fieldnames: Se
             writer.writerow({k: row.get(k, "") for k in fieldnames})
 
 
+def bool_str(v: object) -> str:
+    return "True" if bool(v) else "False"
+
+
+PATIENT_REPORT_ITEMS: List[Tuple[str, str]] = [
+    ("姓名", "report_name"),
+    ("性别", "report_sex"),
+    ("年龄", "report_age"),
+    ("检查号", "report_exam_no"),
+    ("病区-床号", "report_ward_bed"),
+    ("门诊号", "report_outpatient_no"),
+    ("病案号", "report_medical_record_no"),
+    ("检查日期", "report_exam_date"),
+    ("申请科室", "report_department"),
+    ("机型", "report_machine_model"),
+    ("诊断描述", "report_description"),
+    ("镜下诊断", "report_endoscopic_impression"),
+    ("检查图象", "report_exam_images"),
+    ("类别（四分类）", "label_4class"),
+    ("是否有WLS", "has_wle"),
+    ("WLS图像数", "num_wle"),
+    ("是否有EUS", "has_eus"),
+    ("EUS图像数", "num_eus"),
+]
+
+
 def write_patient_report_csv(record: Dict[str, object], overwrite: bool) -> None:
     patient_dir = Path(str(record["folder_path"]))
     out_file = patient_dir / "report.csv"
     if out_file.exists() and not overwrite:
         return
-    write_csv(out_file, [record], fieldnames=ALL_FIELDS)
+
+    rows: List[Dict[str, object]] = []
+    for display_key, src_key in PATIENT_REPORT_ITEMS:
+        value = record.get(src_key, "")
+        if src_key in {"has_wle", "has_eus"}:
+            value = bool_str(value)
+        rows.append({"字段": display_key, "值": value if value is not None else ""})
+
+    write_csv(out_file, rows, fieldnames=["字段", "值"])
 
 
 ALL_FIELDS = [
@@ -334,7 +372,7 @@ ALL_FIELDS = [
     "report_sex",
     "report_age",
     "report_exam_no",
-    "report_bed_no",
+    "report_ward_bed",
     "report_outpatient_no",
     "report_medical_record_no",
     "report_exam_date",
@@ -342,28 +380,38 @@ ALL_FIELDS = [
     "report_machine_model",
     "report_description",
     "report_endoscopic_impression",
+    "report_exam_images",
     "report_summary_normalized",
     "label_4class",
     "is_uncertain_label",
     "needs_manual_review",
 ]
 
-LABEL_FIELDS = [
+SUMMARY_FIELDS = [
     "patient_id",
+    "folder_name",
     "label_4class",
-    "modalities_present",
-    "has_report",
-    "has_wle",
-    "has_eus",
-    "is_uncertain_label",
-    "needs_manual_review",
-    "report_endoscopic_impression",
+    "report_name",
+    "report_sex",
+    "report_age",
+    "report_exam_no",
+    "report_ward_bed",
+    "report_outpatient_no",
+    "report_medical_record_no",
+    "report_exam_date",
+    "report_department",
+    "report_machine_model",
     "report_description",
-    "report_summary_normalized",
+    "report_endoscopic_impression",
+    "report_exam_images",
+    "has_wle",
+    "num_wle",
+    "has_eus",
+    "num_eus",
 ]
 
 
-def run_pipeline(dataset_root: Path, output_dir: Path, overwrite_report_csv: bool, ocr_lang: str) -> Tuple[Path, Path, int]:
+def run_pipeline(dataset_root: Path, output_dir: Path, overwrite_report_csv: bool, ocr_lang: str) -> Tuple[Path, int]:
     patient_folders = list_patient_folders(dataset_root)
 
     records: List[Dict[str, object]] = []
@@ -391,7 +439,7 @@ def run_pipeline(dataset_root: Path, output_dir: Path, overwrite_report_csv: boo
                 "report_sex": "",
                 "report_age": "",
                 "report_exam_no": "",
-                "report_bed_no": "",
+                "report_ward_bed": "",
                 "report_outpatient_no": "",
                 "report_medical_record_no": "",
                 "report_exam_date": "",
@@ -399,6 +447,7 @@ def run_pipeline(dataset_root: Path, output_dir: Path, overwrite_report_csv: boo
                 "report_machine_model": "",
                 "report_description": "",
                 "report_endoscopic_impression": "",
+                "report_exam_images": "",
                 "report_summary_normalized": "",
                 "label_4class": "",
                 "is_uncertain_label": False,
@@ -408,11 +457,9 @@ def run_pipeline(dataset_root: Path, output_dir: Path, overwrite_report_csv: boo
         records.append(record)
         write_patient_report_csv(record, overwrite=overwrite_report_csv)
 
-    manifest_path = output_dir / "patient_manifest.csv"
-    labels_path = output_dir / "patient_labels.csv"
-    write_csv(manifest_path, records, fieldnames=ALL_FIELDS)
-    write_csv(labels_path, records, fieldnames=LABEL_FIELDS)
-    return manifest_path, labels_path, len(records)
+    summary_path = output_dir / "patient_summary.csv"
+    write_csv(summary_path, records, fieldnames=SUMMARY_FIELDS)
+    return summary_path, len(records)
 
 
 def parse_args() -> argparse.Namespace:
@@ -427,7 +474,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=Path("/home/Lim/projects/eus-gist-leiomyoma/data/manifests"),
-        help="全局输出目录（patient_manifest.csv / patient_labels.csv）",
+        help="全局输出目录（patient_summary.csv）",
     )
     parser.add_argument(
         "--overwrite-report-csv",
@@ -451,7 +498,7 @@ def main() -> None:
     if not dataset_root.exists() or not dataset_root.is_dir():
         raise SystemExit(f"dataset_root 不存在或不是目录: {dataset_root}")
 
-    manifest_path, labels_path, patient_count = run_pipeline(
+    summary_path, patient_count = run_pipeline(
         dataset_root=dataset_root,
         output_dir=output_dir,
         overwrite_report_csv=args.overwrite_report_csv,
@@ -460,8 +507,7 @@ def main() -> None:
 
     print("预处理完成")
     print(f"患者数量: {patient_count}")
-    print(f"患者主表: {manifest_path}")
-    print(f"标签文件: {labels_path}")
+    print(f"汇总文件: {summary_path}")
 
 
 if __name__ == "__main__":

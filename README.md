@@ -163,3 +163,30 @@ eus-gist-leiomyoma/
 5. 记录实验配置、划分版本与评估结果，确保可追溯。
 
 > 当前仓库为初始化阶段，具体命令行脚本、配置模板与训练入口将后续补充。
+
+---
+
+## 13. 预处理脚本产物说明（已实现）
+当前 `scripts/preprocessing.py` 的输出调整为两类记录：
+
+1. **患者级报告记录（每个患者目录内）**
+   - 文件名：`report.csv`
+   - 结构：纵向键值（两列：`字段`、`值`），会按参数选择是否覆盖旧文件。
+   - 主要字段包括：姓名、性别、年龄、检查号、病区-床号、门诊号、病案号、检查日期、申请科室、机型、诊断描述、镜下诊断、检查图象；
+   - 同时包含总结信息：
+     - 类别（四分类）：间质瘤 / 可能间质瘤 / 可能平滑肌瘤 / 平滑肌瘤；
+     - 是否有 WLS、WLS 图像数；
+     - 是否有 EUS、EUS 图像数。
+
+2. **全体患者汇总记录（全局输出目录）**
+   - 文件名：`patient_summary.csv`
+   - 结构：每个患者一行，便于后续统计、筛选与划分。
+
+示例命令：
+
+```bash
+python scripts/preprocessing.py \
+  --dataset-root /home/Lim/.cache/kagglehub/datasets/eus_dataset \
+  --output-dir /home/Lim/projects/eus-gist-leiomyoma/data/manifests \
+  --overwrite-report-csv
+```
