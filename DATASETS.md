@@ -17,11 +17,13 @@
 ## 2. 数据位置说明
 - 原始数据集目录（仓库外部）：`/home/Lim/.cache/kagglehub/datasets/eus_dataset`
 - 代码项目目录：`/home/Lim/projects/eus-gist-leiomyoma`
+- 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`
 
 原则：
 1. 原始数据不应直接提交到 GitHub 仓库；
 2. 项目仓库内部仅管理代码、文档与派生文件；
 3. 后续生成的 `manifest`、`metadata`、`split` 文件应存放在仓库内规范目录（如 `data/manifests`、`data/metadata`、`data/splits`）。
+4. 每次模型训练结果应输出到 `/home/Lim/outputs/eus-gist-leiomyoma` 下的独立训练子目录。
 
 ---
 
@@ -137,3 +139,27 @@ SCI-4 仅围绕以下两项任务：
 - **SCI-3 / SCI-2（后续）**：可在 SCI-4 数据组织基础上扩展更复杂建模方案。
 
 本文件当前以 SCI-4 为中心，不展开后续阶段实现细节。
+
+
+---
+
+## 12. 训练输出目录约定（新增）
+为支持后续持续建模，统一约定：
+
+- 输出根目录固定为：`/home/Lim/outputs/eus-gist-leiomyoma`；
+- 每次训练创建一个新子目录，命名为“编号+训练目录名”；
+- 建议格式：`{阿拉伯数字序号}_{xxx}`，其中 `xxx` 可根据后续实验内容再指定。例如：
+  - `1_eus_baseline_resnet18`
+  - `2_wle_baseline_efficientnet_b0`
+  - `3_eus_ablation_aug_v2`
+
+每次训练目录内建议至少包含：
+- `config.yaml`（训练配置快照）
+- `train.log`（训练日志）
+- `checkpoints/`（模型权重）
+- `metrics/`（验证/测试指标）
+
+说明：
+1. 编号必须递增，确保实验顺序可追溯；
+2. 即使是同一实验重跑，也建议使用新编号，并在名称中标注 `rerun` 或 `seed`；
+3. 该输出目录不纳入 Git 版本管理（建议通过 `.gitignore` 管理）。

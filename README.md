@@ -67,10 +67,31 @@
 ## 7. 项目路径与数据位置说明
 - 本地项目根目录：`/home/Lim/projects/eus-gist-leiomyoma`
 - 原始数据集目录：`/home/Lim/.cache/kagglehub/datasets/eus_dataset`
+- 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`
 
 原则说明：
 - 原始数据应保留在仓库外部，不直接纳入 Git 版本管理；
 - 仓库内仅管理代码、配置、文档及派生的元数据文件（如 manifest、split、统计摘要等）。
+- 训练产物统一写入上述输出根目录，避免污染代码仓库。
+
+### 7.1 训练输出目录规范（新增）
+为便于后续模型迭代与结果追踪，约定每次训练均在输出根目录下创建“**编号+训练目录名**”的独立子目录。
+
+推荐命名格式：
+
+```text
+/home/Lim/outputs/eus-gist-leiomyoma/
+└─ 1_eus_baseline_resnet18/
+└─ 2_wle_baseline_efficientnet_b0/
+└─ 3_eus_ablation_aug_v2/
+```
+
+说明：
+1. `1/2/3...` 为递增阿拉伯数字编号（前面不补 0），用于保证实验顺序可追溯；
+2. 下划线后的目录名用于描述本次训练主题（如模态、骨干网络、实验目的）；
+3. 具体的 `xxx` 命名可按后续实验计划单独指定；
+4. 单次训练的日志、权重、评估指标、配置快照等均放在对应子目录内；
+5. 若需重跑同一实验，建议使用新编号并在目录名中补充 `rerun`/`seed` 等标记。
 
 ---
 
