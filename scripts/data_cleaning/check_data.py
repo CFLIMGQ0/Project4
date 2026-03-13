@@ -73,12 +73,20 @@ def resolve_input_paths(args: argparse.Namespace) -> tuple[Path, Path]:
             ]
         )
 
+    if excel_path is None and dataset_root is not None:
+        excel_path = _choose_existing_path(
+            [
+                dataset_root / "all_patients_raw.xlsx",
+            ]
+        )
+
     if excel_path is None:
         excel_path = _choose_existing_path(
             [
                 Path("data/raw/all_patients_raw.xlsx"),
                 Path("data/all_patients_raw.xlsx"),
                 Path("all_patients_raw.xlsx"),
+                Path("~/.cache/kagglehub/datasets/eus_dataset/all_patients_raw.xlsx"),
             ]
         )
 
@@ -95,7 +103,8 @@ def resolve_input_paths(args: argparse.Namespace) -> tuple[Path, Path]:
             "请显式传参，示例：\n"
             "python scripts/data_cleaning/check_data.py "
             "--dataset-root /path/to/eus_dataset "
-            "--excel-path /path/to/all_patients_raw.xlsx"
+            "--excel-path /path/to/all_patients_raw.xlsx\n"
+            "或将 Excel 放在 dataset-root 下并命名为 all_patients_raw.xlsx"
         )
 
     return dataset_root, excel_path
