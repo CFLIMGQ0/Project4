@@ -28,13 +28,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        required=True,
+        default=None,
         help="数据集根目录（每个患者一个子目录）",
     )
     parser.add_argument(
         "--excel-path",
         type=Path,
-        required=True,
+        default=None,
         help="all_patients_raw.xlsx 文件路径",
     )
     parser.add_argument(
@@ -50,6 +50,55 @@ def parse_args() -> argparse.Namespace:
         help="输出报告目录",
     )
     return parser.parse_args()
+
+
+def _choose_existing_path(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        expanded = candidate.expanduser()
+        if expanded.exists():
+            return expanded
+    return None
+
+
+def resolve_input_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    dataset_root = args.dataset_root.expanduser() if args.dataset_root else None
+    excel_path = args.excel_path.expanduser() if args.excel_path else None
+
+    if dataset_root is None:
+        dataset_root = _choose_existing_path(
+            [
+                Path("data/raw/eus_dataset"),
+                Path("data/eus_dataset"),
+                Path("~/.cache/kagglehub/datasets/eus_dataset"),
+            ]
+        )
+
+    if excel_path is None:
+        excel_path = _choose_existing_path(
+            [
+                Path("data/raw/all_patients_raw.xlsx"),
+                Path("data/all_patients_raw.xlsx"),
+                Path("all_patients_raw.xlsx"),
+            ]
+        )
+
+    missing_flags = []
+    if dataset_root is None:
+        missing_flags.append("--dataset-root")
+    if excel_path is None:
+        missing_flags.append("--excel-path")
+
+    if missing_flags:
+        joined = "、".join(missing_flags)
+        raise ValueError(
+            f"缺少必要参数：{joined}。\n"
+            "请显式传参，示例：\n"
+            "python scripts/data_cleaning/check_data.py "
+            "--dataset-root /path/to/eus_dataset "
+            "--excel-path /path/to/all_patients_raw.xlsx"
+        )
+
+    return dataset_root, excel_path
 
 
 def normalize_name(name: str) -> str:
@@ -104,17 +153,18 @@ def collect_excel_names(series: Iterable[object]) -> Set[str]:
 
 def main() -> None:
     args = parse_args()
+    dataset_root, excel_path = resolve_input_paths(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not args.dataset_root.exists():
-        raise FileNotFoundError(f"dataset-root 不存在：{args.dataset_root}")
-    if not args.excel_path.exists():
-        raise FileNotFoundError(f"excel-path 不存在：{args.excel_path}")
+    if not dataset_root.exists():
+        raise FileNotFoundError(f"dataset-root 不存在：{dataset_root}")
+    if not excel_path.exists():
+        raise FileNotFoundError(f"excel-path 不存在：{excel_path}")
 
-    df = pd.read_excel(args.excel_path)
+    df = pd.read_excel(excel_path)
     name_column = detect_name_column(df, args.name_column)
 
-    folder_names = collect_folder_names(args.dataset_root)
+    folder_names = collect_folder_names(dataset_root)
     excel_names = collect_excel_names(df[name_column])
 
     only_in_excel = sorted(excel_names - folder_names)
@@ -125,8 +175,8 @@ def main() -> None:
     lines = [
         "# 患者姓名一致性核验报告",
         "",
-        f"- 数据集目录：`{args.dataset_root}`",
-        f"- Excel 文件：`{args.excel_path}`",
+        f"- 数据集目录：`{dataset_root}`",
+        f"- Excel 文件：`{excel_path}`",
         f"- Excel 姓名列：`{name_column}`",
         f"- 目录姓名数量：{len(folder_names)}",
         f"- Excel 姓名数量：{len(excel_names)}",

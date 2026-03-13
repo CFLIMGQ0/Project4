@@ -190,3 +190,26 @@ python scripts/preprocessing.py \
   --output-dir /home/Lim/projects/eus-gist-leiomyoma/data/manifests \
   --overwrite-report-csv
 ```
+
+---
+
+## 14. 患者姓名一致性核验脚本（已实现）
+使用 `scripts/data_cleaning/check_data.py` 检查 Excel 患者姓名与数据集患者目录是否一致。
+
+- 显式传参（推荐）：
+
+```bash
+python scripts/data_cleaning/check_data.py \
+  --dataset-root /path/to/eus_dataset \
+  --excel-path /path/to/all_patients_raw.xlsx
+```
+
+- 不传 `--dataset-root` / `--excel-path` 时，脚本会按以下顺序自动尝试常见路径：
+  - `data/raw/eus_dataset`
+  - `data/eus_dataset`
+  - `~/.cache/kagglehub/datasets/eus_dataset`
+  - `data/raw/all_patients_raw.xlsx`
+  - `data/all_patients_raw.xlsx`
+  - `all_patients_raw.xlsx`
+
+若自动识别失败，脚本会提示你补充必填参数。
