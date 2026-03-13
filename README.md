@@ -194,6 +194,12 @@ python scripts/preprocessing.py \
 ---
 
 ## 14. 患者姓名一致性核验脚本（已实现）
+
+> 说明：当前项目中同时约定两个名称：
+> - `all_patients_raw.xlsx`：历史上“原始台账”文件名（旧名，主要用于兼容旧脚本/旧说明）；
+> - `all_patients.xlsx`：你当前正在维护和实际使用的主文件名（新名，`check_data.py` 默认优先读取该文件）。
+>
+> 建议后续统一以 `all_patients.xlsx` 作为主数据文件，并仅在需要兼容历史流程时提及 `all_patients_raw.xlsx`。
 使用 `scripts/data_cleaning/check_data.py` 检查 Excel 患者姓名与数据集患者目录是否一致，结果直接打印到终端，不生成 `.md` 报告文件。
 
 - 显式传参（推荐）：
@@ -201,15 +207,15 @@ python scripts/preprocessing.py \
 ```bash
 python scripts/data_cleaning/check_data.py \
   --dataset-root /path/to/eus_dataset \
-  --excel-path /path/to/all_patients_raw.xlsx
+  --excel-path /path/to/all_patients.xlsx
 ```
 
 - 不传 `--dataset-root` / `--excel-path` 时，脚本会按以下顺序自动尝试常见路径：
   - `data/raw/eus_dataset`
   - `data/eus_dataset`
   - `~/.cache/kagglehub/datasets/eus_dataset`
-  - `data/raw/all_patients_raw.xlsx`
-  - `data/all_patients_raw.xlsx`
-  - `all_patients_raw.xlsx`
+  - `data/raw/all_patients.xlsx`
+  - `data/all_patients.xlsx`
+  - `all_patients.xlsx`
 
 若自动识别失败，脚本会提示你补充必填参数。
