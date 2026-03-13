@@ -16,8 +16,18 @@
 
 ## 2. 数据位置说明
 - 原始数据集目录（仓库外部）：`/home/Lim/.cache/kagglehub/datasets/eus_dataset`
+- 数据集根目录参数（`--dataset-root`）建议填写：`/home/Lim/.cache/kagglehub/datasets/eus_dataset/`
+- 患者信息 Excel 参数（`--excel-path`）固定为：`/home/Lim/.cache/kagglehub/datasets/eus_dataset/all_patients_raw.xlsx`
 - 代码项目目录：`/home/Lim/projects/eus-gist-leiomyoma`
 - 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`
+
+执行 `check_data.py` 时请显式传入上述两个参数，例如：
+
+```bash
+python scripts/data_cleaning/check_data.py \
+  --dataset-root /home/Lim/.cache/kagglehub/datasets/eus_dataset/ \
+  --excel-path /home/Lim/.cache/kagglehub/datasets/eus_dataset/all_patients_raw.xlsx
+```
 
 原则：
 1. 原始数据不应直接提交到 GitHub 仓库；
