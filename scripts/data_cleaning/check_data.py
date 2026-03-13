@@ -43,12 +43,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="手动指定 Excel 中患者姓名列名（不传则自动识别）",
     )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("scripts/data_cleaning/output"),
-        help="输出报告目录",
-    )
     return parser.parse_args()
 
 
@@ -163,7 +157,6 @@ def collect_excel_names(series: Iterable[object]) -> Set[str]:
 def main() -> None:
     args = parse_args()
     dataset_root, excel_path = resolve_input_paths(args)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if not dataset_root.exists():
         raise FileNotFoundError(f"dataset-root 不存在：{dataset_root}")
@@ -180,29 +173,29 @@ def main() -> None:
     only_in_folders = sorted(folder_names - excel_names)
     in_both = sorted(excel_names & folder_names)
 
-    report_path = args.output_dir / "name_check_report.md"
-    lines = [
-        "# 患者姓名一致性核验报告",
-        "",
-        f"- 数据集目录：`{dataset_root}`",
-        f"- Excel 文件：`{excel_path}`",
-        f"- Excel 姓名列：`{name_column}`",
-        f"- 目录姓名数量：{len(folder_names)}",
-        f"- Excel 姓名数量：{len(excel_names)}",
-        f"- 匹配成功数量：{len(in_both)}",
-        f"- 仅 Excel 中存在：{len(only_in_excel)}",
-        f"- 仅目录中存在：{len(only_in_folders)}",
-        "",
-        "## 仅 Excel 中存在的姓名",
-    ]
-    lines.extend([f"- {name}" for name in only_in_excel] or ["- 无"])
-    lines.append("")
-    lines.append("## 仅目录中存在的姓名")
-    lines.extend([f"- {name}" for name in only_in_folders] or ["- 无"])
+    print("患者姓名一致性核验结果")
+    print(f"- 数据集目录：{dataset_root}")
+    print(f"- Excel 文件：{excel_path}")
+    print(f"- Excel 姓名列：{name_column}")
+    print(f"- 目录姓名数量：{len(folder_names)}")
+    print(f"- Excel 姓名数量：{len(excel_names)}")
+    print(f"- 匹配成功数量：{len(in_both)}")
+    print(f"- 仅 Excel 中存在：{len(only_in_excel)}")
+    print(f"- 仅目录中存在：{len(only_in_folders)}")
 
-    report_path.write_text("\n".join(lines), encoding="utf-8")
+    print("\n仅 Excel 中存在的姓名：")
+    if only_in_excel:
+        for name in only_in_excel:
+            print(f"- {name}")
+    else:
+        print("- 无")
 
-    print(f"核验完成，报告已输出：{report_path}")
+    print("\n仅目录中存在的姓名：")
+    if only_in_folders:
+        for name in only_in_folders:
+            print(f"- {name}")
+    else:
+        print("- 无")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@
 - 患者信息 Excel 参数（`--excel-path`）固定为：`/home/Lim/.cache/kagglehub/datasets/eus_dataset/all_patients_raw.xlsx`
 - 脚本默认会优先尝试读取：`{dataset-root}/all_patients_raw.xlsx`；若使用上述根目录则可不传 `--excel-path`。
 - 代码项目目录：`/home/Lim/projects/eus-gist-leiomyoma`
-- 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`
+- 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`（统一使用该目录，不在项目目录内创建 outputs/outpus）
 
 执行 `check_data.py` 时推荐至少传入 `--dataset-root`，脚本会自动寻找 Excel：
 
@@ -36,6 +36,8 @@ python scripts/data_cleaning/check_data.py \
   --dataset-root /home/Lim/.cache/kagglehub/datasets/eus_dataset/ \
   --excel-path /home/Lim/.cache/kagglehub/datasets/eus_dataset/all_patients_raw.xlsx
 ```
+
+说明：`check_data.py` 仅在终端打印核验结果，不再输出 `.md` 报告文件。
 
 原则：
 1. 原始数据不应直接提交到 GitHub 仓库；

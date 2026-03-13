@@ -67,7 +67,7 @@
 ## 7. 项目路径与数据位置说明
 - 本地项目根目录：`/home/Lim/projects/eus-gist-leiomyoma`
 - 原始数据集目录：`/home/Lim/.cache/kagglehub/datasets/eus_dataset`
-- 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`
+- 训练输出根目录：`/home/Lim/outputs/eus-gist-leiomyoma`（统一使用该目录，不在项目目录内创建 outputs/outpus）
 
 原则说明：
 - 原始数据应保留在仓库外部，不直接纳入 Git 版本管理；
@@ -194,7 +194,7 @@ python scripts/preprocessing.py \
 ---
 
 ## 14. 患者姓名一致性核验脚本（已实现）
-使用 `scripts/data_cleaning/check_data.py` 检查 Excel 患者姓名与数据集患者目录是否一致。
+使用 `scripts/data_cleaning/check_data.py` 检查 Excel 患者姓名与数据集患者目录是否一致，结果直接打印到终端，不生成 `.md` 报告文件。
 
 - 显式传参（推荐）：
 
