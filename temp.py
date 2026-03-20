@@ -33,6 +33,12 @@ class DatasetSummary:
     exam_count_distribution: dict[int, int]
 
 
+@dataclass
+class DatasetReport:
+    original_summary: DatasetSummary
+    cleaned_summary: DatasetSummary
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="统计患者数量与检查次数分布")
     parser.add_argument(
@@ -67,16 +73,18 @@ def collect_exam_dirs(patient_dir: Path) -> list[Path]:
     return sorted([path for path in patient_dir.iterdir() if path.is_dir()])
 
 
-def summarize_dataset(dataset_root: Path) -> DatasetSummary:
-    if not dataset_root.exists():
-        raise FileNotFoundError(f"数据集根目录不存在：{dataset_root}")
-    if not dataset_root.is_dir():
-        raise NotADirectoryError(f"数据集根路径不是目录：{dataset_root}")
+def is_valid_exam_dir(exam_dir: Path) -> bool:
+    return (exam_dir / "img").is_dir() and (exam_dir / "pdf").is_dir()
 
-    patient_dirs = sorted([path for path in dataset_root.iterdir() if is_patient_dir(path)])
+
+def build_summary(
+    dataset_root: Path,
+    patient_dirs: list[Path],
+    exam_dirs_by_patient: dict[str, list[Path]],
+    missing_structure_issues: list[ExamIssue],
+) -> DatasetSummary:
     exam_distribution: Counter[int] = Counter()
     invalid_patient_names: list[str] = []
-    missing_structure_issues: list[ExamIssue] = []
     empty_patient_count = 0
     total_exam_count = 0
 
@@ -84,28 +92,12 @@ def summarize_dataset(dataset_root: Path) -> DatasetSummary:
         if not is_valid_patient_name(patient_dir.name):
             invalid_patient_names.append(patient_dir.name)
 
-        exam_dirs = collect_exam_dirs(patient_dir)
-        exam_count = len(exam_dirs)
+        exam_count = len(exam_dirs_by_patient[patient_dir.name])
         exam_distribution[exam_count] += 1
         total_exam_count += exam_count
 
         if exam_count == 0:
             empty_patient_count += 1
-
-        for exam_dir in exam_dirs:
-            img_dir = exam_dir / "img"
-            pdf_dir = exam_dir / "pdf"
-            has_img = img_dir.is_dir()
-            has_pdf = pdf_dir.is_dir()
-            if not (has_img and has_pdf):
-                missing_structure_issues.append(
-                    ExamIssue(
-                        patient_id=patient_dir.name,
-                        exam_dir=exam_dir.name,
-                        has_img=has_img,
-                        has_pdf=has_pdf,
-                    )
-                )
 
     return DatasetSummary(
         dataset_root=str(dataset_root),
@@ -120,8 +112,67 @@ def summarize_dataset(dataset_root: Path) -> DatasetSummary:
     )
 
 
-def print_summary(summary: DatasetSummary, show_all_issues: bool = False) -> None:
-    print("数据集结构统计结果")
+def summarize_dataset(dataset_root: Path) -> DatasetReport:
+    if not dataset_root.exists():
+        raise FileNotFoundError(f"数据集根目录不存在：{dataset_root}")
+    if not dataset_root.is_dir():
+        raise NotADirectoryError(f"数据集根路径不是目录：{dataset_root}")
+
+    patient_dirs = sorted([path for path in dataset_root.iterdir() if is_patient_dir(path)])
+    all_exam_dirs_by_patient: dict[str, list[Path]] = {}
+    cleaned_exam_dirs_by_patient: dict[str, list[Path]] = {}
+    missing_structure_issues: list[ExamIssue] = []
+
+    for patient_dir in patient_dirs:
+        exam_dirs = collect_exam_dirs(patient_dir)
+        all_exam_dirs_by_patient[patient_dir.name] = exam_dirs
+
+        valid_exam_dirs: list[Path] = []
+        for exam_dir in exam_dirs:
+            img_dir = exam_dir / "img"
+            pdf_dir = exam_dir / "pdf"
+            has_img = img_dir.is_dir()
+            has_pdf = pdf_dir.is_dir()
+            if is_valid_exam_dir(exam_dir):
+                valid_exam_dirs.append(exam_dir)
+                continue
+
+            missing_structure_issues.append(
+                ExamIssue(
+                    patient_id=patient_dir.name,
+                    exam_dir=exam_dir.name,
+                    has_img=has_img,
+                    has_pdf=has_pdf,
+                )
+            )
+
+        cleaned_exam_dirs_by_patient[patient_dir.name] = valid_exam_dirs
+
+    original_summary = build_summary(
+        dataset_root=dataset_root,
+        patient_dirs=patient_dirs,
+        exam_dirs_by_patient=all_exam_dirs_by_patient,
+        missing_structure_issues=missing_structure_issues,
+    )
+    cleaned_summary = build_summary(
+        dataset_root=dataset_root,
+        patient_dirs=patient_dirs,
+        exam_dirs_by_patient=cleaned_exam_dirs_by_patient,
+        missing_structure_issues=[],
+    )
+    return DatasetReport(
+        original_summary=original_summary,
+        cleaned_summary=cleaned_summary,
+    )
+
+
+def print_single_summary(
+    title: str,
+    summary: DatasetSummary,
+    show_issues: bool = False,
+    show_all_issues: bool = False,
+) -> None:
+    print(title)
     print("=" * 60)
     print(f"数据集根目录：{summary.dataset_root}")
     print(f"患者总数：{summary.patient_count}")
@@ -142,6 +193,9 @@ def print_summary(summary: DatasetSummary, show_all_issues: bool = False) -> Non
         for name in summary.invalid_patient_name_examples:
             print(f"- {name}")
 
+    if not show_issues:
+        return
+
     issues = summary.missing_img_or_pdf_examples
     if show_all_issues and summary.missing_img_or_pdf_exam_count > len(issues):
         print(
@@ -158,12 +212,26 @@ def print_summary(summary: DatasetSummary, show_all_issues: bool = False) -> Non
             )
 
 
-def save_summary_json(summary: DatasetSummary, output_path: Path) -> None:
+def print_report(report: DatasetReport, show_all_issues: bool = False) -> None:
+    print_single_summary(
+        title="原始统计结果",
+        summary=report.original_summary,
+        show_issues=True,
+        show_all_issues=show_all_issues,
+    )
+    print()
+    print_single_summary(
+        title="img/pdf清洗后的统计",
+        summary=report.cleaned_summary,
+    )
+
+
+def save_summary_json(report: DatasetReport, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = asdict(summary)
-    payload["missing_img_or_pdf_examples"] = [
-        asdict(issue) for issue in summary.missing_img_or_pdf_examples
-    ]
+    payload = {
+        "original_summary": asdict(report.original_summary),
+        "cleaned_summary": asdict(report.cleaned_summary),
+    }
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -172,11 +240,11 @@ def save_summary_json(summary: DatasetSummary, output_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    summary = summarize_dataset(args.dataset_root.expanduser())
-    print_summary(summary, show_all_issues=args.show_all_issues)
+    report = summarize_dataset(args.dataset_root.expanduser())
+    print_report(report, show_all_issues=args.show_all_issues)
 
     if args.save_json is not None:
-        save_summary_json(summary, args.save_json.expanduser())
+        save_summary_json(report, args.save_json.expanduser())
         print(f"\n统计结果已保存到：{args.save_json.expanduser()}")
 
 

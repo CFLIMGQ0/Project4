@@ -66,7 +66,9 @@ python temp.py --save-json outputs/dataset_summary.json
 
 ## 脚本输出内容
 
-`temp.py` 会输出以下信息：
+`temp.py` 会先输出原始统计结果，再输出一份“img/pdf清洗后的统计”。
+
+原始统计结果包含以下信息：
 
 1. 患者总数；
 2. 检查总次数；
@@ -75,6 +77,12 @@ python temp.py --save-json outputs/dataset_summary.json
    - 2 次检查：50 个患者
 4. 缺少 `img` 或 `pdf` 子目录的检查目录数量；
 5. 不符合预期命名的患者目录样例（如有）。
+
+其中“img/pdf清洗后的统计”会把 **缺少 `img` 或 `pdf` 的检查目录视为不存在**，然后重新统计：
+
+- 清洗后的检查总次数；
+- 清洗后的患者检查次数分布；
+- 清洗后新增的空患者目录数量（即原本只有无效检查目录的患者）。
 
 ## 说明
 
