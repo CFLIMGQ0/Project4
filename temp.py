@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-DEFAULT_DATASET_ROOT = Path("/home/Lim/datasets/eus-gist-leiomyoma/eus")
+DEFAULT_DATASET_ROOT = Path("/home/Lim/datasets/eus-gist-leiomyoma")
 PATIENT_DIR_PATTERN = re.compile(r"^ZS\w+$", re.IGNORECASE)
 
 
@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         "--dataset-root",
         type=Path,
         default=DEFAULT_DATASET_ROOT,
-        help="数据集根目录，默认使用 /home/Lim/datasets/eus-gist-leiomyoma/eus",
+        help="数据集根目录，默认使用 /home/Lim/datasets/eus-gist-leiomyoma/",
     )
     parser.add_argument(
         "--save-json",

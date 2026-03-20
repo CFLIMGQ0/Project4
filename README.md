@@ -14,13 +14,13 @@
 默认数据集根目录为：
 
 ```text
-/home/Lim/datasets/eus-gist-leiomyoma/eus
+/home/Lim/datasets/eus-gist-leiomyoma/
 ```
 
 目录组织约定如下：
 
 ```text
-eus/
+eus-gist-leiomyoma/
 └── ZSxxxxxxxx/                   # 单个患者目录
     ├── ZSxxxxxxxx/               # 第 1 次检查目录
     │   ├── img/                  # 该次检查图片
@@ -55,7 +55,7 @@ python temp.py
 如需显式指定数据根目录：
 
 ```bash
-python temp.py --dataset-root /home/Lim/datasets/eus-gist-leiomyoma/eus
+python temp.py --dataset-root /home/Lim/datasets/eus-gist-leiomyoma/
 ```
 
 如需输出 JSON 结果：

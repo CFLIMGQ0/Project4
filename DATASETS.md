@@ -5,7 +5,7 @@
 默认使用以下路径作为原始数据集根目录：
 
 ```text
-/home/Lim/datasets/eus-gist-leiomyoma/eus
+/home/Lim/datasets/eus-gist-leiomyoma/
 ```
 
 该路径应由多个患者目录组成。
