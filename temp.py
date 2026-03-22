@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import importlib.util
 import json
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
+if importlib.util.find_spec("yaml") is not None:
+    import yaml
+else:
+    yaml = None
 
-DEFAULT_DATASET_ROOT = Path("/home/Lim/datasets/eus-gist-leiomyoma")
+CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "path.yaml"
 PATIENT_DIR_PATTERN = re.compile(r"^ZS\w+$", re.IGNORECASE)
+
+
+@dataclass
+class PathConfig:
+    dataset_root: Path
+    output_dir: Path
+    summary_json: Path
+    patient_validity_table: Path
 
 
 @dataclass
@@ -18,6 +33,13 @@ class ExamIssue:
     exam_dir: str
     has_img: bool
     has_pdf: bool
+
+
+@dataclass
+class PatientValidity:
+    patient_id: str
+    is_valid: int
+    invalid_reason: str
 
 
 @dataclass
@@ -37,21 +59,34 @@ class DatasetSummary:
 class DatasetReport:
     original_summary: DatasetSummary
     cleaned_summary: DatasetSummary
+    patient_validity_rows: list[PatientValidity]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="统计患者数量与检查次数分布")
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help="路径配置文件，默认使用 configs/path.yaml",
+    )
+    parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=DEFAULT_DATASET_ROOT,
-        help="数据集根目录，默认使用 /home/Lim/datasets/eus-gist-leiomyoma/",
+        default=None,
+        help="可选：覆盖 path.yaml 中的 dataset_root",
     )
     parser.add_argument(
         "--save-json",
         type=Path,
         default=None,
-        help="可选：将统计结果保存为 JSON 文件",
+        help="可选：覆盖 path.yaml 中的 summary_json 输出路径",
+    )
+    parser.add_argument(
+        "--save-table",
+        type=Path,
+        default=None,
+        help="可选：覆盖 path.yaml 中的 patient_validity_table 输出路径",
     )
     parser.add_argument(
         "--show-all-issues",
@@ -59,6 +94,72 @@ def parse_args() -> argparse.Namespace:
         help="打印全部缺失 img/pdf 的检查目录，否则仅展示前 20 条",
     )
     return parser.parse_args()
+
+
+def load_yaml_config(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        raise FileNotFoundError(f"路径配置文件不存在：{config_path}")
+
+    if yaml is not None:
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"路径配置文件格式错误：{config_path}")
+        return payload
+
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    payload: dict[str, Any] = {}
+    current_section: str | None = None
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        line = raw_line.strip()
+        if line.endswith(":"):
+            current_section = line[:-1]
+            payload[current_section] = {}
+            continue
+
+        key, _, value = line.partition(":")
+        if not _:
+            raise ValueError(f"无法解析路径配置行：{raw_line}")
+        cleaned_value = value.strip().strip('"').strip("'")
+        if indent == 0:
+            payload[key.strip()] = cleaned_value
+            current_section = None
+            continue
+
+        if current_section is None:
+            raise ValueError(f"发现未归属分组的缩进行：{raw_line}")
+        payload[current_section][key.strip()] = cleaned_value
+    return payload
+
+
+def build_path_config(config_path: Path, dataset_root: Path | None, save_json: Path | None, save_table: Path | None) -> PathConfig:
+    payload = load_yaml_config(config_path.expanduser())
+    paths_payload = payload.get("paths")
+    if not isinstance(paths_payload, dict):
+        raise ValueError("path.yaml 必须包含 paths 分组")
+
+    config_dir = config_path.expanduser().resolve().parent
+
+    def resolve_path(raw_path: str) -> Path:
+        path = Path(raw_path).expanduser()
+        if path.is_absolute():
+            return path
+        return (config_dir.parent / path).resolve()
+
+    resolved_dataset_root = dataset_root.expanduser().resolve() if dataset_root is not None else resolve_path(str(paths_payload["dataset_root"]))
+    resolved_output_dir = resolve_path(str(paths_payload["output_dir"]))
+    resolved_summary_json = save_json.expanduser().resolve() if save_json is not None else resolve_path(str(paths_payload["summary_json"]))
+    resolved_patient_validity_table = save_table.expanduser().resolve() if save_table is not None else resolve_path(str(paths_payload["patient_validity_table"]))
+
+    return PathConfig(
+        dataset_root=resolved_dataset_root,
+        output_dir=resolved_output_dir,
+        summary_json=resolved_summary_json,
+        patient_validity_table=resolved_patient_validity_table,
+    )
 
 
 def is_patient_dir(path: Path) -> bool:
@@ -112,6 +213,45 @@ def build_summary(
     )
 
 
+def build_patient_validity_rows(
+    patient_dirs: list[Path],
+    exam_dirs_by_patient: dict[str, list[Path]],
+    missing_issues_by_patient: dict[str, list[ExamIssue]],
+) -> list[PatientValidity]:
+    rows: list[PatientValidity] = []
+    for patient_dir in patient_dirs:
+        patient_id = patient_dir.name
+        exam_dirs = exam_dirs_by_patient[patient_id]
+        valid_exam_count = len([exam_dir for exam_dir in exam_dirs if is_valid_exam_dir(exam_dir)])
+        issues = missing_issues_by_patient.get(patient_id, [])
+        reasons: list[str] = []
+
+        if not is_valid_patient_name(patient_id):
+            reasons.append("患者目录命名不符合 ZS 开头约定")
+        if not exam_dirs:
+            reasons.append("患者目录下没有检查目录")
+        if valid_exam_count == 0 and exam_dirs:
+            reasons.append("所有检查目录都缺少 img 或 pdf")
+        if issues:
+            reasons.append(
+                "存在检查目录缺少 img/pdf：" + "; ".join(
+                    f"{issue.exam_dir}(img={int(issue.has_img)},pdf={int(issue.has_pdf)})"
+                    for issue in issues[:10]
+                )
+            )
+            if len(issues) > 10:
+                reasons.append(f"其余异常检查目录 {len(issues) - 10} 个未展开")
+
+        rows.append(
+            PatientValidity(
+                patient_id=patient_id,
+                is_valid=1 if not reasons else 0,
+                invalid_reason="；".join(reasons),
+            )
+        )
+    return rows
+
+
 def summarize_dataset(dataset_root: Path) -> DatasetReport:
     if not dataset_root.exists():
         raise FileNotFoundError(f"数据集根目录不存在：{dataset_root}")
@@ -122,12 +262,14 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
     all_exam_dirs_by_patient: dict[str, list[Path]] = {}
     cleaned_exam_dirs_by_patient: dict[str, list[Path]] = {}
     missing_structure_issues: list[ExamIssue] = []
+    missing_issues_by_patient: dict[str, list[ExamIssue]] = {}
 
     for patient_dir in patient_dirs:
         exam_dirs = collect_exam_dirs(patient_dir)
         all_exam_dirs_by_patient[patient_dir.name] = exam_dirs
 
         valid_exam_dirs: list[Path] = []
+        patient_issues: list[ExamIssue] = []
         for exam_dir in exam_dirs:
             img_dir = exam_dir / "img"
             pdf_dir = exam_dir / "pdf"
@@ -137,15 +279,16 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
                 valid_exam_dirs.append(exam_dir)
                 continue
 
-            missing_structure_issues.append(
-                ExamIssue(
-                    patient_id=patient_dir.name,
-                    exam_dir=exam_dir.name,
-                    has_img=has_img,
-                    has_pdf=has_pdf,
-                )
+            issue = ExamIssue(
+                patient_id=patient_dir.name,
+                exam_dir=exam_dir.name,
+                has_img=has_img,
+                has_pdf=has_pdf,
             )
+            patient_issues.append(issue)
+            missing_structure_issues.append(issue)
 
+        missing_issues_by_patient[patient_dir.name] = patient_issues
         cleaned_exam_dirs_by_patient[patient_dir.name] = valid_exam_dirs
 
     original_summary = build_summary(
@@ -160,9 +303,15 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
         exam_dirs_by_patient=cleaned_exam_dirs_by_patient,
         missing_structure_issues=[],
     )
+    patient_validity_rows = build_patient_validity_rows(
+        patient_dirs=patient_dirs,
+        exam_dirs_by_patient=all_exam_dirs_by_patient,
+        missing_issues_by_patient=missing_issues_by_patient,
+    )
     return DatasetReport(
         original_summary=original_summary,
         cleaned_summary=cleaned_summary,
+        patient_validity_rows=patient_validity_rows,
     )
 
 
@@ -231,6 +380,7 @@ def save_summary_json(report: DatasetReport, output_path: Path) -> None:
     payload = {
         "original_summary": asdict(report.original_summary),
         "cleaned_summary": asdict(report.cleaned_summary),
+        "patient_validity_rows": [asdict(row) for row in report.patient_validity_rows],
     }
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -238,14 +388,33 @@ def save_summary_json(report: DatasetReport, output_path: Path) -> None:
     )
 
 
+def save_patient_validity_table(rows: list[PatientValidity], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["patient_dir", "is_valid", "invalid_reason"])
+        for row in rows:
+            writer.writerow([row.patient_id, row.is_valid, row.invalid_reason])
+
+
 def main() -> None:
     args = parse_args()
-    report = summarize_dataset(args.dataset_root.expanduser())
+    path_config = build_path_config(
+        config_path=args.config,
+        dataset_root=args.dataset_root,
+        save_json=args.save_json,
+        save_table=args.save_table,
+    )
+    path_config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    report = summarize_dataset(path_config.dataset_root)
     print_report(report, show_all_issues=args.show_all_issues)
 
-    if args.save_json is not None:
-        save_summary_json(report, args.save_json.expanduser())
-        print(f"\n统计结果已保存到：{args.save_json.expanduser()}")
+    save_summary_json(report, path_config.summary_json)
+    print(f"\n统计结果已保存到：{path_config.summary_json}")
+
+    save_patient_validity_table(report.patient_validity_rows, path_config.patient_validity_table)
+    print(f"患者有效性表格已保存到：{path_config.patient_validity_table}")
 
 
 if __name__ == "__main__":
