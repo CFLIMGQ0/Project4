@@ -3,10 +3,9 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
-import json
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +22,8 @@ PATIENT_DIR_PATTERN = re.compile(r"^ZS\w+$", re.IGNORECASE)
 class PathConfig:
     dataset_root: Path
     output_dir: Path
-    summary_json: Path
     patient_validity_table: Path
+    cleaning_report: Path
 
 
 @dataclass
@@ -77,16 +76,16 @@ def parse_args() -> argparse.Namespace:
         help="可选：覆盖 path.yaml 中的 dataset_root",
     )
     parser.add_argument(
-        "--save-json",
-        type=Path,
-        default=None,
-        help="可选：覆盖 path.yaml 中的 summary_json 输出路径",
-    )
-    parser.add_argument(
         "--save-table",
         type=Path,
         default=None,
         help="可选：覆盖 path.yaml 中的 patient_validity_table 输出路径",
+    )
+    parser.add_argument(
+        "--save-cleaning-report",
+        type=Path,
+        default=None,
+        help="可选：覆盖 path.yaml 中的 cleaning_report 输出路径",
     )
     parser.add_argument(
         "--show-all-issues",
@@ -135,7 +134,12 @@ def load_yaml_config(config_path: Path) -> dict[str, Any]:
     return payload
 
 
-def build_path_config(config_path: Path, dataset_root: Path | None, save_json: Path | None, save_table: Path | None) -> PathConfig:
+def build_path_config(
+    config_path: Path,
+    dataset_root: Path | None,
+    save_table: Path | None,
+    save_cleaning_report: Path | None,
+) -> PathConfig:
     payload = load_yaml_config(config_path.expanduser())
     paths_payload = payload.get("paths")
     if not isinstance(paths_payload, dict):
@@ -151,14 +155,14 @@ def build_path_config(config_path: Path, dataset_root: Path | None, save_json: P
 
     resolved_dataset_root = dataset_root.expanduser().resolve() if dataset_root is not None else resolve_path(str(paths_payload["dataset_root"]))
     resolved_output_dir = resolve_path(str(paths_payload["output_dir"]))
-    resolved_summary_json = save_json.expanduser().resolve() if save_json is not None else resolve_path(str(paths_payload["summary_json"]))
     resolved_patient_validity_table = save_table.expanduser().resolve() if save_table is not None else resolve_path(str(paths_payload["patient_validity_table"]))
+    resolved_cleaning_report = save_cleaning_report.expanduser().resolve() if save_cleaning_report is not None else resolve_path(str(paths_payload["cleaning_report"]))
 
     return PathConfig(
         dataset_root=resolved_dataset_root,
         output_dir=resolved_output_dir,
-        summary_json=resolved_summary_json,
         patient_validity_table=resolved_patient_validity_table,
+        cleaning_report=resolved_cleaning_report,
     )
 
 
@@ -215,38 +219,19 @@ def build_summary(
 
 def build_patient_validity_rows(
     patient_dirs: list[Path],
-    exam_dirs_by_patient: dict[str, list[Path]],
-    missing_issues_by_patient: dict[str, list[ExamIssue]],
+    cleaned_exam_dirs_by_patient: dict[str, list[Path]],
 ) -> list[PatientValidity]:
     rows: list[PatientValidity] = []
     for patient_dir in patient_dirs:
         patient_id = patient_dir.name
-        exam_dirs = exam_dirs_by_patient[patient_id]
-        valid_exam_count = len([exam_dir for exam_dir in exam_dirs if is_valid_exam_dir(exam_dir)])
-        issues = missing_issues_by_patient.get(patient_id, [])
-        reasons: list[str] = []
-
-        if not is_valid_patient_name(patient_id):
-            reasons.append("患者目录命名不符合 ZS 开头约定")
-        if not exam_dirs:
-            reasons.append("患者目录下没有检查目录")
-        if valid_exam_count == 0 and exam_dirs:
-            reasons.append("所有检查目录都缺少 img 或 pdf")
-        if issues:
-            reasons.append(
-                "存在检查目录缺少 img/pdf：" + "; ".join(
-                    f"{issue.exam_dir}(img={int(issue.has_img)},pdf={int(issue.has_pdf)})"
-                    for issue in issues[:10]
-                )
-            )
-            if len(issues) > 10:
-                reasons.append(f"其余异常检查目录 {len(issues) - 10} 个未展开")
-
+        cleaned_exam_count = len(cleaned_exam_dirs_by_patient[patient_id])
+        is_valid = 0 if cleaned_exam_count == 0 else 1
+        invalid_reason = "清洗后的患者分布为 0 次检查" if is_valid == 0 else ""
         rows.append(
             PatientValidity(
                 patient_id=patient_id,
-                is_valid=1 if not reasons else 0,
-                invalid_reason="；".join(reasons),
+                is_valid=is_valid,
+                invalid_reason=invalid_reason,
             )
         )
     return rows
@@ -262,14 +247,12 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
     all_exam_dirs_by_patient: dict[str, list[Path]] = {}
     cleaned_exam_dirs_by_patient: dict[str, list[Path]] = {}
     missing_structure_issues: list[ExamIssue] = []
-    missing_issues_by_patient: dict[str, list[ExamIssue]] = {}
 
     for patient_dir in patient_dirs:
         exam_dirs = collect_exam_dirs(patient_dir)
         all_exam_dirs_by_patient[patient_dir.name] = exam_dirs
 
         valid_exam_dirs: list[Path] = []
-        patient_issues: list[ExamIssue] = []
         for exam_dir in exam_dirs:
             img_dir = exam_dir / "img"
             pdf_dir = exam_dir / "pdf"
@@ -285,10 +268,8 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
                 has_img=has_img,
                 has_pdf=has_pdf,
             )
-            patient_issues.append(issue)
             missing_structure_issues.append(issue)
 
-        missing_issues_by_patient[patient_dir.name] = patient_issues
         cleaned_exam_dirs_by_patient[patient_dir.name] = valid_exam_dirs
 
     original_summary = build_summary(
@@ -305,8 +286,7 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
     )
     patient_validity_rows = build_patient_validity_rows(
         patient_dirs=patient_dirs,
-        exam_dirs_by_patient=all_exam_dirs_by_patient,
-        missing_issues_by_patient=missing_issues_by_patient,
+        cleaned_exam_dirs_by_patient=cleaned_exam_dirs_by_patient,
     )
     return DatasetReport(
         original_summary=original_summary,
@@ -370,21 +350,8 @@ def print_report(report: DatasetReport, show_all_issues: bool = False) -> None:
     )
     print()
     print_single_summary(
-        title="img/pdf清洗后的统计",
+        title="img/pdf 清洗后的统计",
         summary=report.cleaned_summary,
-    )
-
-
-def save_summary_json(report: DatasetReport, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "original_summary": asdict(report.original_summary),
-        "cleaned_summary": asdict(report.cleaned_summary),
-        "patient_validity_rows": [asdict(row) for row in report.patient_validity_rows],
-    }
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 
@@ -397,24 +364,33 @@ def save_patient_validity_table(rows: list[PatientValidity], output_path: Path) 
             writer.writerow([row.patient_id, row.is_valid, row.invalid_reason])
 
 
+def save_cleaning_report(report: DatasetReport, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"原始数据：{report.original_summary.patient_count}名患者",
+        f"经过 img/pdf 清洗后的数据：{report.cleaned_summary.patient_count}名患者",
+    ]
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
     path_config = build_path_config(
         config_path=args.config,
         dataset_root=args.dataset_root,
-        save_json=args.save_json,
         save_table=args.save_table,
+        save_cleaning_report=args.save_cleaning_report,
     )
     path_config.output_dir.mkdir(parents=True, exist_ok=True)
 
     report = summarize_dataset(path_config.dataset_root)
     print_report(report, show_all_issues=args.show_all_issues)
 
-    save_summary_json(report, path_config.summary_json)
-    print(f"\n统计结果已保存到：{path_config.summary_json}")
-
     save_patient_validity_table(report.patient_validity_rows, path_config.patient_validity_table)
-    print(f"患者有效性表格已保存到：{path_config.patient_validity_table}")
+    print(f"\n患者有效性表格已保存到：{path_config.patient_validity_table}")
+
+    save_cleaning_report(report, path_config.cleaning_report)
+    print(f"清洗统计报告已保存到：{path_config.cleaning_report}")
 
 
 if __name__ == "__main__":
