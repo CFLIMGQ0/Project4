@@ -28,15 +28,15 @@
 目录组织示例如下：
 
 ```text
-paths.dataset_root/
-└── ZSxxxxxxxx/
-    ├── ZSxxxxxxxx/
-    │   ├── img/
-    │   └── pdf/
-    ├── ZSxxxxxxxx/
-    │   ├── img/
-    │   └── pdf/
-    └── ...
+paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml 中的 paths.dataset_root
+└── ZSxxxxxxxx/                  # 患者目录：一级目录，一名患者对应一个目录
+    ├── ZSxxxxxxxx/              # 检查目录：该患者的一次检查
+    │   ├── img/                 # 图片目录：保存该次检查的图像文件
+    │   └── pdf/                 # 报告目录：保存该次检查的 PDF 报告
+    ├── ZSxxxxxxxx/              # 另一检查目录：同一患者的另一轮检查
+    │   ├── img/                 # 该轮检查对应的图像文件
+    │   └── pdf/                 # 该轮检查对应的 PDF 报告
+    └── ...                      # 省略其余检查目录或其他患者目录
 ```
 
 说明：
