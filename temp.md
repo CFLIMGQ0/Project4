@@ -79,25 +79,18 @@ python temp.py
 
 ### 5.2 覆盖 path.yaml 中的路径
 
-```bash
-python temp.py \
-  --dataset-root /your/dataset/root \
-  --save-json /your/output/dataset_summary.json \
-  --save-table /your/output/patient_validity.csv
-```
+可通过命令行参数覆盖默认配置，例如分别指定数据集根目录、统计摘要输出文件和患者有效性表格输出文件。
 
 ### 5.3 指定其他路径配置文件
 
-```bash
-python temp.py --config /your/configs/path.yaml
-```
+如需切换到其他配置文件，可通过 `--config` 参数传入目标配置文件。
 
 ## 6. 输出文件说明
 
-默认会生成以下文件：
+默认会生成以下两类结果文件：
 
-- `outputs/dataset_summary.json`：保存原始统计、清洗后统计以及患者有效性行数据；
-- `outputs/patient_validity.csv`：保存患者级三列表格。
+- 统计摘要文件：保存原始统计、清洗后统计以及患者有效性行数据；
+- 患者有效性表格文件：保存患者级三列表格。
 
 ## 7. 维护建议
 

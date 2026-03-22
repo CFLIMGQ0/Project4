@@ -1,5 +1,5 @@
 paths:
-  dataset_root: /home/Lim/datasets/eus-gist-leiomyoma/
-  output_dir: outputs
-  summary_json: outputs/dataset_summary.json
-  patient_validity_table: outputs/patient_validity.csv
+  dataset_root: /home/Lim/datasets/project4/
+  output_dir: /home/Lim/outputs/project4
+  summary_json: /home/Lim/outputs/project4/dataset_summary.json
+  patient_validity_table: /home/Lim/outputs/project4/patient_validity.csv
