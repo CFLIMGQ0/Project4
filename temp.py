@@ -55,10 +55,18 @@ class DatasetSummary:
 
 
 @dataclass
+class CleaningRoundResult:
+    round_name: str
+    removed_exam_count: int
+    zero_exam_patient_count: int
+
+
+@dataclass
 class DatasetReport:
     original_summary: DatasetSummary
     cleaned_summary: DatasetSummary
     patient_validity_rows: list[PatientValidity]
+    cleaning_rounds: list[CleaningRoundResult]
 
 
 def parse_args() -> argparse.Namespace:
@@ -226,7 +234,7 @@ def build_patient_validity_rows(
         patient_id = patient_dir.name
         cleaned_exam_count = len(cleaned_exam_dirs_by_patient[patient_id])
         is_valid = 0 if cleaned_exam_count == 0 else 1
-        invalid_reason = "清洗后的患者分布为 0 次检查" if is_valid == 0 else ""
+        invalid_reason = "第 1 轮清洗后该患者检查次数为 0" if is_valid == 0 else ""
         rows.append(
             PatientValidity(
                 patient_id=patient_id,
@@ -288,10 +296,25 @@ def summarize_dataset(dataset_root: Path) -> DatasetReport:
         patient_dirs=patient_dirs,
         cleaned_exam_dirs_by_patient=cleaned_exam_dirs_by_patient,
     )
+    first_round_removed_exam_count = sum(
+        len(all_exam_dirs_by_patient[patient_dir.name]) - len(cleaned_exam_dirs_by_patient[patient_dir.name])
+        for patient_dir in patient_dirs
+    )
+    first_round_zero_exam_patient_count = sum(
+        1 for patient_dir in patient_dirs if len(cleaned_exam_dirs_by_patient[patient_dir.name]) == 0
+    )
+    cleaning_rounds = [
+        CleaningRoundResult(
+            round_name="第 1 轮：去掉缺失 img 或 pdf 的检查目录",
+            removed_exam_count=first_round_removed_exam_count,
+            zero_exam_patient_count=first_round_zero_exam_patient_count,
+        )
+    ]
     return DatasetReport(
         original_summary=original_summary,
         cleaned_summary=cleaned_summary,
         patient_validity_rows=patient_validity_rows,
+        cleaning_rounds=cleaning_rounds,
     )
 
 
@@ -350,9 +373,14 @@ def print_report(report: DatasetReport, show_all_issues: bool = False) -> None:
     )
     print()
     print_single_summary(
-        title="img/pdf 清洗后的统计",
+        title="第 1 轮清洗后的统计",
         summary=report.cleaned_summary,
     )
+    print("\n清洗轮次摘要：")
+    for round_result in report.cleaning_rounds:
+        print(f"- {round_result.round_name}")
+        print(f"  去掉的检查目录数：{round_result.removed_exam_count}")
+        print(f"  清洗后检查次数为 0 的患者数：{round_result.zero_exam_patient_count}")
 
 
 def save_patient_validity_table(rows: list[PatientValidity], output_path: Path) -> None:
@@ -367,9 +395,15 @@ def save_patient_validity_table(rows: list[PatientValidity], output_path: Path) 
 def save_cleaning_report(report: DatasetReport, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        f"原始数据：{report.original_summary.patient_count}名患者",
-        f"经过 img/pdf 清洗后的数据：{report.cleaned_summary.patient_count}名患者",
+        f"原始数据：{report.original_summary.patient_count}名患者，{report.original_summary.total_exam_count}次检查",
     ]
+    for round_result in report.cleaning_rounds:
+        lines.append(round_result.round_name)
+        lines.append(f"- 去掉的检查目录数：{round_result.removed_exam_count}")
+        lines.append(f"- 清洗后检查次数为 0 的患者数：{round_result.zero_exam_patient_count}")
+    lines.append(
+        f"第 1 轮清洗后保留：{report.cleaned_summary.patient_count}名患者，{report.cleaned_summary.total_exam_count}次检查"
+    )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
