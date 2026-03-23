@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ from check_pdf import (
 @dataclass
 class PathConfig:
     dataset_root: Path
+    patient_validity_table: Path
 
 
 @dataclass
@@ -101,6 +103,12 @@ def parse_args() -> argparse.Namespace:
         help="可选：覆盖 path.yaml 中的 dataset_root",
     )
     parser.add_argument(
+        "--patient-validity-table",
+        type=Path,
+        default=None,
+        help="可选：覆盖 path.yaml 中的 patient_validity_table",
+    )
+    parser.add_argument(
         "--max-patients",
         type=int,
         default=None,
@@ -121,7 +129,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_path_config(config_path: Path, dataset_root: Path | None) -> PathConfig:
+def build_path_config(
+    config_path: Path,
+    dataset_root: Path | None,
+    patient_validity_table: Path | None,
+) -> PathConfig:
     payload = load_yaml_config(config_path.expanduser())
     paths_payload = payload.get("paths")
     if not isinstance(paths_payload, dict):
@@ -136,11 +148,43 @@ def build_path_config(config_path: Path, dataset_root: Path | None) -> PathConfi
         return (config_dir.parent / path).resolve()
 
     resolved_dataset_root = dataset_root.expanduser().resolve() if dataset_root is not None else resolve_path(str(paths_payload["dataset_root"]))
-    return PathConfig(dataset_root=resolved_dataset_root)
+    resolved_patient_validity_table = (
+        patient_validity_table.expanduser().resolve()
+        if patient_validity_table is not None
+        else resolve_path(str(paths_payload["patient_validity_table"]))
+    )
+    return PathConfig(
+        dataset_root=resolved_dataset_root,
+        patient_validity_table=resolved_patient_validity_table,
+    )
 
 
 def iter_patient_dirs(dataset_root: Path) -> list[Path]:
     return sorted(path for path in dataset_root.iterdir() if path.is_dir())
+
+
+def load_valid_patient_ids(patient_validity_table: Path) -> set[str]:
+    valid_patient_ids: set[str] = set()
+    with patient_validity_table.open("r", encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.reader(csv_file)
+        next(reader, None)
+        for row_index, row in enumerate(reader, start=2):
+            if len(row) < 2:
+                raise ValueError(f"patient_validity.csv 第 {row_index} 行列数不足，至少需要两列")
+
+            patient_id = row[0].strip()
+            is_valid = row[1].strip()
+            if not patient_id:
+                continue
+            if is_valid not in {"0", "1"}:
+                raise ValueError(f"patient_validity.csv 第 {row_index} 行第二列必须是 0 或 1")
+            if is_valid == "1":
+                valid_patient_ids.add(patient_id)
+    return valid_patient_ids
+
+
+def filter_valid_patient_dirs(patient_dirs: list[Path], valid_patient_ids: set[str]) -> list[Path]:
+    return [path for path in patient_dirs if path.name in valid_patient_ids]
 
 
 def iter_exam_dirs(patient_dir: Path) -> list[Path]:
@@ -185,9 +229,10 @@ def extract_pdf_fields(pdf_path: Path) -> dict[str, str]:
 
 def collect_pdf_stats(
     dataset_root: Path,
+    valid_patient_ids: set[str],
     max_patients: int | None = None,
 ) -> tuple[list[str], dict[tuple[str, str], int], list[PdfStat], list[dict[str, str]]]:
-    patient_dirs = iter_patient_dirs(dataset_root)
+    patient_dirs = filter_valid_patient_dirs(iter_patient_dirs(dataset_root), valid_patient_ids)
     if max_patients is not None and max_patients > 0:
         patient_dirs = patient_dirs[:max_patients]
 
@@ -408,6 +453,14 @@ def build_summary(
     }
 
 
+def build_console_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in summary.items()
+        if key not in {"dedup_success_patients", "dedup_failed_patients", "dedup_skipped_patients"}
+    }
+
+
 def to_jsonable_exam_results(exam_results: list[ExamDedupResult]) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     for item in exam_results:
@@ -514,7 +567,7 @@ def save_json(
 
 def main() -> None:
     args = parse_args()
-    path_config = build_path_config(args.config, args.dataset_root)
+    path_config = build_path_config(args.config, args.dataset_root, args.patient_validity_table)
 
     if not path_config.dataset_root.exists():
         print(f"数据集根目录不存在：{path_config.dataset_root}")
@@ -522,9 +575,18 @@ def main() -> None:
     if not path_config.dataset_root.is_dir():
         print(f"数据集根路径不是目录：{path_config.dataset_root}")
         return
+    if not path_config.patient_validity_table.exists():
+        print(f"患者有效性表格不存在：{path_config.patient_validity_table}")
+        return
+    if not path_config.patient_validity_table.is_file():
+        print(f"患者有效性表格路径不是文件：{path_config.patient_validity_table}")
+        return
+
+    valid_patient_ids = load_valid_patient_ids(path_config.patient_validity_table)
 
     patient_ids, exam_pdf_totals, pdf_stats, errors = collect_pdf_stats(
         path_config.dataset_root,
+        valid_patient_ids=valid_patient_ids,
         max_patients=args.max_patients,
     )
     key_stats = summarize_keys(pdf_stats)
@@ -532,7 +594,7 @@ def main() -> None:
     summary = build_summary(path_config.dataset_root, patient_ids, pdf_stats, errors, exam_results)
 
     print("统计完成。")
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(json.dumps(build_console_summary(summary), ensure_ascii=False, indent=2))
     print_key_stats(key_stats)
     print_exam_stats(exam_results, args.max_examples)
     print_patient_stats(summary, exam_results, args.max_examples)
