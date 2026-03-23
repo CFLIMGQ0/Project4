@@ -7,6 +7,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+@dataclass
+class ProgressTracker:
+    total: int
+    prefix: str = "处理 PDF"
+    width: int = 30
+    current: int = 0
+
+    def update(self, step: int = 1) -> None:
+        self.current = min(self.total, self.current + step)
+        self.render()
+
+    def render(self) -> None:
+        if self.total <= 0:
+            return
+        ratio = self.current / self.total
+        filled = min(self.width, int(ratio * self.width))
+        bar = "#" * filled + "-" * (self.width - filled)
+        print(
+            f"\r{self.prefix}进度：[{bar}] {self.current}/{self.total} ({ratio:.0%})",
+            end="",
+            flush=True,
+        )
+
+    def close(self) -> None:
+        if self.total <= 0:
+            return
+        self.render()
+        print()
+
 from check_pdf import (
     CONFIG_PATH,
     MAX_PDF_SIZE_MB,
@@ -165,31 +195,44 @@ def collect_pdf_stats(
     exam_pdf_totals: dict[tuple[str, str], int] = {}
     pdf_stats: list[PdfStat] = []
     errors: list[dict[str, str]] = []
+    exam_targets: list[tuple[Path, Path, list[Path]]] = []
 
     for patient_dir in patient_dirs:
         for exam_dir in iter_exam_dirs(patient_dir):
             pdf_files = iter_pdf_files(exam_dir)
             exam_pdf_totals[(patient_dir.name, exam_dir.name)] = len(pdf_files)
-            for pdf_path in pdf_files:
-                try:
-                    fields = extract_pdf_fields(pdf_path)
-                    pdf_stats.append(
-                        PdfStat(
-                            patient_id=patient_dir.name,
-                            exam_id=exam_dir.name,
-                            pdf_path=pdf_path,
-                            fields=fields,
-                        )
+            exam_targets.append((patient_dir, exam_dir, pdf_files))
+
+    total_pdf_count = sum(len(pdf_files) for _, _, pdf_files in exam_targets)
+    progress = ProgressTracker(total=total_pdf_count)
+    if total_pdf_count > 0:
+        progress.render()
+
+    for patient_dir, exam_dir, pdf_files in exam_targets:
+        for pdf_path in pdf_files:
+            try:
+                fields = extract_pdf_fields(pdf_path)
+                pdf_stats.append(
+                    PdfStat(
+                        patient_id=patient_dir.name,
+                        exam_id=exam_dir.name,
+                        pdf_path=pdf_path,
+                        fields=fields,
                     )
-                except Exception as exc:
-                    errors.append(
-                        {
-                            "patient_id": patient_dir.name,
-                            "exam_id": exam_dir.name,
-                            "pdf_path": str(pdf_path),
-                            "reason": str(exc),
-                        }
-                    )
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "patient_id": patient_dir.name,
+                        "exam_id": exam_dir.name,
+                        "pdf_path": str(pdf_path),
+                        "reason": str(exc),
+                    }
+                )
+            finally:
+                progress.update()
+
+    progress.close()
     return patient_ids, exam_pdf_totals, pdf_stats, errors
 
 
@@ -433,12 +476,11 @@ def print_patient_stats(summary: dict[str, Any], exam_results: list[ExamDedupRes
 
     success_examples = [item for item in exam_results if item.status == "success"][:max_examples]
     if success_examples:
-        print("\n去重成功样例（展示代表 PDF）：")
+        print("\n去重成功样例（不展示代表 PDF 文件名）：")
         for item in success_examples:
             print(
                 f"- 患者 {item.patient_id} / 检查 {item.exam_id}："
-                f"代表 PDF={item.representative_pdf.name if item.representative_pdf else ''}，"
-                f"非空键数={item.representative_non_empty_count}，"
+                f"代表结果非空键数={item.representative_non_empty_count}，"
                 f"总键数={item.representative_field_count}"
             )
 
