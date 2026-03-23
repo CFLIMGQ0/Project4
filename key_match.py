@@ -60,19 +60,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_JSON,
         help="输出的 key_match.json 路径，默认写入仓库根目录",
     )
-    parser.add_argument(
-        "--output-json",
-        type=Path,
-        default=DEFAULT_OUTPUT_JSON,
-        help="输出的 key_match.json 路径，默认写入仓库根目录",
-    )
     return parser.parse_args()
 
 
 def clean_value(value: str) -> str:
     return value.strip().replace("（空值）", "")
 
-    ordered_positions.sort(key=lambda item: (item[0], item[1]))
 
 def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text or "")
@@ -82,7 +75,7 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def parse_check_pdf_output(raw_text: str) -> tuple[OrderedDict[str, str], list[str]]:
+def parse_check_pdf_output(raw_text: str) -> tuple[OrderedDict[str, str], str]:
     fields = OrderedDict()
     full_text_lines: list[str] = []
     section = ""
@@ -109,7 +102,7 @@ def parse_check_pdf_output(raw_text: str) -> tuple[OrderedDict[str, str], list[s
     return fields, "\n".join(full_text_lines).strip()
 
 
-def load_input_data(args: argparse.Namespace) -> tuple[str, OrderedDict[str, str], list[str], str, str]:
+def load_input_data(args: argparse.Namespace) -> tuple[str, OrderedDict[str, str], str, str, str]:
     raw_text = args.raw_text.strip()
     if not raw_text and not sys.stdin.isatty():
         raw_text = sys.stdin.read().strip()
@@ -123,48 +116,12 @@ def load_input_data(args: argparse.Namespace) -> tuple[str, OrderedDict[str, str
     path_config = build_path_config(args.config, args.input_dir)
     pdf_files = list(iter_pdf_files(path_config.dataset_root))
     if not pdf_files:
-        return "empty", OrderedDict(), [], "", ""
+        return "empty", OrderedDict(), "", "", ""
 
     pdf_path = pdf_files[0]
     fields, full_text, page_count, strategy = process_single_pdf(pdf_path, args.preview_chars)
-    visible_labels = extract_visible_labels(full_text)
-    return str(pdf_path), OrderedDict(fields), visible_labels, str(page_count if page_count != "" else "未知"), strategy
+    return str(pdf_path), OrderedDict(fields), full_text, str(page_count if page_count != "" else "未知"), strategy
 
-
-def resolve_label(key: str, visible_label_to_index: dict[str, int]) -> tuple[str, int, bool]:
-    candidates = ENGLISH_TO_CHINESE_CANDIDATES.get(key, [])
-    direct_matches = [label for label in candidates if label in visible_label_to_index]
-
-    if direct_matches:
-        best_label = min(direct_matches, key=lambda label: (visible_label_to_index[label], candidates.index(label)))
-        return best_label, visible_label_to_index[best_label], False
-
-    if candidates:
-        return f"{CANDIDATE_MARK}{candidates[0]}", len(visible_label_to_index) + 1000, True
-
-    return f"{CANDIDATE_MARK}未配置候选中文键", len(visible_label_to_index) + 2000, True
-
-
-def build_key_match_json(ordered_fields: OrderedDict[str, str], visible_labels: list[str]) -> OrderedDict[str, str]:
-    visible_label_to_index = {label: index for index, label in enumerate(visible_labels)}
-    sortable_rows: list[tuple[int, int, str, str]] = []
-
-    for original_index, key in enumerate(ordered_fields.keys()):
-        resolved_label, label_index, used_candidate = resolve_label(key, visible_label_to_index)
-        sort_index = label_index if not used_candidate else label_index + original_index
-        sortable_rows.append((sort_index, original_index, key, resolved_label))
-
-    sortable_rows.sort(key=lambda item: (item[0], item[1]))
-
-    result = OrderedDict()
-    for _, _, key, resolved_label in sortable_rows:
-        result[key] = resolved_label
-    return result
-
-
-def write_key_match_json(output_path: Path, payload: OrderedDict[str, str]) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 def extract_label_entries(full_text: str) -> list[LabelEntry]:
     entries: list[LabelEntry] = []
@@ -252,7 +209,7 @@ def write_key_match_json(output_path: Path, payload: OrderedDict[str, str]) -> N
 
 def main() -> None:
     args = parse_args()
-    input_source, ordered_fields, visible_labels, page_count, strategy = load_input_data(args)
+    input_source, ordered_fields, full_text, page_count, strategy = load_input_data(args)
 
     if input_source == "empty":
         print("未找到目标 PDF，且未通过 --raw-text 或标准输入提供 check_pdf.py 输出，无法生成 key_match.json。")
