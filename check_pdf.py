@@ -26,6 +26,9 @@ else:
     PdfReader = None
 
 CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "path.yaml"
+TARGET_PATIENT_ID = "ZS08004085"
+TARGET_EXAM_ID = "ZS0048989881"
+TARGET_REPORT_DIRNAME = "pdf"
 DEFAULT_TEXT_PREVIEW = 2000
 MAX_PDF_SIZE_MB = 256
 MAX_STREAM_DECOMPRESS_SIZE = 8 * 1024 * 1024
@@ -216,8 +219,13 @@ def build_path_config(config_path: Path, input_dir: Path | None) -> PathConfig:
     return PathConfig(dataset_root=dataset_root)
 
 
+def resolve_target_report_dir(dataset_root: Path) -> Path:
+    return dataset_root / TARGET_PATIENT_ID / TARGET_EXAM_ID / TARGET_REPORT_DIRNAME
+
+
 def iter_pdf_files(input_dir: Path) -> Iterable[Path]:
-    return sorted(path for path in input_dir.rglob("*.pdf") if path.is_file())
+    target_report_dir = resolve_target_report_dir(input_dir)
+    return sorted(path for path in target_report_dir.rglob("*.pdf") if path.is_file())
 
 
 def options_to_dict(opt: Any) -> dict[str, str]:
@@ -888,6 +896,7 @@ def main() -> None:
     args = parse_args()
     path_config = build_path_config(args.config, args.input_dir)
     input_dir = path_config.dataset_root
+    target_report_dir = resolve_target_report_dir(input_dir)
 
     if not input_dir.exists():
         print(f"输入目录不存在：{input_dir}")
@@ -895,13 +904,19 @@ def main() -> None:
     if not input_dir.is_dir():
         print(f"输入路径不是目录：{input_dir}")
         return
+    if not target_report_dir.exists():
+        print(f"目标报告目录不存在：{target_report_dir}")
+        return
+    if not target_report_dir.is_dir():
+        print(f"目标报告路径不是目录：{target_report_dir}")
+        return
 
     pdf_files = list(iter_pdf_files(input_dir))
     if args.max_files is not None and args.max_files > 0:
         pdf_files = pdf_files[:args.max_files]
 
     if not pdf_files:
-        print(f"目录下未找到 PDF 文件：{input_dir}")
+        print(f"目标报告目录下未找到 PDF 文件：{target_report_dir}")
         return
 
     success_count = 0
@@ -909,6 +924,9 @@ def main() -> None:
 
     runtime_info = {
         "输入目录": str(input_dir),
+        "目标患者": TARGET_PATIENT_ID,
+        "目标检查": TARGET_EXAM_ID,
+        "目标报告目录": str(target_report_dir),
         "PDF数量": len(pdf_files),
         "全文预览字符数": args.preview_chars,
         "已安装fitz": fitz is not None,
@@ -937,6 +955,9 @@ def main() -> None:
         json.dumps(
             {
                 "输入目录": str(input_dir),
+                "目标患者": TARGET_PATIENT_ID,
+                "目标检查": TARGET_EXAM_ID,
+                "目标报告目录": str(target_report_dir),
                 "总 PDF 数量": len(pdf_files),
                 "成功数量": success_count,
                 "失败数量": failed_count,
