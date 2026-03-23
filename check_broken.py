@@ -186,6 +186,37 @@ def export_broken_records(output_csv: Path, records: list[BrokenPdfRecord], data
             ])
 
 
+def prompt_delete_broken_files(records: list[BrokenPdfRecord]) -> bool:
+    if not records:
+        return False
+
+    print('发现以下损坏 PDF 文件：')
+    for index, record in enumerate(records, start=1):
+        print(f'{index}. {record.pdf_path}（原因：{record.reason}）')
+
+    while True:
+        answer = input('是否删除以上损坏 PDF 文件？请输入 y/yes 确认，其他输入将保留文件：').strip().lower()
+        if answer in {'y', 'yes'}:
+            return True
+        if answer in {'', 'n', 'no'}:
+            return False
+        print('输入无效，请输入 y/yes 或 n/no。')
+
+
+def delete_broken_files(records: list[BrokenPdfRecord]) -> tuple[int, list[tuple[Path, str]]]:
+    deleted_count = 0
+    failed_records: list[tuple[Path, str]] = []
+
+    for record in records:
+        try:
+            record.pdf_path.unlink()
+            deleted_count += 1
+        except OSError as exc:
+            failed_records.append((record.pdf_path, str(exc)))
+
+    return deleted_count, failed_records
+
+
 def main() -> None:
     args = parse_args()
     path_config = build_path_config(args.config, args.input_dir, args.output_dir)
@@ -242,6 +273,21 @@ def main() -> None:
     print(f'PDF 总数：{len(pdf_files)}')
     print(f'损坏数量：{len(broken_records)}')
     print(f'结果 CSV：{output_csv}')
+
+    if not broken_records:
+        print('未发现损坏 PDF，无需清理。')
+        return
+
+    if not prompt_delete_broken_files(broken_records):
+        print('已保留所有损坏 PDF 文件。')
+        return
+
+    deleted_count, failed_records = delete_broken_files(broken_records)
+    print(f'已删除 {deleted_count} 个损坏 PDF 文件。')
+    if failed_records:
+        print('以下文件删除失败：')
+        for failed_path, reason in failed_records:
+            print(f'- {failed_path}（原因：{reason}）')
 
 
 if __name__ == '__main__':
