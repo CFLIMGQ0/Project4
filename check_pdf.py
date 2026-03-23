@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+import argparse
+import importlib.util
+import json
 import re
 import zlib
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
-INPUT_DIR = Path("/home/Lim/datasets/project4/ZS08004085/ZS0048989881/pdf")
-MAX_TEXT_PREVIEW = 4000
+if importlib.util.find_spec("yaml") is not None:
+    import yaml
+else:
+    yaml = None
+
+if importlib.util.find_spec("fitz") is not None:
+    import fitz
+else:
+    fitz = None
+
+if importlib.util.find_spec("pypdf") is not None:
+    from pypdf import PdfReader
+else:
+    PdfReader = None
+
+CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "path.yaml"
+DEFAULT_TEXT_PREVIEW = 2000
 MAX_PDF_SIZE_MB = 256
 MAX_STREAM_DECOMPRESS_SIZE = 8 * 1024 * 1024
 OBJECT_PATTERN = re.compile(rb"(\d+)\s+(\d+)\s+obj(.*?)endobj", re.DOTALL)
@@ -26,6 +44,11 @@ HEX_TOKEN_PATTERN = re.compile(rb"<([0-9A-Fa-f\s]+)>")
 
 class PdfProcessError(Exception):
     """PDF 处理失败时抛出的异常。"""
+
+
+@dataclass
+class PathConfig:
+    dataset_root: Path
 
 
 @dataclass
@@ -71,6 +94,176 @@ class ToUnicodeMap:
             output.append(decode_pdf_bytes(raw_bytes[index:index + 1]))
             index += 1
         return "".join(output)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="检查项目目录下的 PDF，并仅在终端输出结果")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help="路径配置文件，默认使用 configs/path.yaml",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=None,
+        help="可选：覆盖配置中的 dataset_root，支持传入任意 PDF 根目录",
+    )
+    parser.add_argument(
+        "--preview-chars",
+        type=int,
+        default=DEFAULT_TEXT_PREVIEW,
+        help="全文文字在终端中的预览字符数，默认 2000",
+    )
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=None,
+        help="可选：仅处理前 N 个 PDF，便于快速抽查",
+    )
+    return parser.parse_args()
+
+
+def clean_inline(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\x00", "").strip()
+    if text == "None":
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def clean_multiline(text: str) -> str:
+    text = str(text or "").replace("\x00", "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+
+    cleaned = []
+    last_blank = False
+    for line in lines:
+        if line:
+            cleaned.append(line)
+            last_blank = False
+        else:
+            if not last_blank:
+                cleaned.append("")
+            last_blank = True
+    return "\n".join(cleaned).strip()
+
+
+def normalize_value(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def load_yaml_config(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        raise FileNotFoundError(f"路径配置文件不存在：{config_path}")
+
+    if yaml is not None:
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"路径配置文件格式错误：{config_path}")
+        return payload
+
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    payload: dict[str, Any] = {}
+    current_section: str | None = None
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        line = raw_line.strip()
+        if line.endswith(":"):
+            current_section = line[:-1]
+            payload[current_section] = {}
+            continue
+
+        key, _, value = line.partition(":")
+        if not _:
+            raise ValueError(f"无法解析路径配置行：{raw_line}")
+        cleaned_value = value.strip().strip('"').strip("'")
+        if indent == 0:
+            payload[key.strip()] = cleaned_value
+            current_section = None
+            continue
+
+        if current_section is None:
+            raise ValueError(f"发现未归属分组的缩进行：{raw_line}")
+        payload[current_section][key.strip()] = cleaned_value
+    return payload
+
+
+def build_path_config(config_path: Path, input_dir: Path | None) -> PathConfig:
+    payload = load_yaml_config(config_path.expanduser())
+    paths_payload = payload.get("paths")
+    if not isinstance(paths_payload, dict):
+        raise ValueError("path.yaml 必须包含 paths 分组")
+
+    config_dir = config_path.expanduser().resolve().parent
+
+    def resolve_path(raw_path: str) -> Path:
+        path = Path(raw_path).expanduser()
+        if path.is_absolute():
+            return path
+        return (config_dir.parent / path).resolve()
+
+    dataset_root = input_dir.expanduser().resolve() if input_dir is not None else resolve_path(str(paths_payload["dataset_root"]))
+    return PathConfig(dataset_root=dataset_root)
+
+
+def iter_pdf_files(input_dir: Path) -> Iterable[Path]:
+    return sorted(path for path in input_dir.rglob("*.pdf") if path.is_file())
+
+
+def options_to_dict(opt: Any) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    if not opt:
+        return mapping
+    for item in opt:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            code = clean_inline(item[0])
+            text = clean_inline(item[1])
+            mapping[code] = text
+        else:
+            key = clean_inline(item)
+            mapping[key] = key
+    return mapping
+
+
+def extract_with_pypdf(pdf_path: Path) -> tuple[list[tuple[str, str]], str, int]:
+    if PdfReader is None:
+        raise PdfProcessError("当前环境未安装 pypdf，无法使用 pypdf 路径提取")
+
+    reader = PdfReader(str(pdf_path))
+    fields = reader.get_fields() or {}
+    ordered_fields: list[tuple[str, str]] = []
+    for field_name, field in fields.items():
+        value = clean_inline(field.get("/V"))
+        opt_map = options_to_dict(field.get("/Opt"))
+        display_value = opt_map.get(value, value) if opt_map else value
+        ordered_fields.append((field_name, display_value))
+    return ordered_fields, "", len(reader.pages)
+
+
+def extract_with_fitz(pdf_path: Path) -> str:
+    if fitz is None:
+        raise PdfProcessError("当前环境未安装 fitz，无法使用 PyMuPDF 路径提取")
+
+    doc = fitz.open(str(pdf_path))
+    page_texts = []
+    try:
+        for page_number, page in enumerate(doc, start=1):
+            text = clean_multiline(page.get_text("text", sort=True))
+            if text:
+                page_texts.append(f"[第{page_number}页]\n{text}")
+    finally:
+        doc.close()
+    return "\n\n".join(page_texts).strip()
 
 
 def decode_pdf_name(name: bytes) -> str:
@@ -271,14 +464,6 @@ def extract_all_refs(dictionary: bytes, key: bytes) -> list[int]:
     if not array_match:
         return []
     return [int(match.group(1)) for match in REF_PATTERN.finditer(array_match.group(1))]
-
-
-def normalize_value(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def iter_pdf_files(input_dir: Path) -> Iterable[Path]:
-    return sorted(path for path in input_dir.iterdir() if path.is_file() and path.suffix.lower() == ".pdf")
 
 
 def safe_decompress_stream(stream_data: bytes, max_output_size: int) -> bytes:
@@ -561,7 +746,7 @@ def extract_text_from_stream(stream_data: bytes, font_alias_to_obj: dict[str, in
     return "\n".join(compact_lines).strip()
 
 
-def extract_text(objects: dict[int, PdfObject]) -> str:
+def extract_text(objects: dict[int, PdfObject], preview_chars: int | None = None) -> str:
     font_cmaps = build_font_cmaps(objects)
     page_texts: list[str] = []
     seen_stream_ids: set[int] = set()
@@ -609,35 +794,12 @@ def extract_text(objects: dict[int, PdfObject]) -> str:
         page_texts = fallback_texts
 
     full_text = "\n".join(page_texts).strip()
-    if len(full_text) > MAX_TEXT_PREVIEW:
-        return full_text[:MAX_TEXT_PREVIEW].rstrip() + "\n……（全文过长，已截断显示）"
+    if preview_chars is not None and preview_chars > 0 and len(full_text) > preview_chars:
+        return full_text[:preview_chars].rstrip() + "\n……（全文过长，已截断显示）"
     return full_text
 
 
-def print_pdf_result(pdf_path: Path, fields: list[tuple[str, str]], full_text: str) -> None:
-    print(f"\n{'=' * 80}")
-    print(f"文件: {pdf_path.name}")
-    print(f"路径: {pdf_path}")
-    print(f"{'-' * 80}")
-
-    if fields:
-        print("表单字段:")
-        ordered_fields = OrderedDict(fields)
-        for key, value in ordered_fields.items():
-            display_value = value if value else "（空值）"
-            print(f"{key}: {display_value}")
-    else:
-        print("表单字段: 未提取到表单字段")
-
-    print(f"{'-' * 80}")
-    if full_text:
-        print("全文文字:")
-        print(full_text)
-    else:
-        print("全文文字: 未提取到可读文字")
-
-
-def process_single_pdf(pdf_path: Path) -> tuple[list[tuple[str, str]], str]:
+def fallback_extract(pdf_path: Path, preview_chars: int) -> tuple[list[tuple[str, str]], str, int | str]:
     pdf_size_mb = pdf_path.stat().st_size / (1024 * 1024)
     if pdf_size_mb > MAX_PDF_SIZE_MB:
         raise PdfProcessError(
@@ -657,47 +819,133 @@ def process_single_pdf(pdf_path: Path) -> tuple[list[tuple[str, str]], str]:
         raise PdfProcessError("未解析到 PDF 对象，可能是加密或结构异常文件")
 
     fields = extract_form_fields(objects)
-    full_text = extract_text(objects)
-    return fields, full_text
+    full_text = extract_text(objects, preview_chars=preview_chars)
+    page_count = sum(1 for obj in objects.values() if obj.dictionary and b"/Type /Page" in obj.dictionary)
+    return fields, full_text, page_count or ""
+
+
+def process_single_pdf(pdf_path: Path, preview_chars: int) -> tuple[list[tuple[str, str]], str, int | str, str]:
+    strategy_parts: list[str] = []
+    fields: list[tuple[str, str]] = []
+    full_text = ""
+    page_count: int | str = ""
+
+    if PdfReader is not None:
+        fields, _, page_count = extract_with_pypdf(pdf_path)
+        strategy_parts.append("pypdf表单")
+    else:
+        strategy_parts.append("内置表单回退")
+
+    if fitz is not None:
+        full_text = extract_with_fitz(pdf_path)
+        if preview_chars > 0 and len(full_text) > preview_chars:
+            full_text = full_text[:preview_chars].rstrip() + "\n……（全文过长，已截断显示）"
+        strategy_parts.append("fitz正文")
+    else:
+        strategy_parts.append("内置正文回退")
+
+    if PdfReader is None or fitz is None:
+        fallback_fields, fallback_text, fallback_pages = fallback_extract(pdf_path, preview_chars)
+        if not fields:
+            fields = fallback_fields
+        if not full_text:
+            full_text = fallback_text
+        if page_count == "":
+            page_count = fallback_pages
+
+    return fields, full_text, page_count, " + ".join(strategy_parts)
+
+
+def print_pdf_result(
+    pdf_path: Path,
+    fields: list[tuple[str, str]],
+    full_text: str,
+    page_count: int | str,
+    strategy: str,
+) -> None:
+    print(f"\n{'=' * 120}")
+    print(f"文件：{pdf_path.name}")
+    print(f"路径：{pdf_path}")
+    print(f"页数：{page_count if page_count != '' else '未知'}")
+    print(f"提取方式：{strategy}")
+
+    print("\n【表单字段】")
+    if fields:
+        ordered_fields = OrderedDict(fields)
+        for key, value in ordered_fields.items():
+            print(f"{key}: {value if value else '（空值）'}")
+    else:
+        print("未提取到表单字段")
+
+    print("\n【全文文字预览】")
+    if full_text:
+        print(full_text)
+    else:
+        print("未提取到可读文字")
 
 
 def main() -> None:
-    input_dir = INPUT_DIR.expanduser()
+    args = parse_args()
+    path_config = build_path_config(args.config, args.input_dir)
+    input_dir = path_config.dataset_root
+
     if not input_dir.exists():
-        print(f"输入目录不存在: {input_dir}")
+        print(f"输入目录不存在：{input_dir}")
         return
     if not input_dir.is_dir():
-        print(f"输入路径不是目录: {input_dir}")
+        print(f"输入路径不是目录：{input_dir}")
         return
 
     pdf_files = list(iter_pdf_files(input_dir))
+    if args.max_files is not None and args.max_files > 0:
+        pdf_files = pdf_files[:args.max_files]
+
     if not pdf_files:
-        print(f"目录下未找到 PDF 文件: {input_dir}")
+        print(f"目录下未找到 PDF 文件：{input_dir}")
         return
 
-    total_count = len(pdf_files)
     success_count = 0
     failed_count = 0
 
-    print(f"开始检查 PDF，目录: {input_dir}")
-    print(f"共发现 PDF 文件: {total_count}")
+    runtime_info = {
+        "输入目录": str(input_dir),
+        "PDF数量": len(pdf_files),
+        "全文预览字符数": args.preview_chars,
+        "已安装fitz": fitz is not None,
+        "已安装pypdf": PdfReader is not None,
+        "输出文件": "不生成，仅终端输出",
+    }
+    print("开始检查 PDF：")
+    print(json.dumps(runtime_info, ensure_ascii=False, indent=2))
 
     for pdf_path in pdf_files:
         try:
-            fields, full_text = process_single_pdf(pdf_path)
-            print_pdf_result(pdf_path, fields, full_text)
+            fields, full_text, page_count, strategy = process_single_pdf(pdf_path, args.preview_chars)
+            print_pdf_result(pdf_path, fields, full_text, page_count, strategy)
             success_count += 1
         except Exception as exc:
             failed_count += 1
-            print(f"\n{'=' * 80}")
-            print(f"文件: {pdf_path.name}")
-            print(f"错误: 处理失败，已跳过。原因: {exc}")
+            print(f"\n{'=' * 120}")
+            print(f"文件：{pdf_path.name}")
+            print(f"路径：{pdf_path}")
+            print(f"状态：处理失败")
+            print(f"原因：{exc}")
 
-    print(f"\n{'=' * 80}")
-    print("处理完成")
-    print(f"总 PDF 数量: {total_count}")
-    print(f"成功处理数量: {success_count}")
-    print(f"失败数量: {failed_count}")
+    print(f"\n{'=' * 120}")
+    print("处理完成：")
+    print(
+        json.dumps(
+            {
+                "输入目录": str(input_dir),
+                "总 PDF 数量": len(pdf_files),
+                "成功数量": success_count,
+                "失败数量": failed_count,
+                "输出文件": "无，仅终端输出",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
