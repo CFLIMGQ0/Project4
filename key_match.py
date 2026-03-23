@@ -4,7 +4,9 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 
 from check_pdf import (
@@ -15,99 +17,19 @@ from check_pdf import (
 )
 
 LABEL_PATTERN = re.compile(r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9]{1,20})：")
-LEGACY_SECTION_PATTERN = re.compile(r"^【(.+?)】$")
-CANDIDATE_MARK = "※"
 DEFAULT_OUTPUT_JSON = Path(__file__).resolve().parent / "key_match.json"
+IGNORED_TEXT_PREFIXES = ("[第",)
 
-ENGLISH_TO_CHINESE_CANDIDATES = OrderedDict(
-    [
-        ("date", ["检查日期", "报告日期", "日期"]),
-        ("dactor", ["报告医师", "麻醉医生", "医生"]),
-        ("project", ["操作名称", "检查项目", "项目"]),
-        ("department", ["科室"]),
-        ("bed", ["病床号"]),
-        ("outpatient", ["门诊号"]),
-        ("inspect", ["检查号", "检查项目"]),
-        ("patient", ["姓名", "患者"]),
-        ("endoscopy", ["内镜号", "镜号"]),
-        ("proposal", ["注意事项", "建议"]),
-        ("pathology", ["病理"]),
-        ("Signal", ["指征"]),
-        ("biopsy", ["活检部位"]),
-        ("under_diagnosis", ["诊断"]),
-        ("under_see", ["内镜所见"]),
-        ("photo", ["图片", "照片"]),
-        ("inspect_time", ["检查日期", "检查时间"]),
-        ("project_name", ["操作名称", "项目名称"]),
-        ("pics", ["图片"]),
-        ("sex", ["性别"]),
-        ("watch", ["内镜所见"]),
-        ("doctorName", ["报告医师", "医生"]),
-        ("bedId", ["病床号"]),
-        ("patientAreaName", ["病区"]),
-        ("checkTime", ["检查日期", "检查时间"]),
-        ("archiveTime", ["报告日期", "归档时间"]),
-        ("markImage", ["标记图", "图片"]),
-        ("codeImage", ["二维码", "条码"]),
-        ("age", ["年龄"]),
-        ("reportTitle", ["报告标题", "报告名称"]),
-        ("applyDeptName", ["科室"]),
-        ("hisPatientId", ["内镜号", "患者编号"]),
-        ("admissionNo", ["住院号"]),
-        ("applyNo", ["检查号", "申请单号"]),
-        ("endoscopeName", ["镜号", "内镜型号"]),
-        ("narcosisType", ["麻醉方式"]),
-        ("patientType", ["门诊号", "患者类型"]),
-        ("specimen", ["活检部位", "标本"]),
-        ("watchResult", ["操作结果", "诊断"]),
-        ("suggest", ["注意事项", "建议"]),
-        ("namePatient", ["姓名"]),
-        ("anesthesiologistName", ["麻醉医生"]),
-        ("operation", ["操作过程"]),
-        ("conditionRemark", ["患者一般情况备注"]),
-        ("operationRemark", ["操作过程备注"]),
-        ("badnessRemark", ["不良反应备注"]),
-        ("condition", ["患者一般情况"]),
-        ("badness", ["不良反应"]),
-        ("operationValue", ["操作名称"]),
-        ("roomName", ["诊间"]),
-    ]
-)
 
-EXTRA_VISIBLE_LABELS = [
-    "姓名",
-    "性别",
-    "年龄",
-    "内镜号",
-    "科室",
-    "门诊号",
-    "病区",
-    "病床号",
-    "检查号",
-    "检查日期",
-    "报告日期",
-    "诊间",
-    "镜号",
-    "麻醉方式",
-    "麻醉医生",
-    "操作步骤",
-    "内镜所见",
-    "操作名称",
-    "操作结果",
-    "活检部位",
-    "诊断",
-    "操作过程",
-    "患者一般情况",
-    "不良反应",
-    "注意事项",
-    "报告医师",
-    "地址",
-    "电话",
-]
+@dataclass
+class LabelEntry:
+    label: str
+    value: str
+    order_index: int
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="生成英文字段到中文键名的 key_match.json 映射文件")
+    parser = argparse.ArgumentParser(description="根据 PDF 页面实际内容生成 key_match.json")
     parser.add_argument(
         "--config",
         type=Path,
@@ -123,8 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--preview-chars",
         type=int,
-        default=4000,
-        help="全文文字预览字符数，默认 4000，尽量保证可提取到更多中文标签",
+        default=12000,
+        help="全文文字预览字符数，默认 12000，尽量避免关键信息被截断",
     )
     parser.add_argument(
         "--raw-text",
@@ -138,32 +60,26 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_JSON,
         help="输出的 key_match.json 路径，默认写入仓库根目录",
     )
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=DEFAULT_OUTPUT_JSON,
+        help="输出的 key_match.json 路径，默认写入仓库根目录",
+    )
     return parser.parse_args()
 
 
 def clean_value(value: str) -> str:
     return value.strip().replace("（空值）", "")
 
-
-def extract_visible_labels(full_text: str) -> list[str]:
-    ordered_positions: list[tuple[int, str]] = []
-
-    for match in LABEL_PATTERN.finditer(full_text):
-        label = re.sub(r"\s+", "", match.group(1).strip())
-        if 2 <= len(label) <= 20:
-            ordered_positions.append((match.start(), label))
-
-    for label in EXTRA_VISIBLE_LABELS:
-        match = re.search(re.escape(label), full_text)
-        if match:
-            ordered_positions.append((match.start(), label))
-
     ordered_positions.sort(key=lambda item: (item[0], item[1]))
 
-    deduped = OrderedDict()
-    for _, label in ordered_positions:
-        deduped.setdefault(label, True)
-    return list(deduped.keys())
+def normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text or "")
+    text = text.replace("\x00", "")
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[：:，,。；;、（）()【】\[\]<>《》\"'“”‘’]", "", text)
+    return text.strip()
 
 
 def parse_check_pdf_output(raw_text: str) -> tuple[OrderedDict[str, str], list[str]]:
@@ -190,34 +106,7 @@ def parse_check_pdf_output(raw_text: str) -> tuple[OrderedDict[str, str], list[s
         elif section == "full_text":
             full_text_lines.append(line.rstrip())
 
-    return fields, extract_visible_labels("\n".join(full_text_lines).strip())
-
-
-def parse_legacy_key_match_output(raw_text: str) -> tuple[OrderedDict[str, str], list[str]]:
-    fields = OrderedDict()
-    visible_labels: list[str] = []
-    section = ""
-
-    for line in raw_text.splitlines():
-        stripped = line.strip()
-        section_match = LEGACY_SECTION_PATTERN.match(stripped)
-        if section_match:
-            section = section_match.group(1)
-            continue
-
-        if section == "提取到的英文键":
-            if not stripped.startswith("- ") or ":" not in stripped:
-                continue
-            body = stripped[2:]
-            key, value = body.split(":", 1)
-            fields[key.strip()] = clean_value(value)
-        elif section == "提取到的中文键":
-            if stripped.startswith("- "):
-                label = stripped[2:].strip()
-                if label and label not in visible_labels:
-                    visible_labels.append(label)
-
-    return fields, visible_labels
+    return fields, "\n".join(full_text_lines).strip()
 
 
 def load_input_data(args: argparse.Namespace) -> tuple[str, OrderedDict[str, str], list[str], str, str]:
@@ -226,11 +115,10 @@ def load_input_data(args: argparse.Namespace) -> tuple[str, OrderedDict[str, str
         raw_text = sys.stdin.read().strip()
 
     if raw_text:
-        if "【表单字段】" in raw_text and "【全文文字预览】" in raw_text:
-            fields, visible_labels = parse_check_pdf_output(raw_text)
-            return "raw_text", fields, visible_labels, "未知", "来自 check_pdf.py 终端输出"
-        fields, visible_labels = parse_legacy_key_match_output(raw_text)
-        return "raw_text", fields, visible_labels, "未知", "来自键名分析终端输出"
+        if "【表单字段】" not in raw_text or "【全文文字预览】" not in raw_text:
+            raise ValueError("--raw-text 需要传入 check_pdf.py 的完整终端输出，必须同时包含【表单字段】和【全文文字预览】。")
+        fields, full_text = parse_check_pdf_output(raw_text)
+        return "raw_text", fields, full_text, "未知", "来自 check_pdf.py 终端输出"
 
     path_config = build_path_config(args.config, args.input_dir)
     pdf_files = list(iter_pdf_files(path_config.dataset_root))
@@ -278,37 +166,126 @@ def write_key_match_json(output_path: Path, payload: OrderedDict[str, str]) -> N
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+def extract_label_entries(full_text: str) -> list[LabelEntry]:
+    entries: list[LabelEntry] = []
+    current_entry: LabelEntry | None = None
+    order_index = 0
+
+    for raw_line in full_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if any(line.startswith(prefix) and line.endswith("页]") for prefix in IGNORED_TEXT_PREFIXES):
+            continue
+
+        matches = list(LABEL_PATTERN.finditer(line))
+        if not matches:
+            if current_entry is not None:
+                current_entry.value = f"{current_entry.value}\n{line}".strip()
+            continue
+
+        for index, match in enumerate(matches):
+            label = re.sub(r"\s+", "", match.group(1).strip())
+            start = match.end()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(line)
+            value = line[start:end].strip()
+            value = re.sub(r"^[：:]+", "", value).strip()
+            current_entry = LabelEntry(label=label, value=value, order_index=order_index)
+            entries.append(current_entry)
+            order_index += 1
+
+    return entries
+
+
+def score_label_match(field_value: str, label_value: str) -> tuple[int, int] | None:
+    normalized_field = normalize_text(field_value)
+    normalized_label_value = normalize_text(label_value)
+
+    if not normalized_field or not normalized_label_value:
+        return None
+
+    if normalized_field == normalized_label_value:
+        return (3, len(normalized_field))
+    if normalized_field in normalized_label_value:
+        return (2, len(normalized_field))
+    if normalized_label_value in normalized_field:
+        return (1, len(normalized_label_value))
+    return None
+
+
+def build_key_match_json(ordered_fields: OrderedDict[str, str], label_entries: list[LabelEntry]) -> OrderedDict[str, str]:
+    matched_rows: list[tuple[int, int, str, str]] = []
+
+    for original_index, (field_key, field_value) in enumerate(ordered_fields.items()):
+        cleaned_field_value = clean_value(field_value)
+        if not cleaned_field_value:
+            continue
+
+        best_match: tuple[int, int, int, str] | None = None
+        for entry in label_entries:
+            score = score_label_match(cleaned_field_value, entry.value)
+            if score is None:
+                continue
+
+            candidate = (score[0], score[1], -entry.order_index, entry.label)
+            if best_match is None or candidate > best_match:
+                best_match = candidate
+
+        if best_match is None:
+            continue
+
+        _, _, negative_order_index, label = best_match
+        matched_rows.append((-negative_order_index, original_index, field_key, label))
+
+    matched_rows.sort(key=lambda item: (item[0], item[1]))
+
+    result = OrderedDict()
+    for _, _, field_key, label in matched_rows:
+        result[field_key] = label
+    return result
+
+
+def write_key_match_json(output_path: Path, payload: OrderedDict[str, str]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 
 def main() -> None:
     args = parse_args()
     input_source, ordered_fields, visible_labels, page_count, strategy = load_input_data(args)
 
     if input_source == "empty":
-        print("未找到目标 PDF，且未通过 --raw-text 或标准输入提供终端输出，无法生成 key_match.json。")
+        print("未找到目标 PDF，且未通过 --raw-text 或标准输入提供 check_pdf.py 输出，无法生成 key_match.json。")
         return
 
     if not ordered_fields:
         print("未提取到英文键，无法生成 key_match.json。")
         return
 
-    key_match_payload = build_key_match_json(ordered_fields, visible_labels)
+    label_entries = extract_label_entries(full_text)
+    if not label_entries:
+        print("未从 PDF 页面文字中解析到“中文键：值”的结构，无法生成可靠的 key_match.json。")
+        return
+
+    key_match_payload = build_key_match_json(ordered_fields, label_entries)
     output_json = args.output_json.expanduser().resolve()
     write_key_match_json(output_json, key_match_payload)
 
     print("=" * 120)
     print("key_match.json 已生成")
     if input_source == "raw_text":
-        print("输入来源：终端文本")
+        print("输入来源：check_pdf.py 终端文本")
         print("原始文件：未直接访问 PDF")
     else:
         print(f"输入文件：{Path(input_source).name}")
         print(f"输入路径：{input_source}")
     print(f"页数：{page_count}")
     print(f"提取方式：{strategy}")
-    print(f"中文键数量：{len(visible_labels)}")
-    print(f"英文键数量：{len(ordered_fields)}")
+    print(f"英文键总数：{len(ordered_fields)}")
+    print(f"页面标签总数：{len(label_entries)}")
+    print(f"最终保留映射数：{len(key_match_payload)}")
     print(f"输出文件：{output_json}")
-    print("说明：以 '※' 开头的中文键表示页面上未直接找到该标签，当前使用候选中文键占位。")
+    print("说明：仅保留“英文键有值”且“值能在页面中文标签处匹配到”的映射项；空值键和无法确认的键都会被丢弃。")
     print("-" * 120)
     print(json.dumps(key_match_payload, ensure_ascii=False, indent=2))
 
