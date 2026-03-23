@@ -9,6 +9,8 @@ from typing import Iterable
 
 INPUT_DIR = Path("/home/Lim/datasets/project4/ZS08004085/ZS0048989881/pdf")
 MAX_TEXT_PREVIEW = 4000
+MAX_PDF_SIZE_MB = 256
+MAX_STREAM_DECOMPRESS_SIZE = 8 * 1024 * 1024
 OBJECT_PATTERN = re.compile(rb"(\d+)\s+(\d+)\s+obj(.*?)endobj", re.DOTALL)
 STREAM_PATTERN = re.compile(rb"<<(.*?)>>\s*stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
 DICT_PATTERN = re.compile(rb"<<(.*?)>>", re.DOTALL)
@@ -279,12 +281,46 @@ def iter_pdf_files(input_dir: Path) -> Iterable[Path]:
     return sorted(path for path in input_dir.iterdir() if path.is_file() and path.suffix.lower() == ".pdf")
 
 
+def safe_decompress_stream(stream_data: bytes, max_output_size: int) -> bytes:
+    decompressor = zlib.decompressobj()
+    output_chunks: list[bytes] = []
+    total_size = 0
+    remaining = stream_data
+
+    while remaining:
+        chunk = decompressor.decompress(remaining, max_output_size - total_size)
+        if chunk:
+            output_chunks.append(chunk)
+            total_size += len(chunk)
+        remaining = decompressor.unconsumed_tail
+
+        if total_size >= max_output_size:
+            raise PdfProcessError(
+                f"解压后的流超过 {max_output_size // (1024 * 1024)} MB，已停止处理以避免内存占用过高"
+            )
+
+        if not remaining:
+            break
+
+    tail = decompressor.flush(max_output_size - total_size)
+    if tail:
+        output_chunks.append(tail)
+        total_size += len(tail)
+
+    if total_size >= max_output_size:
+        raise PdfProcessError(
+            f"解压后的流超过 {max_output_size // (1024 * 1024)} MB，已停止处理以避免内存占用过高"
+        )
+
+    return b"".join(output_chunks)
+
+
 def maybe_decompress_stream(stream_dict: bytes, stream_data: bytes) -> bytes:
     filters = stream_dict.decode("latin-1", errors="ignore")
     if "/FlateDecode" in filters:
         try:
-            return zlib.decompress(stream_data)
-        except zlib.error:
+            return safe_decompress_stream(stream_data, MAX_STREAM_DECOMPRESS_SIZE)
+        except (zlib.error, PdfProcessError):
             return b""
     return stream_data
 
@@ -602,6 +638,12 @@ def print_pdf_result(pdf_path: Path, fields: list[tuple[str, str]], full_text: s
 
 
 def process_single_pdf(pdf_path: Path) -> tuple[list[tuple[str, str]], str]:
+    pdf_size_mb = pdf_path.stat().st_size / (1024 * 1024)
+    if pdf_size_mb > MAX_PDF_SIZE_MB:
+        raise PdfProcessError(
+            f"文件大小为 {pdf_size_mb:.1f} MB，超过限制 {MAX_PDF_SIZE_MB} MB，已跳过以避免内存占用过高"
+        )
+
     try:
         pdf_bytes = pdf_path.read_bytes()
     except OSError as exc:
