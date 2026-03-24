@@ -11,12 +11,12 @@ from pathlib import Path
 class BadnessConflict:
     exam_dir: str
     badness_values: list[str]
-    check_times: list[str]
+    archive_times: list[str]
     latest_archive_time: str
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='读取 conflicted_dicts.csv 并提取 badness 冲突目录及对应检查时间')
+    parser = argparse.ArgumentParser(description='读取 conflicted_dicts.csv 并提取 badness 冲突目录及对应 archiveTime')
     parser.add_argument(
         '--csv-path',
         type=Path,
@@ -58,12 +58,12 @@ def load_badness_conflicts(csv_path: Path) -> list[BadnessConflict]:
             if len(badness_values) < 2:
                 continue
 
-            check_times = _normalize_values(conflict_value_map.get('checkTime'))
+            archive_times = _normalize_values(conflict_value_map.get('archiveTime'))
             conflicts.append(
                 BadnessConflict(
                     exam_dir=(row.get('exam_dir') or '').strip(),
                     badness_values=badness_values,
-                    check_times=check_times,
+                    archive_times=archive_times,
                     latest_archive_time=(row.get('latest_archive_time') or '').strip(),
                 )
             )
@@ -89,10 +89,10 @@ def main() -> None:
     for idx, item in enumerate(conflicts, start=1):
         print(f'{idx}. 目录：{item.exam_dir}')
         print(f'   - badness 冲突值：{", ".join(item.badness_values)}')
-        if item.check_times:
-            print(f'   - 对应 checkTime：{", ".join(item.check_times)}')
+        if item.archive_times:
+            print(f'   - 对应 archiveTime：{", ".join(item.archive_times)}')
         else:
-            print('   - 对应 checkTime：无（CSV 明细里没有 checkTime 冲突值）')
+            print('   - 对应 archiveTime：无（CSV 明细里没有 archiveTime 冲突值）')
         print(f'   - latest_archive_time：{item.latest_archive_time or "无"}')
 
 
