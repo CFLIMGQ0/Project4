@@ -221,27 +221,14 @@ def summarize_conflict_value_types(conflict_records: list[ConflictExamRecord]) -
     )
 
 
-def write_conflict_value_type_summary(
-    summary_path: Path,
-    conflict_value_type_summary: list[tuple[str, int]],
-) -> None:
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    with summary_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=[
-                'key',
-                'conflict_value_type_count',
-            ],
-        )
-        writer.writeheader()
-        for key, value_type_count in conflict_value_type_summary:
-            writer.writerow(
-                {
-                    'key': key,
-                    'conflict_value_type_count': value_type_count,
-                }
-            )
+def has_conflict_value_details(conflict_records: list[ConflictExamRecord]) -> bool:
+    has_conflict = False
+    for record in conflict_records:
+        if record.conflict_keys:
+            has_conflict = True
+        if record.conflict_value_map:
+            return True
+    return not has_conflict
 
 
 class SimpleProgressBar:
@@ -391,12 +378,10 @@ def load_conflict_cache(cache_path: Path) -> list[ConflictExamRecord]:
 
 def print_summary(
     cache_path: Path,
-    summary_path: Path,
     conflict_records: list[ConflictExamRecord],
     from_cache: bool,
 ) -> None:
     conflict_value_type_summary = summarize_conflict_value_types(conflict_records)
-    write_conflict_value_type_summary(summary_path, conflict_value_type_summary)
     print('冲突检查目录处理完成。')
     print(f'- 数据来源：{"缓存文件" if from_cache else "重新扫描"}')
     print(f'- 冲突检查目录数量：{len(conflict_records)}')
@@ -425,7 +410,14 @@ def main() -> None:
 
     if cache_path.exists() and not args.force_rescan:
         conflict_records = load_conflict_cache(cache_path)
-        print_summary(cache_path, summary_path, conflict_records, from_cache=True)
+        if has_conflict_value_details(conflict_records):
+            print_summary(cache_path, conflict_records, from_cache=True)
+            return
+
+        print('检测到缓存缺少 conflict_value_map 明细，自动重新扫描以生成冲突值类型统计。')
+        conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root)
+        write_conflict_cache(cache_path, conflict_records)
+        print_summary(cache_path, conflict_records, from_cache=False)
         return
 
     conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root)
