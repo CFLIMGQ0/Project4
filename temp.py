@@ -1,56 +1,54 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from statistics import (
     CONFIG_PATH,
-    build_exam_dedup_results,
+    PdfProcessError,
     build_path_config,
-    collect_pdf_stats,
+    extract_pdf_fields,
+    filter_valid_patient_dirs,
+    iter_exam_dirs,
+    iter_patient_dirs,
+    iter_pdf_files,
     load_valid_patient_ids,
 )
 
 
+@dataclass
+class ConflictDetail:
+    patient_id: str
+    exam_id: str
+    key: str
+    value_to_pdfs: dict[str, list[str]] = field(default_factory=dict)
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="抽取含冲突 PDF 的患者样本（最多 10 人）"
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=CONFIG_PATH,
-        help="路径配置文件，默认使用 configs/path.yaml",
-    )
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=None,
-        help="可选：覆盖 path.yaml 中的 dataset_root",
-    )
+    parser = argparse.ArgumentParser(description="按扫描顺序提取前 5 个冲突键的详细过程")
+    parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="路径配置文件")
+    parser.add_argument("--dataset-root", type=Path, default=None, help="可选：覆盖 dataset_root")
     parser.add_argument(
         "--patient-validity-table",
         type=Path,
         default=None,
-        help="可选：覆盖 path.yaml 中的 patient_validity_table",
+        help="可选：覆盖 patient_validity_table",
     )
     parser.add_argument(
         "--max-patients",
         type=int,
         default=None,
-        help="可选：限制参与统计的患者数，用于快速抽样",
+        help="可选：限制扫描患者数（按目录排序后截断）",
     )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=10,
-        help="输出患者数量上限，默认 10",
-    )
+    parser.add_argument("--limit", type=int, default=5, help="需要提取的冲突键数量，默认 5")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    limit = max(0, args.limit)
 
     path_config = build_path_config(
         config_path=args.config,
@@ -59,42 +57,75 @@ def main() -> None:
     )
     valid_patient_ids = load_valid_patient_ids(path_config.patient_validity_table)
 
-    patient_ids, exam_pdf_totals, pdf_stats, errors = collect_pdf_stats(
-        dataset_root=path_config.dataset_root,
-        valid_patient_ids=valid_patient_ids,
-        max_patients=args.max_patients,
-    )
+    patient_dirs = filter_valid_patient_dirs(iter_patient_dirs(path_config.dataset_root), valid_patient_ids)
+    if args.max_patients is not None and args.max_patients > 0:
+        patient_dirs = patient_dirs[: args.max_patients]
 
-    exam_results = build_exam_dedup_results(
-        exam_pdf_totals=exam_pdf_totals,
-        pdf_stats=pdf_stats,
-        errors=errors,
-    )
+    conflict_details: list[ConflictDetail] = []
+    recorded_keys: set[tuple[str, str, str]] = set()
+    scanned_exam_count = 0
+    scanned_pdf_count = 0
 
-    conflict_results = [item for item in exam_results if item.status == "failed"]
-    patient_to_conflicts: dict[str, list] = {}
-    for item in conflict_results:
-        patient_to_conflicts.setdefault(item.patient_id, []).append(item)
+    for patient_dir in patient_dirs:
+        for exam_dir in iter_exam_dirs(patient_dir):
+            scanned_exam_count += 1
+            key_value_to_pdfs: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
 
-    selected_patient_ids = sorted(patient_to_conflicts)[: max(args.limit, 0)]
+            for pdf_path in iter_pdf_files(exam_dir):
+                scanned_pdf_count += 1
+                try:
+                    fields = extract_pdf_fields(pdf_path)
+                except (PdfProcessError, Exception):
+                    continue
 
-    print(f"有效患者总数：{len(patient_ids)}")
-    print(f"含冲突检查的患者数：{len(patient_to_conflicts)}")
-    print(f"展示患者数（limit={args.limit}）：{len(selected_patient_ids)}")
+                for key, value in fields.items():
+                    if not value:
+                        continue
+                    key_value_to_pdfs[key][value].append(pdf_path.name)
 
-    if not selected_patient_ids:
-        print("未找到包含冲突 PDF 的患者。")
+                    value_map = key_value_to_pdfs[key]
+                    if len(value_map) > 1:
+                        marker = (patient_dir.name, exam_dir.name, key)
+                        if marker in recorded_keys:
+                            continue
+
+                        conflict_details.append(
+                            ConflictDetail(
+                                patient_id=patient_dir.name,
+                                exam_id=exam_dir.name,
+                                key=key,
+                                value_to_pdfs={k: sorted(v) for k, v in value_map.items()},
+                            )
+                        )
+                        recorded_keys.add(marker)
+
+                        if len(conflict_details) >= limit:
+                            break
+
+                if len(conflict_details) >= limit:
+                    break
+
+            if len(conflict_details) >= limit:
+                break
+
+        if len(conflict_details) >= limit:
+            break
+
+    print(f"扫描患者数：{len(patient_dirs)}")
+    print(f"已扫描检查目录数：{scanned_exam_count}")
+    print(f"已扫描 PDF 数：{scanned_pdf_count}")
+    print(f"命中冲突键数量：{len(conflict_details)}（limit={limit}）")
+
+    if not conflict_details:
+        print("未找到冲突键。")
         return
 
-    print("\n样例患者（每人展示含冲突的检查目录与冲突键）：")
-    for patient_id in selected_patient_ids:
-        print(f"- 患者 {patient_id}")
-        for item in sorted(patient_to_conflicts[patient_id], key=lambda x: x.exam_id):
-            conflict_key_text = ", ".join(item.conflict_keys or [])
-            print(
-                f"  - 检查 {item.exam_id} | pdf_count={item.pdf_count} | "
-                f"parsed_pdf_count={item.parsed_pdf_count} | 冲突键：{conflict_key_text}"
-            )
+    print("\n冲突键详细过程（按扫描顺序）：")
+    for idx, detail in enumerate(conflict_details, start=1):
+        print(f"{idx}. 患者={detail.patient_id} | 检查={detail.exam_id} | 键={detail.key}")
+        for value, pdf_names in sorted(detail.value_to_pdfs.items(), key=lambda x: x[0]):
+            print(f"   - 值：{value}")
+            print(f"     来源 PDF：{', '.join(pdf_names)}")
 
 
 if __name__ == "__main__":
