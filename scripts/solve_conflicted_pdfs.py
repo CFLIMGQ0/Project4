@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import get_terminal_size
@@ -239,29 +239,46 @@ def parse_archive_time(value: str) -> datetime | None:
     return None
 
 
-def choose_latest_archive_time(values: set[str]) -> str | None:
-    if not values:
-        return None
+def to_utc_timestamp(value: datetime) -> float:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
 
-    dated_candidates: list[tuple[datetime, str]] = []
-    fallback_candidates: list[str] = []
+
+def choose_latest_archive_time_with_guard(values: set[str], max_time_gap_seconds: float) -> tuple[str | None, bool]:
+    """
+    返回值：
+    - latest_value: 可用于覆盖 archiveTime 的值；None 表示无法安全覆盖
+    - exceeds_gap: 仅在可解析时间存在且“最晚-最早”超出阈值时为 True
+    """
+    if not values:
+        return None, False
+
+    dated_candidates: list[tuple[float, str]] = []
     for item in values:
         parsed = parse_archive_time(item)
         if parsed is None:
-            fallback_candidates.append(item)
             continue
-        dated_candidates.append((parsed, item))
+        dated_candidates.append((to_utc_timestamp(parsed), item))
 
-    if dated_candidates:
-        dated_candidates.sort(key=lambda x: x[0])
-        return dated_candidates[-1][1]
+    if not dated_candidates:
+        return None, False
 
-    fallback_candidates.sort()
-    return fallback_candidates[-1]
+    dated_candidates.sort(key=lambda x: x[0])
+    earliest_ts = dated_candidates[0][0]
+    latest_ts = dated_candidates[-1][0]
+    exceeds_gap = (latest_ts - earliest_ts) > max_time_gap_seconds
+    if exceeds_gap:
+        return None, True
+
+    return dated_candidates[-1][1], False
 
 
-def apply_second_round_archive_time_resolution(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], int]:
+def apply_second_round_archive_time_resolution(
+    results: list[ExamScanResult], max_time_gap_seconds: float = 86400
+) -> tuple[list[ExamScanResult], int, int]:
     resolved_count = 0
+    over_gap_count = 0
     patched_results: list[ExamScanResult] = []
     for item in results:
         if 'archiveTime' not in item.conflict_keys:
@@ -269,7 +286,22 @@ def apply_second_round_archive_time_resolution(results: list[ExamScanResult]) ->
             continue
 
         new_merged_fields = dict(item.merged_valid_fields)
-        latest_archive_time = choose_latest_archive_time(item.field_values.get('archiveTime', set()))
+        latest_archive_time, exceeds_gap = choose_latest_archive_time_with_guard(
+            item.field_values.get('archiveTime', set()), max_time_gap_seconds=max_time_gap_seconds
+        )
+        if exceeds_gap:
+            over_gap_count += 1
+            patched_results.append(
+                ExamScanResult(
+                    exam_dir=item.exam_dir,
+                    is_valid=False,
+                    conflict_keys=item.conflict_keys,
+                    merged_valid_fields=new_merged_fields,
+                    field_values=item.field_values,
+                )
+            )
+            continue
+
         if latest_archive_time is not None:
             new_merged_fields['archiveTime'] = latest_archive_time
 
@@ -286,7 +318,7 @@ def apply_second_round_archive_time_resolution(results: list[ExamScanResult]) ->
                 field_values=item.field_values,
             )
         )
-    return patched_results, resolved_count
+    return patched_results, resolved_count, over_gap_count
 
 
 def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
@@ -335,7 +367,9 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
             writer.writerow(row)
 
 
-def print_summary(summary_path: Path, report_path: Path, results: list[ExamScanResult], title: str) -> None:
+def print_summary(
+    summary_path: Path, report_path: Path, results: list[ExamScanResult], title: str, include_output_paths: bool = True
+) -> None:
     total_count = len(results)
     valid_count = sum(1 for item in results if item.is_valid)
     invalid_count = total_count - valid_count
@@ -344,9 +378,10 @@ def print_summary(summary_path: Path, report_path: Path, results: list[ExamScanR
     print(f'- 检查目录总数：{total_count}')
     print(f'- 有效检查目录数：{valid_count}')
     print(f'- 无效检查目录数：{invalid_count}')
-    print(f'- 有效性汇总文件：{summary_path}')
-    print(f'- 有效目录键值报告文件：{report_path}')
-    print('- valid_dicts_pdf.csv 第二列规则：有效=1，无效=0')
+    if include_output_paths:
+        print(f'- 有效性汇总文件：{summary_path}')
+        print(f'- 有效目录键值报告文件：{report_path}')
+        print('- valid_dicts_pdf.csv 第二列规则：有效=1，无效=0')
 
 
 def main() -> None:
@@ -361,13 +396,14 @@ def main() -> None:
     report_path = path_config.dataset_base_root / VALID_DICTS_REPORT_FILE_NAME
 
     round1_results = scan_all_exam_dirs(path_config.dataset_root)
-    print_summary(summary_path, report_path, round1_results, title='第一轮有效性确认')
+    print_summary(summary_path, report_path, round1_results, title='第一轮有效性确认', include_output_paths=False)
 
-    round2_results, resolved_count = apply_second_round_archive_time_resolution(round1_results)
+    round2_results, resolved_count, over_gap_count = apply_second_round_archive_time_resolution(round1_results)
     write_valid_dicts_pdf(summary_path, round2_results)
     write_valid_dicts_report(report_path, round2_results)
-    print_summary(summary_path, report_path, round2_results, title='第二轮有效性确认（archiveTime 取最新值）')
-    print(f'- 第二轮已处理 archiveTime 冲突目录数：{resolved_count}')
+    print_summary(summary_path, report_path, round2_results, title='第二轮有效性确认（archiveTime 按时间差规则处理）')
+    print(f'- 第二轮按规则消解 archiveTime 冲突目录数：{resolved_count}')
+    print(f'- 第二轮 archiveTime 最晚与最早时间差大于 1 天的目录数：{over_gap_count}')
 
 
 if __name__ == '__main__':
