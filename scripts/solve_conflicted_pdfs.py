@@ -6,12 +6,18 @@ import datetime as dt
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import get_terminal_size
 from typing import Any
 
 try:
     import yaml  # type: ignore
 except ImportError:
     yaml = None
+
+try:
+    from tqdm import tqdm  # type: ignore
+except ImportError:
+    tqdm = None
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -197,43 +203,76 @@ def find_conflict_keys(pdf_snapshots: list[PdfFieldSnapshot]) -> tuple[list[str]
     return conflict_keys, latest_archive_time
 
 
+class SimpleProgressBar:
+    def __init__(self, total: int, desc: str) -> None:
+        self.total = max(total, 1)
+        self.current = 0
+        self.desc = desc
+
+    def update(self, step: int = 1) -> None:
+        self.current = min(self.total, self.current + step)
+        width = min(40, max(10, get_terminal_size((80, 20)).columns - 40))
+        ratio = self.current / self.total
+        done = int(width * ratio)
+        bar = '=' * done + '-' * (width - done)
+        message = f'\r{self.desc}: [{bar}] {self.current}/{self.total} ({ratio * 100:5.1f}%)'
+        print(message, end='', flush=True)
+        if self.current >= self.total:
+            print()
+
+
+def build_progress(total: int, desc: str):
+    if tqdm is not None:
+        return tqdm(total=total, desc=desc, unit='exam')
+    return SimpleProgressBar(total=total, desc=desc)
+
+
 def scan_conflicted_exam_dirs(dataset_root: Path) -> list[ConflictExamRecord]:
     conflict_records: list[ConflictExamRecord] = []
     exam_dirs = iter_exam_dirs(dataset_root)
+    progress = build_progress(total=len(exam_dirs), desc='扫描检查目录')
 
-    for exam_dir in exam_dirs:
-        pdf_files = iter_pdf_files(exam_dir)
-        if len(pdf_files) < 2:
-            continue
-
-        pdf_snapshots: list[PdfFieldSnapshot] = []
-        for pdf_path in pdf_files:
-            try:
-                fields = extract_pdf_fields(pdf_path)
-            except Exception:
+    try:
+        for exam_dir in exam_dirs:
+            pdf_files = iter_pdf_files(exam_dir)
+            if len(pdf_files) < 2:
+                progress.update(1)
                 continue
-            pdf_snapshots.append(PdfFieldSnapshot(pdf_path=pdf_path, fields=fields))
 
-        if len(pdf_snapshots) < 2:
-            continue
+            pdf_snapshots: list[PdfFieldSnapshot] = []
+            for pdf_path in pdf_files:
+                try:
+                    fields = extract_pdf_fields(pdf_path)
+                except Exception:
+                    continue
+                pdf_snapshots.append(PdfFieldSnapshot(pdf_path=pdf_path, fields=fields))
 
-        conflict_keys, latest_archive_time = find_conflict_keys(pdf_snapshots)
-        if not conflict_keys:
-            continue
+            if len(pdf_snapshots) < 2:
+                progress.update(1)
+                continue
 
-        patient_id = exam_dir.parent.name
-        exam_id = exam_dir.name
-        conflict_records.append(
-            ConflictExamRecord(
-                patient_id=patient_id,
-                exam_id=exam_id,
-                exam_dir=exam_dir,
-                pdf_count=len(pdf_files),
-                parsed_pdf_count=len(pdf_snapshots),
-                conflict_keys=conflict_keys,
-                latest_archive_time=latest_archive_time,
+            conflict_keys, latest_archive_time = find_conflict_keys(pdf_snapshots)
+            if not conflict_keys:
+                progress.update(1)
+                continue
+
+            patient_id = exam_dir.parent.name
+            exam_id = exam_dir.name
+            conflict_records.append(
+                ConflictExamRecord(
+                    patient_id=patient_id,
+                    exam_id=exam_id,
+                    exam_dir=exam_dir,
+                    pdf_count=len(pdf_files),
+                    parsed_pdf_count=len(pdf_snapshots),
+                    conflict_keys=conflict_keys,
+                    latest_archive_time=latest_archive_time,
+                )
             )
-        )
+            progress.update(1)
+    finally:
+        if hasattr(progress, 'close'):
+            progress.close()
 
     return conflict_records
 
