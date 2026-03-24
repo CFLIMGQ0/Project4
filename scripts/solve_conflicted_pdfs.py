@@ -245,14 +245,9 @@ def to_utc_timestamp(value: datetime) -> float:
     return value.timestamp()
 
 
-def choose_latest_archive_time_with_guard(values: set[str], max_time_gap_seconds: float) -> tuple[str | None, bool]:
-    """
-    返回值：
-    - latest_value: 可用于覆盖 archiveTime 的值；None 表示无法安全覆盖
-    - exceeds_gap: 仅在可解析时间存在且“最晚-最早”超出阈值时为 True
-    """
+def choose_latest_time_value(values: set[str]) -> str | None:
     if not values:
-        return None, False
+        return None
 
     dated_candidates: list[tuple[float, str]] = []
     for item in values:
@@ -262,52 +257,59 @@ def choose_latest_archive_time_with_guard(values: set[str], max_time_gap_seconds
         dated_candidates.append((to_utc_timestamp(parsed), item))
 
     if not dated_candidates:
-        return None, False
+        return None
 
     dated_candidates.sort(key=lambda x: x[0])
-    earliest_ts = dated_candidates[0][0]
-    latest_ts = dated_candidates[-1][0]
-    exceeds_gap = (latest_ts - earliest_ts) > max_time_gap_seconds
-    if exceeds_gap:
-        return None, True
+    return dated_candidates[-1][1]
 
-    return dated_candidates[-1][1], False
+
+def is_time_gap_over_limit(values: set[str], max_time_gap_seconds: float) -> bool:
+    dated_candidates: list[float] = []
+    for item in values:
+        parsed = parse_archive_time(item)
+        if parsed is None:
+            continue
+        dated_candidates.append(to_utc_timestamp(parsed))
+
+    if len(dated_candidates) < 2:
+        return False
+    return (max(dated_candidates) - min(dated_candidates)) > max_time_gap_seconds
 
 
 def apply_second_round_archive_time_resolution(
     results: list[ExamScanResult], max_time_gap_seconds: float = 86400
-) -> tuple[list[ExamScanResult], int, int]:
-    resolved_count = 0
-    over_gap_count = 0
+) -> tuple[list[ExamScanResult], int, int, list[str]]:
+    archive_resolved_count = 0
+    check_time_resolved_count = 0
+    check_time_over_gap_dirs: list[str] = []
     patched_results: list[ExamScanResult] = []
     for item in results:
-        if 'archiveTime' not in item.conflict_keys:
+        if 'archiveTime' not in item.conflict_keys and 'checkTime' not in item.conflict_keys:
             patched_results.append(item)
             continue
 
         new_merged_fields = dict(item.merged_valid_fields)
-        latest_archive_time, exceeds_gap = choose_latest_archive_time_with_guard(
-            item.field_values.get('archiveTime', set()), max_time_gap_seconds=max_time_gap_seconds
-        )
-        if exceeds_gap:
-            over_gap_count += 1
-            patched_results.append(
-                ExamScanResult(
-                    exam_dir=item.exam_dir,
-                    is_valid=False,
-                    conflict_keys=item.conflict_keys,
-                    merged_valid_fields=new_merged_fields,
-                    field_values=item.field_values,
-                )
-            )
-            continue
+        new_conflict_keys = list(item.conflict_keys)
 
-        if latest_archive_time is not None:
-            new_merged_fields['archiveTime'] = latest_archive_time
+        if 'archiveTime' in item.conflict_keys:
+            latest_archive_time = choose_latest_time_value(item.field_values.get('archiveTime', set()))
+            if latest_archive_time is not None:
+                new_merged_fields['archiveTime'] = latest_archive_time
+            new_conflict_keys = [key for key in new_conflict_keys if key != 'archiveTime']
+            if 'archiveTime' in item.conflict_keys:
+                archive_resolved_count += 1
 
-        new_conflict_keys = [key for key in item.conflict_keys if key != 'archiveTime']
-        if new_conflict_keys != item.conflict_keys:
-            resolved_count += 1
+        if 'checkTime' in item.conflict_keys:
+            check_time_values = item.field_values.get('checkTime', set())
+            exceeds_gap = is_time_gap_over_limit(check_time_values, max_time_gap_seconds=max_time_gap_seconds)
+            if exceeds_gap:
+                check_time_over_gap_dirs.append(str(item.exam_dir))
+            else:
+                latest_check_time = choose_latest_time_value(check_time_values)
+                if latest_check_time is not None:
+                    new_merged_fields['checkTime'] = latest_check_time
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'checkTime']
+                check_time_resolved_count += 1
 
         patched_results.append(
             ExamScanResult(
@@ -318,7 +320,7 @@ def apply_second_round_archive_time_resolution(
                 field_values=item.field_values,
             )
         )
-    return patched_results, resolved_count, over_gap_count
+    return patched_results, archive_resolved_count, check_time_resolved_count, check_time_over_gap_dirs
 
 
 def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
@@ -398,12 +400,19 @@ def main() -> None:
     round1_results = scan_all_exam_dirs(path_config.dataset_root)
     print_summary(summary_path, report_path, round1_results, title='第一轮有效性确认', include_output_paths=False)
 
-    round2_results, resolved_count, over_gap_count = apply_second_round_archive_time_resolution(round1_results)
+    round2_results, archive_resolved_count, check_time_resolved_count, check_time_over_gap_dirs = (
+        apply_second_round_archive_time_resolution(round1_results)
+    )
     write_valid_dicts_pdf(summary_path, round2_results)
     write_valid_dicts_report(report_path, round2_results)
-    print_summary(summary_path, report_path, round2_results, title='第二轮有效性确认（archiveTime 按时间差规则处理）')
-    print(f'- 第二轮按规则消解 archiveTime 冲突目录数：{resolved_count}')
-    print(f'- 第二轮 archiveTime 最晚与最早时间差大于 1 天的目录数：{over_gap_count}')
+    print_summary(summary_path, report_path, round2_results, title='第二轮有效性确认（archiveTime/checkTime 按规则处理）')
+    print(f'- 第二轮按最晚时间消解 archiveTime 冲突目录数：{archive_resolved_count}')
+    print(f'- 第二轮按最晚时间消解 checkTime 冲突目录数：{check_time_resolved_count}')
+    print(f'- 第二轮 checkTime 最晚与最早时间差大于 1 天的目录数：{len(check_time_over_gap_dirs)}')
+    if check_time_over_gap_dirs:
+        print('- checkTime 时间差大于 1 天的目录示例：')
+        for exam_dir in check_time_over_gap_dirs[:5]:
+            print(f'  - {exam_dir}')
 
 
 if __name__ == '__main__':
