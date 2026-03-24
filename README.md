@@ -34,6 +34,8 @@
 
 - `paths.dataset_base_root`：数据集根路径（说明文件、统计文件、辅助文件所在位置）；
 - `paths.dataset_root`：实际数据目录（患者目录所在位置，脚本默认读取此路径）。
+- `paths.output_dir`：脚本输出根目录；
+- `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件子目录名（默认 `cache_solve_conflicted_pdfs`）。
 
 目录组织示例如下：
 
@@ -103,7 +105,8 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
    - 全部补充完成后无冲突则判定为有效目录（`is_valid=1`），有冲突则判定为无效目录（`is_valid=0`）。
 2. 对有效目录输出补充后的有效键结果。
 
-脚本输出文件默认写入 `paths.output_dir`（可通过 `--output-dir` 覆盖），并区分两轮结果：
+脚本输出文件默认写入 `paths.output_dir`（可通过 `--output-dir` 覆盖）。其中，过程文件会写入
+`paths.output_dir/paths.process_cache_dir_name`（默认目录名为 `cache_solve_conflicted_pdfs`），并区分两轮结果：
 
 - 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
 - 第二轮：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
@@ -118,4 +121,4 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `anesthesiologistName` 冲突：置空；
 - `doctorName` 冲突：先剔除含数字值，再取剩余值里长度最长者。
 
-脚本会在每轮开始前检查输出目录（`paths.output_dir`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。
+脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。

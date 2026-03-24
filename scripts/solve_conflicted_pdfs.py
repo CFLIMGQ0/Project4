@@ -34,6 +34,7 @@ ROUND1_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round1.jsonl'
 ROUND2_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round2.csv'
 ROUND2_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round2.csv'
 ROUND2_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round2.jsonl'
+PROCESS_CACHE_DIR_NAME = 'cache_solve_conflicted_pdfs'
 LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
 HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
@@ -45,6 +46,7 @@ class PathConfig:
     dataset_root: Path
     dataset_base_root: Path
     output_dir: Path
+    process_cache_dir_name: str
 
 
 @dataclass
@@ -80,6 +82,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--input-dir', type=Path, default=None, help='可选：覆盖配置中的 dataset_root')
     parser.add_argument('--dataset-base-root', type=Path, default=None, help='可选：覆盖配置中的 dataset_base_root')
     parser.add_argument('--output-dir', type=Path, default=None, help='可选：覆盖配置中的 output_dir')
+    parser.add_argument(
+        '--process-cache-dir-name',
+        type=str,
+        default=None,
+        help='可选：覆盖配置中的 process_cache_dir_name（过程文件子目录名）',
+    )
     return parser.parse_args()
 
 
@@ -128,6 +136,7 @@ def build_path_config(
     input_dir: Path | None,
     dataset_base_root: Path | None,
     output_dir: Path | None,
+    process_cache_dir_name: str | None,
 ) -> PathConfig:
     payload = load_yaml_config(config_path.expanduser())
     paths_payload = payload.get('paths')
@@ -149,10 +158,17 @@ def build_path_config(
         else resolve_path(str(paths_payload['dataset_base_root']))
     )
     resolved_output_dir = output_dir.expanduser().resolve() if output_dir is not None else resolve_path(str(paths_payload['output_dir']))
+    configured_process_cache_dir_name = process_cache_dir_name or str(
+        paths_payload.get('process_cache_dir_name', PROCESS_CACHE_DIR_NAME)
+    )
+    cleaned_process_cache_dir_name = normalize_text(configured_process_cache_dir_name).strip('/\\')
+    if not cleaned_process_cache_dir_name:
+        raise ValueError('process_cache_dir_name 不能为空')
     return PathConfig(
         dataset_root=resolved_dataset_root,
         dataset_base_root=resolved_dataset_base_root,
         output_dir=resolved_output_dir,
+        process_cache_dir_name=cleaned_process_cache_dir_name,
     )
 
 
@@ -475,20 +491,27 @@ def print_summary(
 
 def main() -> None:
     args = parse_args()
-    path_config = build_path_config(args.config, args.input_dir, args.dataset_base_root, args.output_dir)
+    path_config = build_path_config(
+        args.config,
+        args.input_dir,
+        args.dataset_base_root,
+        args.output_dir,
+        args.process_cache_dir_name,
+    )
 
     if not path_config.dataset_root.exists() or not path_config.dataset_root.is_dir():
         print(f'输入路径不是有效目录：{path_config.dataset_root}')
         return
 
     output_dir = path_config.output_dir
-    round1_summary_path = output_dir / ROUND1_VALID_DICTS_SUMMARY_FILE_NAME
-    round1_report_path = output_dir / ROUND1_VALID_DICTS_REPORT_FILE_NAME
-    round1_cache_path = output_dir / ROUND1_CACHE_FILE_NAME
+    process_output_dir = output_dir / path_config.process_cache_dir_name
+    round1_summary_path = process_output_dir / ROUND1_VALID_DICTS_SUMMARY_FILE_NAME
+    round1_report_path = process_output_dir / ROUND1_VALID_DICTS_REPORT_FILE_NAME
+    round1_cache_path = process_output_dir / ROUND1_CACHE_FILE_NAME
 
-    round2_summary_path = output_dir / ROUND2_VALID_DICTS_SUMMARY_FILE_NAME
-    round2_report_path = output_dir / ROUND2_VALID_DICTS_REPORT_FILE_NAME
-    round2_cache_path = output_dir / ROUND2_CACHE_FILE_NAME
+    round2_summary_path = process_output_dir / ROUND2_VALID_DICTS_SUMMARY_FILE_NAME
+    round2_report_path = process_output_dir / ROUND2_VALID_DICTS_REPORT_FILE_NAME
+    round2_cache_path = process_output_dir / ROUND2_CACHE_FILE_NAME
 
     legacy_summary_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
     legacy_report_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_REPORT_FILE_NAME
@@ -502,7 +525,7 @@ def main() -> None:
         save_cached_results(round1_cache_path, round1_results)
         write_valid_dicts_pdf(round1_summary_path, round1_results)
         write_valid_dicts_report(round1_report_path, round1_results)
-        print(f'第一轮缓存与结果已生成：{output_dir}')
+        print(f'第一轮缓存与结果已生成：{process_output_dir}')
 
     if not round1_summary_path.exists() or not round1_report_path.exists():
         write_valid_dicts_pdf(round1_summary_path, round1_results)
@@ -522,7 +545,7 @@ def main() -> None:
         write_valid_dicts_report(round2_report_path, round2_results)
         write_valid_dicts_pdf(legacy_summary_path, round2_results)
         write_valid_dicts_report(legacy_report_path, round2_results)
-        print(f'第二轮缓存与结果已生成：{output_dir}')
+        print(f'第二轮缓存与结果已生成：{process_output_dir}')
 
     if not round2_summary_path.exists() or not round2_report_path.exists():
         write_valid_dicts_pdf(round2_summary_path, round2_results)

@@ -13,6 +13,8 @@
 
 - `paths.dataset_base_root`：数据集根路径（说明文件、统计结果、辅助文件）；
 - `paths.dataset_root`：实际数据目录（患者目录，脚本读取该目录）。
+- `paths.output_dir`：脚本输出根目录；
+- `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件目录名（默认 `cache_solve_conflicted_pdfs`）。
 
 因此，若需要切换数据环境、迁移服务器或调整输出位置，请优先修改 `configs/path.yaml`。
 
@@ -175,7 +177,8 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ## 10. 有效检查目录输出文件（新增）
 
-当前有效目录判定脚本 `scripts/solve_conflicted_pdfs.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖），并按两轮清洗分别落盘：
+当前有效目录判定脚本 `scripts/solve_conflicted_pdfs.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖）。
+其中过程文件默认落盘到 `paths.output_dir/paths.process_cache_dir_name`（默认 `cache_solve_conflicted_pdfs`），并按两轮清洗分别落盘：
 
 - 第一轮结果：
   - `valid_dicts_pdf_round1.csv`
