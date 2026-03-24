@@ -28,6 +28,7 @@ from statistics import extract_pdf_fields  # noqa: E402
 
 CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
 CACHE_FILE_NAME = 'conflicted_dicts.csv'
+CONFLICT_VALUE_TYPE_SUMMARY_FILE_NAME = 'conflict_value_type_summary.csv'
 IGNORE_CONFLICT_KEY = 'archiveTime'
 
 
@@ -220,6 +221,29 @@ def summarize_conflict_value_types(conflict_records: list[ConflictExamRecord]) -
     )
 
 
+def write_conflict_value_type_summary(
+    summary_path: Path,
+    conflict_value_type_summary: list[tuple[str, int]],
+) -> None:
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=[
+                'key',
+                'conflict_value_type_count',
+            ],
+        )
+        writer.writeheader()
+        for key, value_type_count in conflict_value_type_summary:
+            writer.writerow(
+                {
+                    'key': key,
+                    'conflict_value_type_count': value_type_count,
+                }
+            )
+
+
 class SimpleProgressBar:
     def __init__(self, total: int, desc: str) -> None:
         self.total = max(total, 1)
@@ -365,12 +389,19 @@ def load_conflict_cache(cache_path: Path) -> list[ConflictExamRecord]:
     return records
 
 
-def print_summary(cache_path: Path, conflict_records: list[ConflictExamRecord], from_cache: bool) -> None:
+def print_summary(
+    cache_path: Path,
+    summary_path: Path,
+    conflict_records: list[ConflictExamRecord],
+    from_cache: bool,
+) -> None:
     conflict_value_type_summary = summarize_conflict_value_types(conflict_records)
+    write_conflict_value_type_summary(summary_path, conflict_value_type_summary)
     print('冲突检查目录处理完成。')
     print(f'- 数据来源：{"缓存文件" if from_cache else "重新扫描"}')
     print(f'- 冲突检查目录数量：{len(conflict_records)}')
     print(f'- 缓存文件路径：{cache_path}')
+    print(f'- 冲突值类型统计文件：{summary_path}')
     print(f'- 冲突判定忽略键：{IGNORE_CONFLICT_KEY}')
     print('- archiveTime 处理规则：同一检查目录内取最晚值（已写入 latest_archive_time 列）')
     if conflict_value_type_summary:
@@ -390,15 +421,16 @@ def main() -> None:
         return
 
     cache_path = path_config.dataset_base_root / CACHE_FILE_NAME
+    summary_path = path_config.dataset_base_root / CONFLICT_VALUE_TYPE_SUMMARY_FILE_NAME
 
     if cache_path.exists() and not args.force_rescan:
         conflict_records = load_conflict_cache(cache_path)
-        print_summary(cache_path, conflict_records, from_cache=True)
+        print_summary(cache_path, summary_path, conflict_records, from_cache=True)
         return
 
     conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root)
     write_conflict_cache(cache_path, conflict_records)
-    print_summary(cache_path, conflict_records, from_cache=False)
+    print_summary(cache_path, summary_path, conflict_records, from_cache=False)
 
 
 if __name__ == '__main__':
