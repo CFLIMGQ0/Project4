@@ -1,93 +1,77 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import json
-from collections import Counter, defaultdict
+import importlib.util
+from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Iterable
 
-SUPPORTED_SUFFIXES = {'.json', '.jsonl', '.csv'}
+if importlib.util.find_spec('pypdf') is not None:
+    from pypdf import PdfReader
+else:
+    PdfReader = None
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='递归检查目录内 latest_archive_time 的所有取值。')
+    parser = argparse.ArgumentParser(description='检查指定目录下 pdf 子目录内所有 PDF 的 archiveTime 字段取值。')
     parser.add_argument(
         '--target-dir',
         type=Path,
         default=Path('/home/Lim/datasets/project4/main_data/ZS17239199/ZS0044501964'),
-        help='待检查目录（默认使用本次排查路径）',
+        help='检查目录（默认使用本次排查目录）',
     )
     parser.add_argument(
-        '--show-files',
+        '--show-missing',
         action='store_true',
-        help='输出每个取值出现在哪些文件中',
+        help='同时输出没有 archiveTime 字段的 PDF 文件',
     )
     return parser.parse_args()
 
 
-def normalize_value(value: Any) -> str:
+def normalize_value(value: object) -> str:
     if value is None:
         return ''
     return str(value).strip()
 
 
-def extract_from_json_obj(obj: Any, values: list[str]) -> None:
-    if isinstance(obj, dict):
-        for key, val in obj.items():
-            if key == 'latest_archive_time':
-                values.append(normalize_value(val))
-            extract_from_json_obj(val, values)
-    elif isinstance(obj, list):
-        for item in obj:
-            extract_from_json_obj(item, values)
+def iter_pdf_dirs(target_dir: Path) -> Iterable[Path]:
+    if target_dir.name.lower() == 'pdf' and target_dir.is_dir():
+        yield target_dir
+    for path in sorted(target_dir.rglob('*')):
+        if path.is_dir() and path.name.lower() == 'pdf':
+            yield path
 
 
-def scan_json_file(path: Path) -> list[str]:
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except UnicodeDecodeError:
-        data = json.loads(path.read_text(encoding='utf-8-sig'))
-    values: list[str] = []
-    extract_from_json_obj(data, values)
-    return values
+def collect_pdf_files(target_dir: Path) -> list[Path]:
+    pdf_files: list[Path] = []
+    seen: set[Path] = set()
+    for pdf_dir in iter_pdf_dirs(target_dir):
+        for file_path in sorted(pdf_dir.rglob('*.pdf')):
+            resolved = file_path.resolve()
+            if file_path.is_file() and resolved not in seen:
+                seen.add(resolved)
+                pdf_files.append(file_path)
+    return pdf_files
 
 
-def scan_jsonl_file(path: Path) -> list[str]:
-    values: list[str] = []
-    with path.open('r', encoding='utf-8') as file:
-        for line_no, line in enumerate(file, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f'JSONL 解析失败（{path}:{line_no}）: {exc}') from exc
-            extract_from_json_obj(record, values)
-    return values
+def extract_archive_time(pdf_path: Path) -> str:
+    if PdfReader is None:
+        raise RuntimeError('当前环境未安装 pypdf，请先安装后再运行。')
 
+    reader = PdfReader(str(pdf_path))
+    fields = reader.get_fields() or {}
+    if not fields:
+        return ''
 
-def scan_csv_file(path: Path) -> list[str]:
-    values: list[str] = []
-    with path.open('r', encoding='utf-8-sig', newline='') as file:
-        reader = csv.DictReader(file)
-        if not reader.fieldnames or 'latest_archive_time' not in reader.fieldnames:
-            return values
-        for row in reader:
-            values.append(normalize_value(row.get('latest_archive_time')))
-    return values
+    for key, item in fields.items():
+        if str(key).strip().lower() != 'archivetime':
+            continue
 
+        if hasattr(item, 'get'):
+            return normalize_value(item.get('/V'))
 
-def scan_file(path: Path) -> list[str]:
-    suffix = path.suffix.lower()
-    if suffix == '.json':
-        return scan_json_file(path)
-    if suffix == '.jsonl':
-        return scan_jsonl_file(path)
-    if suffix == '.csv':
-        return scan_csv_file(path)
-    return []
+        return normalize_value(item)
+    return ''
 
 
 def main() -> None:
@@ -101,57 +85,46 @@ def main() -> None:
         print(f'目标不是目录：{target_dir}')
         return
 
-    candidate_files = [
-        path
-        for path in sorted(target_dir.rglob('*'))
-        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
-    ]
-
-    if not candidate_files:
-        print(f'未找到可扫描文件（支持：{", ".join(sorted(SUPPORTED_SUFFIXES))}）。')
+    pdf_files = collect_pdf_files(target_dir)
+    if not pdf_files:
+        print('未找到任何 pdf 目录或 PDF 文件。')
         return
 
-    counter: Counter[str] = Counter()
-    value_to_files: dict[str, set[str]] = defaultdict(set)
-    scanned_files = 0
-    found_files = 0
-
-    for file_path in candidate_files:
-        scanned_files += 1
-        try:
-            values = scan_file(file_path)
-        except Exception as exc:
-            print(f'跳过文件（解析失败）：{file_path}，原因：{exc}')
-            continue
-
-        if not values:
-            continue
-
-        found_files += 1
-        rel_path = str(file_path.relative_to(target_dir))
-        for val in values:
-            counter[val] += 1
-            value_to_files[val].add(rel_path)
+    value_counter: Counter[str] = Counter()
+    missing_files: list[Path] = []
 
     print(f'扫描目录：{target_dir}')
-    print(f'扫描文件数：{scanned_files}')
-    print(f'包含 latest_archive_time 的文件数：{found_files}')
-    print(f'latest_archive_time 总计出现次数：{sum(counter.values())}')
-    print(f'latest_archive_time 不同取值数：{len(counter)}')
+    print(f'发现 PDF 文件数：{len(pdf_files)}')
+    print('\n每个 PDF 的 archiveTime：')
 
-    if not counter:
-        print('未找到 latest_archive_time 字段。')
-        return
+    for file_path in pdf_files:
+        try:
+            value = extract_archive_time(file_path)
+        except Exception as exc:
+            print(f'- {file_path} -> 读取失败：{exc}')
+            continue
 
-    print('\n取值统计（按出现次数降序）：')
-    for idx, (value, times) in enumerate(counter.most_common(), start=1):
-        show_value = value if value else '<空字符串>'
-        print(f'{idx}. {show_value} -> {times} 次')
-        if args.show_files:
-            files = sorted(value_to_files[value])
-            print(f'   文件数：{len(files)}')
-            for one_file in files:
-                print(f'   - {one_file}')
+        if value:
+            value_counter[value] += 1
+            print(f'- {file_path} -> {value}')
+        else:
+            missing_files.append(file_path)
+            print(f'- {file_path} -> <未找到 archiveTime>')
+
+    print('\narchiveTime 取值统计：')
+    if value_counter:
+        for idx, (value, count) in enumerate(value_counter.most_common(), start=1):
+            print(f'{idx}. {value} -> {count} 个 PDF')
+    else:
+        print('未从任何 PDF 解析到 archiveTime。')
+
+    print(f'\n存在 archiveTime 的 PDF 数：{sum(value_counter.values())}')
+    print(f'未找到 archiveTime 的 PDF 数：{len(missing_files)}')
+
+    if args.show_missing and missing_files:
+        print('\n未找到 archiveTime 的 PDF 列表：')
+        for file_path in missing_files:
+            print(f'- {file_path}')
 
 
 if __name__ == '__main__':
