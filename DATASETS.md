@@ -106,3 +106,71 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - **冲突 PDF**：在同一次检查里，若不同 PDF 的同名键出现不同的非空值，则这些互相矛盾的 PDF 定义为冲突 PDF。
 
 补充：本节只用于统一“冗余/冲突”术语含义，不展开统计流程与去重实现细节。
+
+## 9. check_pdf 键有效性分组规则（用于后续统计口径）
+
+基于当前 `check_pdf` 统计结果，按“**非空次数是否为 0**”将键分为两类：
+
+- **无效键**：非空次数 = 0（该键在现有样本中始终为空值）；
+- **有效键**：非空次数 > 0。
+
+后续若无特殊说明，所有统计数据默认仅统计**有效键**，**无效键不再纳入统计范围**。
+
+### 9.1 无效键（非空次数 = 0）
+
+- `Signal`
+- `badnessRemark`
+- `bed`
+- `biopsy`
+- `checkDoctorSign1`
+- `codeImage`
+- `conditionRemark`
+- `dactor`
+- `date`
+- `department`
+- `endoscopy`
+- `inspect`
+- `inspect_time`
+- `markImage`
+- `outpatient`
+- `pathology`
+- `patient`
+- `photo`
+- `pics`
+- `project`
+- `project_name`
+- `proposal`
+- `under_diagnosis`
+- `under_see`
+
+### 9.2 有效键（非空次数 > 0）
+
+- `admissionNo`
+- `age`
+- `anesthesiologistName`
+- `applyDeptName`
+- `applyNo`
+- `archiveTime`
+- `badness`
+- `bedId`
+- `checkTime`
+- `condition`
+- `doctorName`
+- `endoscopeName`
+- `hisPatientId`
+- `hp`
+- `namePatient`
+- `narcosisType`
+- `operation`
+- `operationRemark`
+- `operationValue`
+- `patientAreaName`
+- `patientType`
+- `reportTitle`
+- `roomName`
+- `score`
+- `sex`
+- `specimen`
+- `suggest`
+- `watch`
+- `watchResult`
