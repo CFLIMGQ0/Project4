@@ -255,13 +255,13 @@ def build_progress(total: int, desc: str):
     return SimpleProgressBar(total=total, desc=desc)
 
 
-def scan_conflicted_exam_dirs(dataset_root: Path) -> list[ConflictExamRecord]:
+def scan_conflicted_exam_dirs(dataset_root: Path, exam_dirs: list[Path] | None = None) -> list[ConflictExamRecord]:
     conflict_records: list[ConflictExamRecord] = []
-    exam_dirs = iter_exam_dirs(dataset_root)
-    progress = build_progress(total=len(exam_dirs), desc='扫描检查目录')
+    target_exam_dirs = exam_dirs if exam_dirs is not None else iter_exam_dirs(dataset_root)
+    progress = build_progress(total=len(target_exam_dirs), desc='扫描检查目录')
 
     try:
-        for exam_dir in exam_dirs:
+        for exam_dir in target_exam_dirs:
             pdf_files = iter_pdf_files(exam_dir)
             if len(pdf_files) < 2:
                 progress.update(1)
@@ -376,8 +376,25 @@ def load_conflict_cache(cache_path: Path) -> list[ConflictExamRecord]:
     return records
 
 
+def resolve_cached_exam_dirs(conflict_records: list[ConflictExamRecord], dataset_root: Path) -> list[Path]:
+    resolved_exam_dirs: list[Path] = []
+    seen_paths: set[Path] = set()
+    for record in conflict_records:
+        candidate = record.exam_dir
+        if not candidate.is_absolute():
+            candidate = (dataset_root / record.patient_id / record.exam_id).resolve()
+        else:
+            candidate = candidate.resolve()
+        if not candidate.is_dir() or candidate in seen_paths:
+            continue
+        seen_paths.add(candidate)
+        resolved_exam_dirs.append(candidate)
+    return resolved_exam_dirs
+
+
 def print_summary(
     cache_path: Path,
+    summary_path: Path,
     conflict_records: list[ConflictExamRecord],
     from_cache: bool,
 ) -> None:
@@ -411,13 +428,14 @@ def main() -> None:
     if cache_path.exists() and not args.force_rescan:
         conflict_records = load_conflict_cache(cache_path)
         if has_conflict_value_details(conflict_records):
-            print_summary(cache_path, conflict_records, from_cache=True)
+            print_summary(cache_path, summary_path, conflict_records, from_cache=True)
             return
 
-        print('检测到缓存缺少 conflict_value_map 明细，自动重新扫描以生成冲突值类型统计。')
-        conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root)
+        cached_exam_dirs = resolve_cached_exam_dirs(conflict_records, path_config.dataset_root)
+        print('检测到缓存缺少 conflict_value_map 明细，将只扫描 conflicted_dicts.csv 中记录的检查目录。')
+        conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root, exam_dirs=cached_exam_dirs)
         write_conflict_cache(cache_path, conflict_records)
-        print_summary(cache_path, conflict_records, from_cache=False)
+        print_summary(cache_path, summary_path, conflict_records, from_cache=False)
         return
 
     conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root)
