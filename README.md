@@ -62,3 +62,19 @@ paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml
 - 原始数据不应提交到 Git 仓库；
 - 实际路径请以 `configs/path.yaml` 中的参数配置为准；
 - 若默认路径不存在，请修改配置后再执行相应脚本。
+
+## 清洗脚本执行顺序与效果
+
+针对目录级清洗，当前统一按以下顺序执行脚本：
+
+1. `python scripts/delete_broken_files.py`
+2. `python scripts/delete_empty_dicts.py`
+3. `python scripts/delete_broken_dicts.py`
+
+各脚本执行效果说明如下：
+
+- `delete_broken_files.py`：遍历数据集内的 PDF 与图片文件，检查文件头、文件尾、关键结构（如 PDF 的 `startxref`、PNG 的 `IEND`、JPEG 的 `EOI` 等）是否完整，识别潜在损坏文件。
+- `delete_empty_dicts.py`：检查每个检查目录下的 `img/` 与 `pdf/` 子目录是否存在并包含目标类型文件；对不合规子目录可执行删除。
+- `delete_broken_dicts.py`：识别仅含 `img` 或仅含 `pdf` 的不完整检查目录，并按确认结果删除对应检查目录。
+
+这样可以先处理文件级异常，再处理子目录级异常，最后处理检查目录级结构异常，减少清洗过程中的重复判断。

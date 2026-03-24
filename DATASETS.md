@@ -68,3 +68,19 @@ paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml
 - 在进行下一步清洗前，先确认数据目录结构是否一致；
 - 若需要调整默认数据根目录或输出路径，请先修改 `configs/path.yaml`；
 - 若后续需要新增更多统计维度，可在现有数据处理流程上继续扩展。
+
+## 7. 清洗脚本执行顺序与执行效果
+
+为保证目录结构清洗的一致性，建议固定按以下顺序执行：
+
+1. `python scripts/delete_broken_files.py`
+2. `python scripts/delete_empty_dicts.py`
+3. `python scripts/delete_broken_dicts.py`
+
+执行效果说明：
+
+- 第一步（`delete_broken_files.py`）：在文件级扫描 PDF 与图片完整性，优先定位损坏文件，避免后续目录判断被坏文件干扰。
+- 第二步（`delete_empty_dicts.py`）：在检查目录内核查 `img/`、`pdf/` 子目录是否真正包含对应类型文件，清理空目录或类型不匹配目录。
+- 第三步（`delete_broken_dicts.py`）：在检查目录级识别“仅有 img 或仅有 pdf”的结构缺损目录，并进行删除，保证检查目录结构完整性。
+
+该顺序对应“先文件、后子目录、再检查目录”的逐层收敛流程，可降低误删风险并提升清洗可复现性。

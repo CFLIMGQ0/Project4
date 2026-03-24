@@ -1,0 +1,29 @@
+{
+  "description": "在全部 PDF 表单中出现过，但非空次数始终为 0 的字段键",
+  "useless_keys": [
+    "Signal",
+    "badnessRemark",
+    "bed",
+    "biopsy",
+    "checkDoctorSign1",
+    "codeImage",
+    "conditionRemark",
+    "dactor",
+    "date",
+    "department",
+    "endoscopy",
+    "inspect",
+    "inspect_time",
+    "markImage",
+    "outpatient",
+    "pathology",
+    "patient",
+    "photo",
+    "pics",
+    "project",
+    "project_name",
+    "proposal",
+    "under_diagnosis",
+    "under_see"
+  ]
+}
