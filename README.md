@@ -82,11 +82,13 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 1. `python scripts/delete_broken_files.py`
 2. `python scripts/delete_empty_dicts.py`
 3. `python scripts/delete_broken_dicts.py`
+4. `python scripts/delete_empty_patients.py`
 
 各脚本执行效果说明如下：
 
 - `delete_broken_files.py`：遍历数据集内的 PDF 与图片文件，检查文件头、文件尾、关键结构（如 PDF 的 `startxref`、PNG 的 `IEND`、JPEG 的 `EOI` 等）是否完整，识别潜在损坏文件。
 - `delete_empty_dicts.py`：检查每个检查目录下的 `img/` 与 `pdf/` 子目录是否存在并包含目标类型文件；对不合规子目录可执行删除。
 - `delete_broken_dicts.py`：识别仅含 `img` 或仅含 `pdf` 的不完整检查目录，并按确认结果删除对应检查目录。
+- `delete_empty_patients.py`：扫描并删除已经不包含任何检查目录的空患者目录，避免无效患者目录残留。
 
-这样可以先处理文件级异常，再处理子目录级异常，最后处理检查目录级结构异常，减少清洗过程中的重复判断。
+这样可以先处理文件级异常，再处理子目录级异常，再处理检查目录级异常，最后处理患者目录级异常，减少清洗过程中的重复判断。

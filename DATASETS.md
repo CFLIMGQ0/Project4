@@ -89,14 +89,16 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 1. `python scripts/delete_broken_files.py`
 2. `python scripts/delete_empty_dicts.py`
 3. `python scripts/delete_broken_dicts.py`
+4. `python scripts/delete_empty_patients.py`
 
 执行效果说明：
 
 - 第一步（`delete_broken_files.py`）：在文件级扫描 PDF 与图片完整性，优先定位损坏文件，避免后续目录判断被坏文件干扰。
 - 第二步（`delete_empty_dicts.py`）：在检查目录内核查 `img/`、`pdf/` 子目录是否真正包含对应类型文件，清理空目录或类型不匹配目录。
 - 第三步（`delete_broken_dicts.py`）：在检查目录级识别“仅有 img 或仅有 pdf”的结构缺损目录，并进行删除，保证检查目录结构完整性。
+- 第四步（`delete_empty_patients.py`）：在患者目录级删除已经清洗为空的患者目录，保持患者列表干净。
 
-该顺序对应“先文件、后子目录、再检查目录”的逐层收敛流程，可降低误删风险并提升清洗可复现性。
+该顺序对应“先文件、后子目录、再检查目录、最后患者目录”的逐层收敛流程，可降低误删风险并提升清洗可复现性。
 
 ## 8. PDF 文件概念说明
 
