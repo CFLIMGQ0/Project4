@@ -16,8 +16,6 @@
 
 因此，若需要切换数据环境、迁移服务器或调整输出位置，请优先修改 `configs/path.yaml`。
 
-另外，`useless_key.json` 建议放在数据集根路径：`paths.dataset_base_root/useless_key.json`。
-
 ## 2. 患者级目录结构
 
 每个患者对应一个目录，目录名当前预期为：
@@ -54,7 +52,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 - `paths.dataset_base_root` 是配置文件中的“数据集根路径”字段；
 - `paths.dataset_root` 是配置文件中的“实际数据目录”字段；
-- `paths.dataset_base_root` 下可以同时存放说明文件和统计产物（例如 `useless_key.json`），不建议放在 `paths.dataset_root` 内；
+- `paths.dataset_base_root` 下可以同时存放说明文件和统计产物，不建议放在 `paths.dataset_root` 内；
 - 这里的 `xxxxxxxx` 表示数字部分；
 - 患者目录名与检查目录名中的 `xxxxxxxx` 可能并不相同，应以原始数据中的实际目录名为准；
 - `img/`：保存该次检查产生的图片；
