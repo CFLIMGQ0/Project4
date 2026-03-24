@@ -111,13 +111,32 @@ def choose_truth_pdf(snapshots: list[PdfSnapshot]) -> PdfSnapshot | None:
     if not snapshots:
         return None
 
-    # 规则：archiveTime 最晚者为真值；无法解析时间时按原始字符串排序；再按路径兜底。
-    return max(
-        snapshots,
-        key=lambda item: (
+    # 规则：
+    # 1) 先取 archiveTime 最新的一组（可解析时间优先，无法解析时退化为原始字符串排序）；
+    # 2) 若“最新 archiveTime”有多个，取非空键数量最多者；
+    # 3) 再按路径兜底，保证结果稳定。
+    best_time_key = max(
+        (
             1 if item.archive_time_parsed is not None else 0,
             item.archive_time_parsed or dt.datetime.min,
             item.archive_time_raw,
+        )
+        for item in snapshots
+    )
+    latest_snapshots = [
+        item
+        for item in snapshots
+        if (
+            1 if item.archive_time_parsed is not None else 0,
+            item.archive_time_parsed or dt.datetime.min,
+            item.archive_time_raw,
+        )
+        == best_time_key
+    ]
+    return max(
+        latest_snapshots,
+        key=lambda item: (
+            item.non_empty_count,
             str(item.pdf_path),
         ),
     )
