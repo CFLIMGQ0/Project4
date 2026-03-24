@@ -29,7 +29,21 @@ from statistics import extract_pdf_fields  # noqa: E402
 CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
 CACHE_FILE_NAME = 'conflicted_dicts.csv'
 CONFLICT_VALUE_TYPE_SUMMARY_FILE_NAME = 'conflict_value_type_summary.csv'
+CONFLICT_VALUE_DETAILS_FILE_NAME = 'conflict_key_value_details.json'
 IGNORE_CONFLICT_KEY = 'archiveTime'
+TARGET_DETAIL_KEYS = [
+    'specimen',
+    'doctorName',
+    'operationValue',
+    'endoscopeName',
+    'narcosisType',
+    'anesthesiologistName',
+    'checkTime',
+    'hp',
+    'roomName',
+    'score',
+    'badness',
+]
 
 
 @dataclass
@@ -221,6 +235,22 @@ def summarize_conflict_value_types(conflict_records: list[ConflictExamRecord]) -
     )
 
 
+def collect_key_value_details(conflict_records: list[ConflictExamRecord], target_keys: list[str]) -> dict[str, list[str]]:
+    key_to_values: dict[str, set[str]] = {key: set() for key in target_keys}
+    for record in conflict_records:
+        for key in target_keys:
+            values = record.conflict_value_map.get(key)
+            if not values:
+                continue
+            key_to_values[key].update(values)
+    return {key: sorted(values) for key, values in key_to_values.items()}
+
+
+def write_key_value_details_json(output_path: Path, payload: dict[str, list[str]]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
 def has_conflict_value_details(conflict_records: list[ConflictExamRecord]) -> bool:
     has_conflict = False
     for record in conflict_records:
@@ -395,15 +425,20 @@ def resolve_cached_exam_dirs(conflict_records: list[ConflictExamRecord], dataset
 def print_summary(
     cache_path: Path,
     summary_path: Path,
+    details_path: Path,
     conflict_records: list[ConflictExamRecord],
     from_cache: bool,
 ) -> None:
     conflict_value_type_summary = summarize_conflict_value_types(conflict_records)
+    key_value_details = collect_key_value_details(conflict_records, TARGET_DETAIL_KEYS)
+    write_key_value_details_json(details_path, key_value_details)
+
     print('冲突检查目录处理完成。')
     print(f'- 数据来源：{"缓存文件" if from_cache else "重新扫描"}')
     print(f'- 冲突检查目录数量：{len(conflict_records)}')
     print(f'- 缓存文件路径：{cache_path}')
     print(f'- 冲突值类型统计文件：{summary_path}')
+    print(f'- 指定键冲突值明细 JSON：{details_path}')
     print(f'- 冲突判定忽略键：{IGNORE_CONFLICT_KEY}')
     print('- archiveTime 处理规则：同一检查目录内取最晚值（已写入 latest_archive_time 列）')
     if conflict_value_type_summary:
@@ -412,6 +447,13 @@ def print_summary(
             print(f'  - {key}: {value_type_count} 种')
     else:
         print('- 冲突键值类型统计：无')
+
+    print('- 指定键冲突值明细（键 -> 具体值列表）：')
+    for key in TARGET_DETAIL_KEYS:
+        values = key_value_details.get(key, [])
+        print(f'  - {key}: {len(values)} 种')
+        for value in values:
+            print(f'    - {value}')
 
 
 def main() -> None:
@@ -424,23 +466,24 @@ def main() -> None:
 
     cache_path = path_config.dataset_base_root / CACHE_FILE_NAME
     summary_path = path_config.dataset_base_root / CONFLICT_VALUE_TYPE_SUMMARY_FILE_NAME
+    details_path = path_config.dataset_base_root / CONFLICT_VALUE_DETAILS_FILE_NAME
 
     if cache_path.exists() and not args.force_rescan:
         conflict_records = load_conflict_cache(cache_path)
         if has_conflict_value_details(conflict_records):
-            print_summary(cache_path, summary_path, conflict_records, from_cache=True)
+            print_summary(cache_path, summary_path, details_path, conflict_records, from_cache=True)
             return
 
         cached_exam_dirs = resolve_cached_exam_dirs(conflict_records, path_config.dataset_root)
         print('检测到缓存缺少 conflict_value_map 明细，将只扫描 conflicted_dicts.csv 中记录的检查目录。')
         conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root, exam_dirs=cached_exam_dirs)
         write_conflict_cache(cache_path, conflict_records)
-        print_summary(cache_path, summary_path, conflict_records, from_cache=False)
+        print_summary(cache_path, summary_path, details_path, conflict_records, from_cache=False)
         return
 
     conflict_records = scan_conflicted_exam_dirs(path_config.dataset_root)
     write_conflict_cache(cache_path, conflict_records)
-    print_summary(cache_path, summary_path, conflict_records, from_cache=False)
+    print_summary(cache_path, summary_path, details_path, conflict_records, from_cache=False)
 
 
 if __name__ == '__main__':
