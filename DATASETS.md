@@ -175,15 +175,27 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ## 10. 有效检查目录输出文件（新增）
 
-当前有效目录判定脚本 `scripts/solve_conflicted_pdfs.py` 会输出以下两个 CSV（默认写入 `paths.dataset_base_root`）：
+当前有效目录判定脚本 `scripts/solve_conflicted_pdfs.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖），并按两轮清洗分别落盘：
 
-- `valid_dicts_pdf.csv`
-  - 第 1 列：检查目录路径；
-  - 第 2 列：目录有效性（有效=1，无效=0）；
-  - 第 3 列：冲突键数量；
-  - 第 4 列：冲突键类别（使用 `|` 连接）。
-- `valid_dicts_report.csv`
-  - 第 1 列：有效检查目录路径；
-  - 第 2 列开始：该有效目录补充完成后的有效键值。
+- 第一轮结果：
+  - `valid_dicts_pdf_round1.csv`
+  - `valid_dicts_report_round1.csv`
+  - `solve_conflicted_pdfs_round1.jsonl`（用于第二轮直接读取，避免重复扫描）
+- 第二轮结果：
+  - `valid_dicts_pdf_round2.csv`
+  - `valid_dicts_report_round2.csv`
+  - `solve_conflicted_pdfs_round2.jsonl`
+- 兼容文件：
+  - `valid_dicts_pdf.csv`（等同第二轮汇总）
+  - `valid_dicts_report.csv`（等同第二轮报告）
 
-该输出用于后续筛选高置信检查目录与构建键值分析样本。
+第二轮冲突键规则：
+
+- `archiveTime` / `checkTime`：取最晚时间（不再使用“最早-最晚时间差阈值”）；
+- `badness`：冲突时置为 `有`；
+- `roomName`：冲突时置空；
+- `hp`：按优先级 `阳性 > 阴性 > 待确认 > 未检` 取值；
+- `anesthesiologistName`：冲突时置空；
+- `doctorName`：冲突值中先剔除含数字值，再取长度最长者。
+
+该输出用于后续筛选高置信检查目录与构建键值分析样本，并支持按轮次缓存续跑。

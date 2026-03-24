@@ -103,7 +103,19 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
    - 全部补充完成后无冲突则判定为有效目录（`is_valid=1`），有冲突则判定为无效目录（`is_valid=0`）。
 2. 对有效目录输出补充后的有效键结果。
 
-脚本输出两个文件（输出到 `paths.dataset_base_root`）：
+脚本输出文件默认写入 `paths.output_dir`（可通过 `--output-dir` 覆盖），并区分两轮结果：
 
-- `valid_dicts_pdf.csv`：4 列，依次为检查目录路径、是否有效、冲突键数量、冲突键类别；
-- `valid_dicts_report.csv`：仅记录有效检查目录，第一列为目录路径，第二列起为有效键对应的值。
+- 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
+- 第二轮：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
+- 为兼容历史流程，第二轮结果会同步写入 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+
+第二轮冲突处理规则：
+
+- `archiveTime`/`checkTime` 冲突：取最晚时间；
+- `badness` 冲突：统一置为 `有`；
+- `roomName` 冲突：置空；
+- `hp` 冲突：按 `阳性 > 阴性 > 待确认 > 未检` 取值；
+- `anesthesiologistName` 冲突：置空；
+- `doctorName` 冲突：先剔除含数字值，再取剩余值里长度最长者。
+
+脚本会在每轮开始前检查输出目录是否已有对应 `.jsonl` 缓存：如果存在，则直接读取该轮结果并进入下一轮，避免重复全量扫描。

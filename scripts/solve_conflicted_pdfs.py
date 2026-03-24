@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import re
 import sys
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -26,14 +28,23 @@ if str(PROJECT_ROOT) not in sys.path:
 from statistics import extract_pdf_fields  # noqa: E402
 
 CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
-VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
-VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
+ROUND1_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round1.csv'
+ROUND1_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round1.csv'
+ROUND1_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round1.jsonl'
+ROUND2_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round2.csv'
+ROUND2_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round2.csv'
+ROUND2_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round2.jsonl'
+LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
+LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
+HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
+DIGIT_PATTERN = re.compile(r'\d')
 
 
 @dataclass
 class PathConfig:
     dataset_root: Path
     dataset_base_root: Path
+    output_dir: Path
 
 
 @dataclass
@@ -68,6 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--config', type=Path, default=CONFIG_PATH, help='路径配置文件，默认使用 configs/path.yaml')
     parser.add_argument('--input-dir', type=Path, default=None, help='可选：覆盖配置中的 dataset_root')
     parser.add_argument('--dataset-base-root', type=Path, default=None, help='可选：覆盖配置中的 dataset_base_root')
+    parser.add_argument('--output-dir', type=Path, default=None, help='可选：覆盖配置中的 output_dir')
     return parser.parse_args()
 
 
@@ -111,7 +123,12 @@ def load_yaml_config(config_path: Path) -> dict[str, Any]:
     return payload
 
 
-def build_path_config(config_path: Path, input_dir: Path | None, dataset_base_root: Path | None) -> PathConfig:
+def build_path_config(
+    config_path: Path,
+    input_dir: Path | None,
+    dataset_base_root: Path | None,
+    output_dir: Path | None,
+) -> PathConfig:
     payload = load_yaml_config(config_path.expanduser())
     paths_payload = payload.get('paths')
     if not isinstance(paths_payload, dict):
@@ -131,7 +148,12 @@ def build_path_config(config_path: Path, input_dir: Path | None, dataset_base_ro
         if dataset_base_root is not None
         else resolve_path(str(paths_payload['dataset_base_root']))
     )
-    return PathConfig(dataset_root=resolved_dataset_root, dataset_base_root=resolved_dataset_base_root)
+    resolved_output_dir = output_dir.expanduser().resolve() if output_dir is not None else resolve_path(str(paths_payload['output_dir']))
+    return PathConfig(
+        dataset_root=resolved_dataset_root,
+        dataset_base_root=resolved_dataset_base_root,
+        output_dir=resolved_output_dir,
+    )
 
 
 def build_progress(total: int, desc: str):
@@ -263,53 +285,74 @@ def choose_latest_time_value(values: set[str]) -> str | None:
     return dated_candidates[-1][1]
 
 
-def is_time_gap_over_limit(values: set[str], max_time_gap_seconds: float) -> bool:
-    dated_candidates: list[float] = []
-    for item in values:
-        parsed = parse_archive_time(item)
-        if parsed is None:
-            continue
-        dated_candidates.append(to_utc_timestamp(parsed))
-
-    if len(dated_candidates) < 2:
-        return False
-    return (max(dated_candidates) - min(dated_candidates)) > max_time_gap_seconds
+def choose_hp_value(values: set[str]) -> str | None:
+    if not values:
+        return None
+    normalized_values = {normalize_text(value) for value in values if normalize_text(value)}
+    for candidate in HP_PRIORITY:
+        if candidate in normalized_values:
+            return candidate
+    return sorted(normalized_values, key=lambda x: (len(x), x), reverse=True)[0] if normalized_values else None
 
 
-def apply_second_round_archive_time_resolution(
-    results: list[ExamScanResult], max_time_gap_seconds: float = 86400
-) -> tuple[list[ExamScanResult], int, int, list[str]]:
-    archive_resolved_count = 0
-    check_time_resolved_count = 0
-    check_time_over_gap_dirs: list[str] = []
+def choose_doctor_name(values: set[str]) -> str:
+    valid_values = [value for value in values if not DIGIT_PATTERN.search(value)]
+    if not valid_values:
+        return ''
+    sorted_candidates = sorted(valid_values, key=lambda x: (len(x), x), reverse=True)
+    return sorted_candidates[0]
+
+
+def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
+    stats = {
+        'archiveTime': 0,
+        'checkTime': 0,
+        'badness': 0,
+        'roomName': 0,
+        'hp': 0,
+        'anesthesiologistName': 0,
+        'doctorName': 0,
+    }
     patched_results: list[ExamScanResult] = []
+
     for item in results:
-        if 'archiveTime' not in item.conflict_keys and 'checkTime' not in item.conflict_keys:
+        if not item.conflict_keys:
             patched_results.append(item)
             continue
 
         new_merged_fields = dict(item.merged_valid_fields)
         new_conflict_keys = list(item.conflict_keys)
 
-        if 'archiveTime' in item.conflict_keys:
-            latest_archive_time = choose_latest_time_value(item.field_values.get('archiveTime', set()))
-            if latest_archive_time is not None:
-                new_merged_fields['archiveTime'] = latest_archive_time
-            new_conflict_keys = [key for key in new_conflict_keys if key != 'archiveTime']
-            if 'archiveTime' in item.conflict_keys:
-                archive_resolved_count += 1
-
-        if 'checkTime' in item.conflict_keys:
-            check_time_values = item.field_values.get('checkTime', set())
-            exceeds_gap = is_time_gap_over_limit(check_time_values, max_time_gap_seconds=max_time_gap_seconds)
-            if exceeds_gap:
-                check_time_over_gap_dirs.append(str(item.exam_dir))
-            else:
-                latest_check_time = choose_latest_time_value(check_time_values)
-                if latest_check_time is not None:
-                    new_merged_fields['checkTime'] = latest_check_time
-                new_conflict_keys = [key for key in new_conflict_keys if key != 'checkTime']
-                check_time_resolved_count += 1
+        for conflict_key in list(item.conflict_keys):
+            values = item.field_values.get(conflict_key, set())
+            if conflict_key in {'archiveTime', 'checkTime'}:
+                chosen_value = choose_latest_time_value(values)
+                if chosen_value is not None:
+                    new_merged_fields[conflict_key] = chosen_value
+                    new_conflict_keys = [key for key in new_conflict_keys if key != conflict_key]
+                    stats[conflict_key] += 1
+            elif conflict_key == 'badness':
+                new_merged_fields['badness'] = '有'
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'badness']
+                stats['badness'] += 1
+            elif conflict_key == 'roomName':
+                new_merged_fields['roomName'] = ''
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'roomName']
+                stats['roomName'] += 1
+            elif conflict_key == 'hp':
+                chosen_hp = choose_hp_value(values)
+                if chosen_hp is not None:
+                    new_merged_fields['hp'] = chosen_hp
+                    new_conflict_keys = [key for key in new_conflict_keys if key != 'hp']
+                    stats['hp'] += 1
+            elif conflict_key == 'anesthesiologistName':
+                new_merged_fields['anesthesiologistName'] = ''
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'anesthesiologistName']
+                stats['anesthesiologistName'] += 1
+            elif conflict_key == 'doctorName':
+                new_merged_fields['doctorName'] = choose_doctor_name(values)
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'doctorName']
+                stats['doctorName'] += 1
 
         patched_results.append(
             ExamScanResult(
@@ -320,7 +363,7 @@ def apply_second_round_archive_time_resolution(
                 field_values=item.field_values,
             )
         )
-    return patched_results, archive_resolved_count, check_time_resolved_count, check_time_over_gap_dirs
+    return patched_results, stats
 
 
 def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
@@ -336,6 +379,50 @@ def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
         if hasattr(progress, 'close'):
             progress.close()
 
+    return results
+
+
+def serialize_result(item: ExamScanResult) -> dict[str, Any]:
+    return {
+        'exam_dir': str(item.exam_dir),
+        'is_valid': item.is_valid,
+        'conflict_keys': item.conflict_keys,
+        'merged_valid_fields': item.merged_valid_fields,
+        'field_values': {key: sorted(values) for key, values in item.field_values.items()},
+    }
+
+
+def deserialize_result(payload: dict[str, Any]) -> ExamScanResult:
+    return ExamScanResult(
+        exam_dir=Path(str(payload.get('exam_dir', ''))),
+        is_valid=bool(payload.get('is_valid', False)),
+        conflict_keys=[str(key) for key in payload.get('conflict_keys', [])],
+        merged_valid_fields={
+            str(key): str(value)
+            for key, value in dict(payload.get('merged_valid_fields', {})).items()
+        },
+        field_values={
+            str(key): {str(value) for value in values}
+            for key, values in dict(payload.get('field_values', {})).items()
+        },
+    )
+
+
+def save_cached_results(cache_path: Path, results: list[ExamScanResult]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open('w', encoding='utf-8') as cache_file:
+        for item in results:
+            cache_file.write(json.dumps(serialize_result(item), ensure_ascii=False) + '\n')
+
+
+def load_cached_results(cache_path: Path) -> list[ExamScanResult]:
+    results: list[ExamScanResult] = []
+    with cache_path.open('r', encoding='utf-8') as cache_file:
+        for line in cache_file:
+            text = line.strip()
+            if not text:
+                continue
+            results.append(deserialize_result(json.loads(text)))
     return results
 
 
@@ -388,31 +475,65 @@ def print_summary(
 
 def main() -> None:
     args = parse_args()
-    path_config = build_path_config(args.config, args.input_dir, args.dataset_base_root)
+    path_config = build_path_config(args.config, args.input_dir, args.dataset_base_root, args.output_dir)
 
     if not path_config.dataset_root.exists() or not path_config.dataset_root.is_dir():
         print(f'输入路径不是有效目录：{path_config.dataset_root}')
         return
 
-    summary_path = path_config.dataset_base_root / VALID_DICTS_SUMMARY_FILE_NAME
-    report_path = path_config.dataset_base_root / VALID_DICTS_REPORT_FILE_NAME
+    output_dir = path_config.output_dir
+    round1_summary_path = output_dir / ROUND1_VALID_DICTS_SUMMARY_FILE_NAME
+    round1_report_path = output_dir / ROUND1_VALID_DICTS_REPORT_FILE_NAME
+    round1_cache_path = output_dir / ROUND1_CACHE_FILE_NAME
 
-    round1_results = scan_all_exam_dirs(path_config.dataset_root)
-    print_summary(summary_path, report_path, round1_results, title='第一轮有效性确认', include_output_paths=False)
+    round2_summary_path = output_dir / ROUND2_VALID_DICTS_SUMMARY_FILE_NAME
+    round2_report_path = output_dir / ROUND2_VALID_DICTS_REPORT_FILE_NAME
+    round2_cache_path = output_dir / ROUND2_CACHE_FILE_NAME
 
-    round2_results, archive_resolved_count, check_time_resolved_count, check_time_over_gap_dirs = (
-        apply_second_round_archive_time_resolution(round1_results)
-    )
-    write_valid_dicts_pdf(summary_path, round2_results)
-    write_valid_dicts_report(report_path, round2_results)
-    print_summary(summary_path, report_path, round2_results, title='第二轮有效性确认（archiveTime/checkTime 按规则处理）')
-    print(f'- 第二轮按最晚时间消解 archiveTime 冲突目录数：{archive_resolved_count}')
-    print(f'- 第二轮按最晚时间消解 checkTime 冲突目录数：{check_time_resolved_count}')
-    print(f'- 第二轮 checkTime 最晚与最早时间差大于 1 天的目录数：{len(check_time_over_gap_dirs)}')
-    if check_time_over_gap_dirs:
-        print('- checkTime 时间差大于 1 天的目录示例：')
-        for exam_dir in check_time_over_gap_dirs[:5]:
-            print(f'  - {exam_dir}')
+    legacy_summary_path = output_dir / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
+    legacy_report_path = output_dir / LEGACY_VALID_DICTS_REPORT_FILE_NAME
+
+    if round1_cache_path.exists():
+        round1_results = load_cached_results(round1_cache_path)
+        print(f'检测到第一轮缓存，直接读取：{round1_cache_path}')
+    else:
+        round1_results = scan_all_exam_dirs(path_config.dataset_root)
+        save_cached_results(round1_cache_path, round1_results)
+        write_valid_dicts_pdf(round1_summary_path, round1_results)
+        write_valid_dicts_report(round1_report_path, round1_results)
+        print(f'第一轮缓存与结果已生成：{output_dir}')
+
+    print_summary(round1_summary_path, round1_report_path, round1_results, title='第一轮有效性确认')
+
+    if round2_cache_path.exists():
+        round2_results = load_cached_results(round2_cache_path)
+        second_round_stats = None
+        print(f'检测到第二轮缓存，直接读取：{round2_cache_path}')
+    else:
+        round2_results, second_round_stats = apply_second_round_rules(round1_results)
+        save_cached_results(round2_cache_path, round2_results)
+        write_valid_dicts_pdf(round2_summary_path, round2_results)
+        write_valid_dicts_report(round2_report_path, round2_results)
+        write_valid_dicts_pdf(legacy_summary_path, round2_results)
+        write_valid_dicts_report(legacy_report_path, round2_results)
+        print(f'第二轮缓存与结果已生成：{output_dir}')
+
+    if not round2_summary_path.exists() or not round2_report_path.exists():
+        write_valid_dicts_pdf(round2_summary_path, round2_results)
+        write_valid_dicts_report(round2_report_path, round2_results)
+    if not legacy_summary_path.exists() or not legacy_report_path.exists():
+        write_valid_dicts_pdf(legacy_summary_path, round2_results)
+        write_valid_dicts_report(legacy_report_path, round2_results)
+
+    print_summary(round2_summary_path, round2_report_path, round2_results, title='第二轮有效性确认（按冲突键定制规则处理）')
+    if second_round_stats is not None:
+        print(f"- 第二轮按最晚时间消解 archiveTime 冲突目录数：{second_round_stats['archiveTime']}")
+        print(f"- 第二轮按最晚时间消解 checkTime 冲突目录数：{second_round_stats['checkTime']}")
+        print(f"- 第二轮设置 badness='有' 的目录数：{second_round_stats['badness']}")
+        print(f"- 第二轮清空 roomName 的目录数：{second_round_stats['roomName']}")
+        print(f"- 第二轮按优先级处理 hp 的目录数：{second_round_stats['hp']}")
+        print(f"- 第二轮清空 anesthesiologistName 的目录数：{second_round_stats['anesthesiologistName']}")
+        print(f"- 第二轮按规则处理 doctorName 的目录数：{second_round_stats['doctorName']}")
 
 
 if __name__ == '__main__':

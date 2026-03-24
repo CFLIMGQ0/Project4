@@ -1,4 +1,4 @@
 paths:
   dataset_base_root: /home/Lim/datasets/project4
   dataset_root: /home/Lim/datasets/project4/main_data
-  output_dir: /home/Lim/outputs/project4
+  output_dir: /home/Lim/outputs/project4  # solve_conflicted_pdfs.py 的分轮结果与缓存默认输出到该目录
