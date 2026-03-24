@@ -23,12 +23,22 @@
 
 项目的路径参数统一记录在 `configs/path.yaml` 中，包含数据根目录、输出目录以及相关结果文件路径。
 
-其中，数据根目录本身由 `paths.dataset_root` 指向；而这个根目录下面存放的是实际患者目录与实际检查目录，不使用中文说明性目录名。
+需要区分两个概念（并在 `configs/path.yaml` 中分别配置）：
+
+- **数据集根路径（存放说明文件）**：`paths.dataset_base_root`；
+- **实际数据目录（存放患者目录）**：`paths.dataset_root`。
+
+也就是说，脚本默认读取的是 `paths.dataset_root`，而不是 `paths.dataset_base_root`。
+
+`configs/path.yaml` 关键字段约定（文档统一使用变量名，不直接写死具体值）：
+
+- `paths.dataset_base_root`：数据集根路径（说明文件、统计文件、辅助文件所在位置）；
+- `paths.dataset_root`：实际数据目录（患者目录所在位置，脚本默认读取此路径）。
 
 目录组织示例如下：
 
 ```text
-paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml 中的 paths.dataset_root
+paths.dataset_root/              # 实际数据目录（脚本默认读取）
 └── ZSxxxxxxxx/                  # 患者目录：一级目录，一名患者对应一个目录
     ├── ZSxxxxxxxx/              # 检查目录：该患者的一次检查
     │   ├── img/                 # 图片目录：保存该次检查的图像文件
@@ -41,13 +51,15 @@ paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml
 
 说明：
 
-- `paths.dataset_root` 的值定义在 `configs/path.yaml` 中；
-- 数据根目录下每个一级目录代表一名患者；
+- `paths.dataset_base_root` 表示数据集根路径；
+- `paths.dataset_root` 表示实际数据目录；
+- 患者目录位于 `paths.dataset_root` 下，每个一级目录代表一名患者；
 - 每名患者下可有 `1~n` 个检查目录；
 - 每个检查目录下通常包含 `img` 与 `pdf` 两类子目录；
 - 这里的 `xxxxxxxx` 表示数字部分；
 - 患者目录名与其下各检查目录名中的 `xxxxxxxx` 可能不同，不要求一致；
 - 实际检查目录名应保持为数据里的具体目录名，而不是中文描述性命名。
+- `useless_key.json` 建议放在 `paths.dataset_base_root/useless_key.json`，用于记录全量 PDF 中始终为空的英文字段键（不放在 `paths.dataset_root` 内）。
 
 
 ## 当前仓库内容

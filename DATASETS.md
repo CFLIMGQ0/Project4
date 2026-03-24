@@ -2,9 +2,21 @@
 
 ## 1. 数据集根目录
 
-项目默认使用的数据根目录不直接写死在文档中，而是统一记录在 `configs/path.yaml` 的 `paths.dataset_root` 参数内。
+项目中需要区分“数据集根路径”和“实际数据目录”两个概念（并在 `configs/path.yaml` 中分开配置）：
+
+- 数据集根路径：`paths.dataset_base_root`（可放说明文件与附属统计文件）；
+- 实际数据目录：`paths.dataset_root`（患者目录实际所在路径）。
+
+脚本默认读取的路径由 `configs/path.yaml` 的 `paths.dataset_root` 指定。
+
+推荐在 `configs/path.yaml` 中显式区分：
+
+- `paths.dataset_base_root`：数据集根路径（说明文件、统计结果、辅助文件）；
+- `paths.dataset_root`：实际数据目录（患者目录，脚本读取该目录）。
 
 因此，若需要切换数据环境、迁移服务器或调整输出位置，请优先修改 `configs/path.yaml`。
+
+另外，`useless_key.json` 建议放在数据集根路径：`paths.dataset_base_root/useless_key.json`。
 
 ## 2. 患者级目录结构
 
@@ -27,7 +39,7 @@ ZSxxxxxxxx
 根目录与子目录关系可概括为：
 
 ```text
-paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml 中的 paths.dataset_root
+paths.dataset_root/              # 实际数据目录（脚本默认读取）
 └── ZSxxxxxxxx/                  # 患者目录：一级目录，一名患者对应一个目录
     ├── ZSxxxxxxxx/              # 检查目录：该患者的一次检查
     │   ├── img/                 # 图片目录：保存该次检查的图像文件
@@ -40,8 +52,9 @@ paths.dataset_root/              # 数据集根目录，对应 configs/path.yaml
 
 其中：
 
-- `paths.dataset_root` 是配置文件中的根路径字段；
-- 根路径下面应是数据中的实际患者目录与实际检查目录；
+- `paths.dataset_base_root` 是配置文件中的“数据集根路径”字段；
+- `paths.dataset_root` 是配置文件中的“实际数据目录”字段；
+- `paths.dataset_base_root` 下可以同时存放说明文件和统计产物（例如 `useless_key.json`），不建议放在 `paths.dataset_root` 内；
 - 这里的 `xxxxxxxx` 表示数字部分；
 - 患者目录名与检查目录名中的 `xxxxxxxx` 可能并不相同，应以原始数据中的实际目录名为准；
 - `img/`：保存该次检查产生的图片；
