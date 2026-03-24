@@ -1,132 +1,100 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from dataclasses import dataclass, field
+import csv
+import json
+from dataclasses import dataclass
 from pathlib import Path
-
-from statistics import (
-    CONFIG_PATH,
-    PdfProcessError,
-    build_path_config,
-    extract_pdf_fields,
-    filter_valid_patient_dirs,
-    iter_exam_dirs,
-    iter_patient_dirs,
-    iter_pdf_files,
-    load_valid_patient_ids,
-)
 
 
 @dataclass
-class ConflictDetail:
-    patient_id: str
-    exam_id: str
-    key: str
-    value_to_pdfs: dict[str, list[str]] = field(default_factory=dict)
+class BadnessConflict:
+    exam_dir: str
+    badness_values: list[str]
+    check_times: list[str]
+    latest_archive_time: str
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="按扫描顺序提取前 5 个冲突键的详细过程")
-    parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="路径配置文件")
-    parser.add_argument("--dataset-root", type=Path, default=None, help="可选：覆盖 dataset_root")
+    parser = argparse.ArgumentParser(description='读取 conflicted_dicts.csv 并提取 badness 冲突目录及对应检查时间')
     parser.add_argument(
-        "--patient-validity-table",
+        '--csv-path',
         type=Path,
-        default=None,
-        help="可选：覆盖 patient_validity_table",
+        default=Path('/home/Lim/datasets/project4/conflicted_dicts.csv'),
+        help='conflicted_dicts.csv 路径',
     )
-    parser.add_argument(
-        "--max-patients",
-        type=int,
-        default=None,
-        help="可选：限制扫描患者数（按目录排序后截断）",
-    )
-    parser.add_argument("--limit", type=int, default=5, help="需要提取的冲突键数量，默认 5")
     return parser.parse_args()
+
+
+def _normalize_values(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    cleaned: list[str] = []
+    for value in values:
+        text = ' '.join(str(value).strip().split())
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def load_badness_conflicts(csv_path: Path) -> list[BadnessConflict]:
+    conflicts: list[BadnessConflict] = []
+    with csv_path.open('r', encoding='utf-8-sig', newline='') as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            raw_map = (row.get('conflict_value_map') or '').strip()
+            if not raw_map:
+                continue
+
+            try:
+                conflict_value_map = json.loads(raw_map)
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(conflict_value_map, dict):
+                continue
+
+            badness_values = _normalize_values(conflict_value_map.get('badness'))
+            if len(badness_values) < 2:
+                continue
+
+            check_times = _normalize_values(conflict_value_map.get('checkTime'))
+            conflicts.append(
+                BadnessConflict(
+                    exam_dir=(row.get('exam_dir') or '').strip(),
+                    badness_values=badness_values,
+                    check_times=check_times,
+                    latest_archive_time=(row.get('latest_archive_time') or '').strip(),
+                )
+            )
+    return conflicts
 
 
 def main() -> None:
     args = parse_args()
-    limit = max(0, args.limit)
-
-    path_config = build_path_config(
-        config_path=args.config,
-        dataset_root=args.dataset_root,
-        patient_validity_table=args.patient_validity_table,
-    )
-    valid_patient_ids = load_valid_patient_ids(path_config.patient_validity_table)
-
-    patient_dirs = filter_valid_patient_dirs(iter_patient_dirs(path_config.dataset_root), valid_patient_ids)
-    if args.max_patients is not None and args.max_patients > 0:
-        patient_dirs = patient_dirs[: args.max_patients]
-
-    conflict_details: list[ConflictDetail] = []
-    recorded_keys: set[tuple[str, str, str]] = set()
-    scanned_exam_count = 0
-    scanned_pdf_count = 0
-
-    for patient_dir in patient_dirs:
-        for exam_dir in iter_exam_dirs(patient_dir):
-            scanned_exam_count += 1
-            key_value_to_pdfs: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
-
-            for pdf_path in iter_pdf_files(exam_dir):
-                scanned_pdf_count += 1
-                try:
-                    fields = extract_pdf_fields(pdf_path)
-                except (PdfProcessError, Exception):
-                    continue
-
-                for key, value in fields.items():
-                    if not value:
-                        continue
-                    key_value_to_pdfs[key][value].append(pdf_path.name)
-
-                    value_map = key_value_to_pdfs[key]
-                    if len(value_map) > 1:
-                        marker = (patient_dir.name, exam_dir.name, key)
-                        if marker in recorded_keys:
-                            continue
-
-                        conflict_details.append(
-                            ConflictDetail(
-                                patient_id=patient_dir.name,
-                                exam_id=exam_dir.name,
-                                key=key,
-                                value_to_pdfs={k: sorted(v) for k, v in value_map.items()},
-                            )
-                        )
-                        recorded_keys.add(marker)
-
-                        if len(conflict_details) >= limit:
-                            break
-
-                if len(conflict_details) >= limit:
-                    break
-
-            if len(conflict_details) >= limit:
-                break
-
-        if len(conflict_details) >= limit:
-            break
-
-    print(f"扫描患者数：{len(patient_dirs)}")
-    print(f"已扫描检查目录数：{scanned_exam_count}")
-    print(f"已扫描 PDF 数：{scanned_pdf_count}")
-    print(f"命中冲突键数量：{len(conflict_details)}（limit={limit}）")
-
-    if not conflict_details:
-        print("未找到冲突键。")
+    csv_path = args.csv_path.expanduser()
+    if not csv_path.exists():
+        print(f'文件不存在：{csv_path}')
         return
 
-    print("\n冲突键详细过程（按扫描顺序）：")
-    for idx, detail in enumerate(conflict_details, start=1):
-        print(f"{idx}. 患者={detail.patient_id} | 检查={detail.exam_id} | 键={detail.key}")
-        for value, pdf_names in sorted(detail.value_to_pdfs.items(), key=lambda x: x[0]):
-            print(f"   - 值：{value}")
-            print(f"     来源 PDF：{', '.join(pdf_names)}")
+    conflicts = load_badness_conflicts(csv_path)
+    print(f'文件：{csv_path}')
+    print(f'badness 冲突目录数：{len(conflicts)}')
+
+    if not conflicts:
+        print('没有找到 badness 冲突目录。')
+        return
+
+    print('\nbadness 冲突目录详情：')
+    for idx, item in enumerate(conflicts, start=1):
+        print(f'{idx}. 目录：{item.exam_dir}')
+        print(f'   - badness 冲突值：{", ".join(item.badness_values)}')
+        if item.check_times:
+            print(f'   - 对应 checkTime：{", ".join(item.check_times)}')
+        else:
+            print('   - 对应 checkTime：无（CSV 明细里没有 checkTime 冲突值）')
+        print(f'   - latest_archive_time：{item.latest_archive_time or "无"}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
