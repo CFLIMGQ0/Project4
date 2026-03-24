@@ -165,7 +165,7 @@ def load_conflicted_exam_dirs(conflicted_csv: Path, dataset_root: Path) -> tuple
 
 def check_archive_time_missing(dataset_root: Path) -> tuple[int, list[str], int, int]:
     exam_dirs = iter_exam_dirs(dataset_root)
-    missing_locations: list[str] = []
+    all_empty_exam_dirs: list[str] = []
     parse_error_count = 0
     total_pdf_count = 0
 
@@ -173,12 +173,13 @@ def check_archive_time_missing(dataset_root: Path) -> tuple[int, list[str], int,
         snapshots, parse_errors = collect_pdf_snapshots(exam_dir)
         parse_error_count += len(parse_errors)
         total_pdf_count += len(snapshots)
+        if not snapshots:
+            continue
 
-        for snapshot in snapshots:
-            if not snapshot.archive_time_raw:
-                missing_locations.append(str(snapshot.pdf_path))
+        if all(not snapshot.archive_time_raw for snapshot in snapshots):
+            all_empty_exam_dirs.append(str(exam_dir))
 
-    return len(exam_dirs), missing_locations, parse_error_count, total_pdf_count
+    return len(exam_dirs), all_empty_exam_dirs, parse_error_count, total_pdf_count
 
 
 def check_conflicted_non_empty_count(conflicted_exam_dirs: list[Path]) -> tuple[int, list[str], int, int]:
@@ -227,15 +228,15 @@ def main() -> None:
     if not dataset_root.is_dir():
         print(f'数据目录不存在：{dataset_root}')
     else:
-        exam_count, missing_locations, parse_errors, total_pdf_count = check_archive_time_missing(dataset_root)
+        exam_count, all_empty_exam_dirs, parse_errors, total_pdf_count = check_archive_time_missing(dataset_root)
         print(f'数据根目录：{dataset_root}')
         print(f'检查目录数量：{exam_count}')
         print(f'成功解析 PDF 数量：{total_pdf_count}')
-        print(f'archiveTime 为空的 PDF 数量：{len(missing_locations)}')
+        print(f'“目录内所有 PDF 的 archiveTime 都为空”的检查目录数量：{len(all_empty_exam_dirs)}')
         print(f'PDF 解析失败数量：{parse_errors}')
-        if missing_locations:
-            print('\narchiveTime 为空的具体位置：')
-            for location in missing_locations:
+        if all_empty_exam_dirs:
+            print('\n符合条件的检查目录路径：')
+            for location in all_empty_exam_dirs:
                 print(f'- {location}')
 
     print('\n==== 任务2：冲突目录中比较真值报告与其他报告的非空键数量 ====')
