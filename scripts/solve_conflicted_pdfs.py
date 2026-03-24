@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import get_terminal_size
@@ -41,6 +42,7 @@ class ExamScanResult:
     is_valid: bool
     conflict_keys: list[str]
     merged_valid_fields: dict[str, str]
+    field_values: dict[str, set[str]]
 
 
 class SimpleProgressBar:
@@ -172,6 +174,7 @@ def verify_exam_validity(exam_dir: Path) -> ExamScanResult:
     pdf_files = iter_pdf_files(exam_dir)
     merged_fields: dict[str, str] = {}
     conflict_keys: set[str] = set()
+    field_values: dict[str, set[str]] = {}
 
     for pdf_path in pdf_files:
         try:
@@ -180,6 +183,7 @@ def verify_exam_validity(exam_dir: Path) -> ExamScanResult:
             continue
 
         for key, current_value in current_fields.items():
+            field_values.setdefault(key, set()).add(current_value)
             previous_value = merged_fields.get(key)
             if previous_value is None:
                 merged_fields[key] = current_value
@@ -193,7 +197,96 @@ def verify_exam_validity(exam_dir: Path) -> ExamScanResult:
         is_valid=not sorted_conflict_keys,
         conflict_keys=sorted_conflict_keys,
         merged_valid_fields=merged_fields,
+        field_values=field_values,
     )
+
+
+def parse_archive_time(value: str) -> datetime | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+
+    unix_candidate = text.replace('.', '', 1)
+    if unix_candidate.isdigit():
+        try:
+            number = float(text)
+            return datetime.fromtimestamp(number)
+        except (OverflowError, OSError, ValueError):
+            pass
+
+    normalized = text.replace('Z', '+00:00').replace('/', '-')
+    if ' ' in normalized and 'T' not in normalized:
+        normalized = normalized.replace(' ', 'T', 1)
+
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        pass
+
+    known_formats = (
+        '%Y-%m-%d',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d %H:%M',
+        '%Y%m%d',
+        '%Y%m%d%H%M%S',
+        '%Y%m%d%H%M',
+    )
+    for fmt in known_formats:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def choose_latest_archive_time(values: set[str]) -> str | None:
+    if not values:
+        return None
+
+    dated_candidates: list[tuple[datetime, str]] = []
+    fallback_candidates: list[str] = []
+    for item in values:
+        parsed = parse_archive_time(item)
+        if parsed is None:
+            fallback_candidates.append(item)
+            continue
+        dated_candidates.append((parsed, item))
+
+    if dated_candidates:
+        dated_candidates.sort(key=lambda x: x[0])
+        return dated_candidates[-1][1]
+
+    fallback_candidates.sort()
+    return fallback_candidates[-1]
+
+
+def apply_second_round_archive_time_resolution(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], int]:
+    resolved_count = 0
+    patched_results: list[ExamScanResult] = []
+    for item in results:
+        if 'archiveTime' not in item.conflict_keys:
+            patched_results.append(item)
+            continue
+
+        new_merged_fields = dict(item.merged_valid_fields)
+        latest_archive_time = choose_latest_archive_time(item.field_values.get('archiveTime', set()))
+        if latest_archive_time is not None:
+            new_merged_fields['archiveTime'] = latest_archive_time
+
+        new_conflict_keys = [key for key in item.conflict_keys if key != 'archiveTime']
+        if new_conflict_keys != item.conflict_keys:
+            resolved_count += 1
+
+        patched_results.append(
+            ExamScanResult(
+                exam_dir=item.exam_dir,
+                is_valid=not new_conflict_keys,
+                conflict_keys=new_conflict_keys,
+                merged_valid_fields=new_merged_fields,
+                field_values=item.field_values,
+            )
+        )
+    return patched_results, resolved_count
 
 
 def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
@@ -242,12 +335,12 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
             writer.writerow(row)
 
 
-def print_summary(summary_path: Path, report_path: Path, results: list[ExamScanResult]) -> None:
+def print_summary(summary_path: Path, report_path: Path, results: list[ExamScanResult], title: str) -> None:
     total_count = len(results)
     valid_count = sum(1 for item in results if item.is_valid)
     invalid_count = total_count - valid_count
 
-    print('检查目录有效性统计完成。')
+    print(f'{title}统计完成。')
     print(f'- 检查目录总数：{total_count}')
     print(f'- 有效检查目录数：{valid_count}')
     print(f'- 无效检查目录数：{invalid_count}')
@@ -267,10 +360,14 @@ def main() -> None:
     summary_path = path_config.dataset_base_root / VALID_DICTS_SUMMARY_FILE_NAME
     report_path = path_config.dataset_base_root / VALID_DICTS_REPORT_FILE_NAME
 
-    results = scan_all_exam_dirs(path_config.dataset_root)
-    write_valid_dicts_pdf(summary_path, results)
-    write_valid_dicts_report(report_path, results)
-    print_summary(summary_path, report_path, results)
+    round1_results = scan_all_exam_dirs(path_config.dataset_root)
+    print_summary(summary_path, report_path, round1_results, title='第一轮有效性确认')
+
+    round2_results, resolved_count = apply_second_round_archive_time_resolution(round1_results)
+    write_valid_dicts_pdf(summary_path, round2_results)
+    write_valid_dicts_report(report_path, round2_results)
+    print_summary(summary_path, report_path, round2_results, title='第二轮有效性确认（archiveTime 取最新值）')
+    print(f'- 第二轮已处理 archiveTime 冲突目录数：{resolved_count}')
 
 
 if __name__ == '__main__':
