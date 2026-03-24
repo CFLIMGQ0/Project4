@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,7 @@ class ConflictExamRecord:
     pdf_count: int
     parsed_pdf_count: int
     conflict_keys: list[str]
+    conflict_value_map: dict[str, list[str]]
     latest_archive_time: str
 
 
@@ -184,7 +186,7 @@ def pick_latest_archive_time(values: set[str]) -> str:
     return sorted(set(normalized))[-1]
 
 
-def find_conflict_keys(pdf_snapshots: list[PdfFieldSnapshot]) -> tuple[list[str], str]:
+def find_conflict_keys(pdf_snapshots: list[PdfFieldSnapshot]) -> tuple[list[str], dict[str, list[str]], str]:
     key_to_values: dict[str, set[str]] = {}
     for snapshot in pdf_snapshots:
         for key, raw_value in snapshot.fields.items():
@@ -196,11 +198,26 @@ def find_conflict_keys(pdf_snapshots: list[PdfFieldSnapshot]) -> tuple[list[str]
     archive_values = key_to_values.get(IGNORE_CONFLICT_KEY, set())
     latest_archive_time = pick_latest_archive_time(archive_values)
 
-    conflict_keys = sorted(
-        key for key, values in key_to_values.items()
+    conflict_value_map = {
+        key: sorted(values)
+        for key, values in key_to_values.items()
         if key != IGNORE_CONFLICT_KEY and len(values) > 1
+    }
+    conflict_keys = sorted(conflict_value_map.keys())
+    return conflict_keys, conflict_value_map, latest_archive_time
+
+
+def summarize_conflict_value_types(conflict_records: list[ConflictExamRecord]) -> list[tuple[str, int]]:
+    key_to_values: dict[str, set[str]] = {}
+    for record in conflict_records:
+        for key, values in record.conflict_value_map.items():
+            if not values:
+                continue
+            key_to_values.setdefault(key, set()).update(values)
+    return sorted(
+        ((key, len(values)) for key, values in key_to_values.items()),
+        key=lambda item: (-item[1], item[0]),
     )
-    return conflict_keys, latest_archive_time
 
 
 class SimpleProgressBar:
@@ -251,7 +268,7 @@ def scan_conflicted_exam_dirs(dataset_root: Path) -> list[ConflictExamRecord]:
                 progress.update(1)
                 continue
 
-            conflict_keys, latest_archive_time = find_conflict_keys(pdf_snapshots)
+            conflict_keys, conflict_value_map, latest_archive_time = find_conflict_keys(pdf_snapshots)
             if not conflict_keys:
                 progress.update(1)
                 continue
@@ -266,6 +283,7 @@ def scan_conflicted_exam_dirs(dataset_root: Path) -> list[ConflictExamRecord]:
                     pdf_count=len(pdf_files),
                     parsed_pdf_count=len(pdf_snapshots),
                     conflict_keys=conflict_keys,
+                    conflict_value_map=conflict_value_map,
                     latest_archive_time=latest_archive_time,
                 )
             )
@@ -290,6 +308,7 @@ def write_conflict_cache(cache_path: Path, conflict_records: list[ConflictExamRe
                 'parsed_pdf_count',
                 'conflict_key_count',
                 'conflict_keys',
+                'conflict_value_map',
                 'latest_archive_time',
             ],
         )
@@ -304,6 +323,7 @@ def write_conflict_cache(cache_path: Path, conflict_records: list[ConflictExamRe
                     'parsed_pdf_count': record.parsed_pdf_count,
                     'conflict_key_count': len(record.conflict_keys),
                     'conflict_keys': '|'.join(record.conflict_keys),
+                    'conflict_value_map': json.dumps(record.conflict_value_map, ensure_ascii=False, sort_keys=True),
                     'latest_archive_time': record.latest_archive_time,
                 }
             )
@@ -315,6 +335,21 @@ def load_conflict_cache(cache_path: Path) -> list[ConflictExamRecord]:
         reader = csv.DictReader(csv_file)
         for row in reader:
             conflict_keys = [key for key in (row.get('conflict_keys') or '').split('|') if key]
+            raw_conflict_value_map = (row.get('conflict_value_map') or '').strip()
+            conflict_value_map: dict[str, list[str]] = {}
+            if raw_conflict_value_map:
+                try:
+                    payload = json.loads(raw_conflict_value_map)
+                    if isinstance(payload, dict):
+                        for key, values in payload.items():
+                            if not isinstance(key, str):
+                                continue
+                            if isinstance(values, list):
+                                normalized_values = [normalize_text(str(value)) for value in values if normalize_text(str(value))]
+                                if normalized_values:
+                                    conflict_value_map[key] = sorted(set(normalized_values))
+                except json.JSONDecodeError:
+                    conflict_value_map = {}
             records.append(
                 ConflictExamRecord(
                     patient_id=(row.get('patient_id') or '').strip(),
@@ -323,6 +358,7 @@ def load_conflict_cache(cache_path: Path) -> list[ConflictExamRecord]:
                     pdf_count=int((row.get('pdf_count') or '0').strip() or 0),
                     parsed_pdf_count=int((row.get('parsed_pdf_count') or '0').strip() or 0),
                     conflict_keys=conflict_keys,
+                    conflict_value_map=conflict_value_map,
                     latest_archive_time=(row.get('latest_archive_time') or '').strip(),
                 )
             )
@@ -330,12 +366,19 @@ def load_conflict_cache(cache_path: Path) -> list[ConflictExamRecord]:
 
 
 def print_summary(cache_path: Path, conflict_records: list[ConflictExamRecord], from_cache: bool) -> None:
+    conflict_value_type_summary = summarize_conflict_value_types(conflict_records)
     print('冲突检查目录处理完成。')
     print(f'- 数据来源：{"缓存文件" if from_cache else "重新扫描"}')
     print(f'- 冲突检查目录数量：{len(conflict_records)}')
     print(f'- 缓存文件路径：{cache_path}')
     print(f'- 冲突判定忽略键：{IGNORE_CONFLICT_KEY}')
     print('- archiveTime 处理规则：同一检查目录内取最晚值（已写入 latest_archive_time 列）')
+    if conflict_value_type_summary:
+        print('- 冲突键值类型统计（键 -> 不同冲突值数量）：')
+        for key, value_type_count in conflict_value_type_summary:
+            print(f'  - {key}: {value_type_count} 种')
+    else:
+        print('- 冲突键值类型统计：无')
 
 
 def main() -> None:
