@@ -22,7 +22,8 @@ except ImportError:
     class UnidentifiedImageError(Exception):
         """Pillow 不可用时的占位异常。"""
 
-CONFIG_PATH = Path(__file__).resolve().parent / 'configs' / 'path.yaml'
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
 DEFAULT_OUTPUT_NAME = 'broken_files.csv'
 EOF_SCAN_BYTES = 4096
 IMAGE_EXTENSIONS = {
