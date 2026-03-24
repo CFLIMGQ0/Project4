@@ -107,7 +107,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 - 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
 - 第二轮：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
-- 为兼容历史流程，第二轮结果会同步写入 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 为兼容历史流程，第二轮结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 第二轮冲突处理规则：
 
@@ -118,4 +118,4 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `anesthesiologistName` 冲突：置空；
 - `doctorName` 冲突：先剔除含数字值，再取剩余值里长度最长者。
 
-脚本会在每轮开始前检查输出目录是否已有对应 `.jsonl` 缓存：如果存在，则直接读取该轮结果并进入下一轮，避免重复全量扫描。
+脚本会在每轮开始前检查输出目录（`paths.output_dir`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。

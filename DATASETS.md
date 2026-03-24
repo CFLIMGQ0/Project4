@@ -186,8 +186,8 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_report_round2.csv`
   - `solve_conflicted_pdfs_round2.jsonl`
 - 兼容文件：
-  - `valid_dicts_pdf.csv`（等同第二轮汇总）
-  - `valid_dicts_report.csv`（等同第二轮报告）
+  - `valid_dicts_pdf.csv`（写入 `paths.dataset_base_root`，等同第二轮汇总）
+  - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第二轮报告）
 
 第二轮冲突键规则：
 

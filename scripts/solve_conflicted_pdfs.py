@@ -490,12 +490,13 @@ def main() -> None:
     round2_report_path = output_dir / ROUND2_VALID_DICTS_REPORT_FILE_NAME
     round2_cache_path = output_dir / ROUND2_CACHE_FILE_NAME
 
-    legacy_summary_path = output_dir / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
-    legacy_report_path = output_dir / LEGACY_VALID_DICTS_REPORT_FILE_NAME
+    legacy_summary_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
+    legacy_report_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_REPORT_FILE_NAME
 
-    if round1_cache_path.exists():
+    round1_ready = round1_cache_path.exists() and round1_summary_path.exists() and round1_report_path.exists()
+    if round1_ready:
         round1_results = load_cached_results(round1_cache_path)
-        print(f'检测到第一轮缓存，直接读取：{round1_cache_path}')
+        print(f'检测到第一轮确认结果，跳过第一轮计算：{round1_cache_path}')
     else:
         round1_results = scan_all_exam_dirs(path_config.dataset_root)
         save_cached_results(round1_cache_path, round1_results)
@@ -503,12 +504,17 @@ def main() -> None:
         write_valid_dicts_report(round1_report_path, round1_results)
         print(f'第一轮缓存与结果已生成：{output_dir}')
 
+    if not round1_summary_path.exists() or not round1_report_path.exists():
+        write_valid_dicts_pdf(round1_summary_path, round1_results)
+        write_valid_dicts_report(round1_report_path, round1_results)
+
     print_summary(round1_summary_path, round1_report_path, round1_results, title='第一轮有效性确认')
 
-    if round2_cache_path.exists():
+    round2_ready = round2_cache_path.exists() and round2_summary_path.exists() and round2_report_path.exists()
+    if round2_ready:
         round2_results = load_cached_results(round2_cache_path)
         second_round_stats = None
-        print(f'检测到第二轮缓存，直接读取：{round2_cache_path}')
+        print(f'检测到第二轮确认结果，跳过第二轮计算：{round2_cache_path}')
     else:
         round2_results, second_round_stats = apply_second_round_rules(round1_results)
         save_cached_results(round2_cache_path, round2_results)
