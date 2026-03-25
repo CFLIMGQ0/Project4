@@ -145,37 +145,44 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ### 9.2 有效键（非空次数 > 0）
 
-以下为当前已确认的“有效键 → 页面中文名称”对应关系（按报告识别优先顺序展示）：
+以下为当前已确认的“有效键 → 页面中文名称”对应关系，并按“重要有效键 / 非重要有效键”拆分。
+
+#### 9.2.1 重要有效键
 
 - `reportTitle` → 页面标题（用于判定报告内容类型；这是标题，不是一个明确打印出来的中文字段名）
 - `age` → 年龄
-- `anesthesiologistName` → 麻醉医生
-- `applyDeptName` → 科室
-- `applyNo` → 检查号
 - `badness` → 不良反应
-- `bedId` → 病床号
-- `checkTime` → 检查日期
 - `condition` → 患者一般情况
-- `doctorName` → 报告医师
-- `endoscopeName` → 镜号
-- `hisPatientId` → 内镜号
 - `namePatient` → 姓名
-- `narcosisType` → 麻醉方式
 - `operation` → 操作过程
 - `operationValue` → 操作名称
-- `patientAreaName` → 病区
-- `roomName` → 诊间
 - `sex` → 性别
 - `suggest` → 注意事项
 - `watch` → 内镜所见
 - `watchResult` → 诊断
-- `archiveTime` → 报告日期
 - `specimen` → 活检部位
-- `admissionNo` → 由 `patientType` 指定（可为：门诊号、住院号、Z、体检号）
 - `hp` → HP(幽门螺旋杆菌)
 - `operationRemark` → 操作过程备注（其值仅当操作过程不顺利时才有可能非空）
-- `patientType` → admissionNo 中文键类型（取值：门诊号、住院号、Z、体检号）
 - `score` → 波士顿评分
+
+#### 9.2.2 非重要有效键
+
+除上述“重要有效键”外，其余有效键统一归类为“非重要有效键”，具体如下：
+
+- `anesthesiologistName` → 麻醉医生
+- `applyDeptName` → 科室
+- `applyNo` → 检查号
+- `bedId` → 病床号
+- `checkTime` → 检查日期
+- `doctorName` → 报告医师
+- `endoscopeName` → 镜号
+- `hisPatientId` → 内镜号
+- `narcosisType` → 麻醉方式
+- `patientAreaName` → 病区
+- `roomName` → 诊间
+- `archiveTime` → 报告日期
+- `admissionNo` → 由 `patientType` 指定（可为：门诊号、住院号、Z、体检号）
+- `patientType` → admissionNo 中文键类型（取值：门诊号、住院号、Z、体检号）
 
 ## 10. 有效检查目录输出文件（新增）
 
