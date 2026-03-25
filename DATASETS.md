@@ -171,12 +171,12 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `watchResult` → 诊断
 - `archiveTime` → 报告日期
 - `specimen` → 活检部位
+- `admissionNo` → 住院号
+- `hp` → HP(幽门螺旋杆菌)
+- `operationRemark` → 操作过程备注
 
 其余有效键（当前未提供稳定中文字段名映射）：
 
-- `admissionNo`
-- `hp`
-- `operationRemark`
 - `patientType`
 - `score`
 

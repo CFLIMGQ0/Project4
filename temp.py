@@ -1,50 +1,48 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from statistics import extract_pdf_fields
 
-EFFECTIVE_KEYS = {
-    "admissionNo",
-    "age",
-    "anesthesiologistName",
-    "applyDeptName",
-    "applyNo",
-    "archiveTime",
-    "badness",
-    "bedId",
-    "checkTime",
-    "condition",
-    "doctorName",
-    "endoscopeName",
-    "hisPatientId",
-    "hp",
-    "namePatient",
-    "narcosisType",
-    "operation",
-    "operationRemark",
-    "operationValue",
-    "patientAreaName",
-    "patientType",
-    "reportTitle",
-    "roomName",
-    "score",
-    "sex",
-    "specimen",
-    "suggest",
-    "watch",
-    "watchResult",
+EFFECTIVE_KEY_CN_MAP = {
+    "reportTitle": "页面标题",
+    "age": "年龄",
+    "anesthesiologistName": "麻醉医生",
+    "applyDeptName": "科室",
+    "applyNo": "检查号",
+    "badness": "不良反应",
+    "bedId": "病床号",
+    "checkTime": "检查日期",
+    "condition": "患者一般情况",
+    "doctorName": "报告医师",
+    "endoscopeName": "镜号",
+    "hisPatientId": "内镜号",
+    "namePatient": "姓名",
+    "narcosisType": "麻醉方式",
+    "operation": "操作过程",
+    "operationValue": "操作名称",
+    "patientAreaName": "病区",
+    "roomName": "诊间",
+    "sex": "性别",
+    "suggest": "注意事项",
+    "watch": "内镜所见",
+    "watchResult": "诊断",
+    "archiveTime": "报告日期",
+    "specimen": "活检部位",
+    "admissionNo": "住院号",
+    "hp": "HP(幽门螺旋杆菌)",
+    "operationRemark": "操作过程备注",
+    "patientType": "patientType",
+    "score": "score",
 }
 
-# 来自 DATASETS.md 第 9.2 节“其余有效键（当前未提供稳定中文字段名映射）”
-UNKNOWN_CN_EFFECTIVE_KEYS = [
-    "admissionNo",
-    "hp",
-    "operationRemark",
-    "patientType",
-    "score",
+DEFAULT_PDF_FILES = [
+    "/home/Lim/datasets/project4/main_data/ZS09036474/ZS0049122068/pdf/ZS-W48202412064f8cce47f7924946a2e570c154a5c8c3.pdf",
+    "/home/Lim/datasets/project4/main_data/ZS08004085/ZS0048989885/pdf/ZS-W482024122030b9595e531f4c31b4b0416f4f3323dc.pdf",
+    "/home/Lim/datasets/project4/main_data/ZS09020808/ZS0053136773/pdf/ZS-C4820250822481f01beb4484321b99392ad340a423c.pdf",
 ]
 
 
@@ -81,27 +79,9 @@ def normalize_text(value: object) -> str:
     return " ".join(str(value).strip().split())
 
 
-def parse_target_keys(raw_target_keys: str) -> list[str]:
-    target_keys = [normalize_text(key) for key in raw_target_keys.split(",")]
-    target_keys = [key for key in target_keys if key]
-    if not target_keys:
-        raise ValueError("--target-keys 不能为空，至少提供 1 个键")
-
-    invalid_keys = [key for key in target_keys if key not in EFFECTIVE_KEYS]
-    if invalid_keys:
-        raise ValueError(
-            "以下键不在有效键清单内：" + ", ".join(sorted(set(invalid_keys)))
-        )
-
-    return list(dict.fromkeys(target_keys))
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "按给定英文键查找“字段值非空”的首个 PDF，并输出该 PDF 路径；"
-            "一旦所有目标键都命中，立即停止扫描。"
-        )
+        description="读取指定 PDF 表单信息，并统计 patientType/score/operation（限定 operationRemark 非空）。"
     )
     parser.add_argument(
         "--dataset-root",
@@ -110,14 +90,10 @@ def parse_args() -> argparse.Namespace:
         help="数据根目录（默认 /home/Lim/datasets/project4/main_data）",
     )
     parser.add_argument(
-        "--target-keys",
-        type=str,
-        required=False,
-        default="",
-        help=(
-            "待查找的英文键，使用英文逗号分隔，例如 age,operation,watch；"
-            "若不传则默认使用 DATASETS.md 中“无中文名称”的有效键"
-        ),
+        "--pdf-files",
+        nargs="+",
+        default=DEFAULT_PDF_FILES,
+        help="要展示表单信息的 PDF 路径列表",
     )
     return parser.parse_args()
 
@@ -132,49 +108,75 @@ def iter_pdf_files(dataset_root: Path):
                 yield pdf_path
 
 
-def collect_first_hits(dataset_root: Path, target_keys: list[str]) -> dict[str, tuple[Path, str]]:
-    remaining = set(target_keys)
-    hits: dict[str, tuple[Path, str]] = {}
+def print_selected_pdf_fields(pdf_files: list[Path]) -> None:
+    print("\n=== 指定 PDF 的表单信息 ===")
+    for pdf_path in pdf_files:
+        print(f"\n文件：{pdf_path}")
+        if not pdf_path.is_file():
+            print("- 文件不存在")
+            continue
+        try:
+            fields = extract_pdf_fields(pdf_path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"- 读取失败：{exc}")
+            continue
 
-    total_pdfs = sum(1 for _ in iter_pdf_files(dataset_root))
-    progress = ProgressTracker(total=total_pdfs)
+        if not fields:
+            print("- 未解析到表单字段")
+            continue
 
-    for pdf_path in iter_pdf_files(dataset_root):
-        if not remaining:
-            break
+        for key in sorted(fields):
+            value = normalize_text(fields.get(key, ""))
+            cn_name = EFFECTIVE_KEY_CN_MAP.get(key)
+            if cn_name:
+                print(f"- {key}（{cn_name}）：{value}")
+            else:
+                print(f"- {key}：{value}")
+
+
+def summarize_counter(counter: Counter[str], title: str) -> None:
+    print(f"\n=== {title} ===")
+    print(f"类型数量：{len(counter)}")
+    if not counter:
+        print("- 无非空值")
+        return
+
+    for value, count in sorted(counter.items(), key=lambda item: (-item[1], item[0])):
+        print(f"- {value} * {count}")
+
+
+def collect_dataset_statistics(dataset_root: Path) -> tuple[Counter[str], Counter[str], Counter[str]]:
+    patient_type_counter: Counter[str] = Counter()
+    score_counter: Counter[str] = Counter()
+    operation_counter_when_remark_non_empty: Counter[str] = Counter()
+
+    pdf_paths = list(iter_pdf_files(dataset_root))
+    progress = ProgressTracker(total=len(pdf_paths), prefix="全量 PDF 扫描")
+
+    for pdf_path in pdf_paths:
         try:
             fields = extract_pdf_fields(pdf_path)
         except Exception:  # noqa: BLE001
             progress.update()
             continue
 
-        normalized_fields = {
-            normalize_text(key): normalize_text(value) for key, value in fields.items()
-        }
+        patient_type = normalize_text(fields.get("patientType", ""))
+        if patient_type:
+            patient_type_counter[patient_type] += 1
 
-        for key in tuple(remaining):
-            value = normalized_fields.get(key, "")
-            if value:
-                hits[key] = (pdf_path, value)
-                remaining.remove(key)
+        score = normalize_text(fields.get("score", ""))
+        if score:
+            score_counter[score] += 1
+
+        operation_remark = normalize_text(fields.get("operationRemark", ""))
+        operation = normalize_text(fields.get("operation", ""))
+        if operation_remark and operation:
+            operation_counter_when_remark_non_empty[operation] += 1
 
         progress.update()
 
     progress.close()
-    return hits
-
-
-def print_result(target_keys: list[str], hits: dict[str, tuple[Path, str]]) -> None:
-    print("\n查找结果：")
-    for key in target_keys:
-        matched = hits.get(key)
-        if matched is None:
-            print(f"- {key}: 未找到非空值")
-            continue
-
-        pdf_path, value = matched
-        print(f"- {key}: {pdf_path.as_uri()}")
-        print(f"  示例值: {value}")
+    return patient_type_counter, score_counter, operation_counter_when_remark_non_empty
 
 
 def main() -> None:
@@ -183,16 +185,19 @@ def main() -> None:
     if not dataset_root.is_dir():
         raise FileNotFoundError(f"数据根目录不存在：{dataset_root}")
 
-    if normalize_text(args.target_keys):
-        target_keys = parse_target_keys(args.target_keys)
-    else:
-        target_keys = UNKNOWN_CN_EFFECTIVE_KEYS
-        print(
-            "未传入 --target-keys，默认使用无中文名称有效键："
-            + ", ".join(target_keys)
-        )
-    hits = collect_first_hits(dataset_root, target_keys)
-    print_result(target_keys, hits)
+    pdf_files = [Path(path).expanduser().resolve() for path in args.pdf_files]
+    print_selected_pdf_fields(pdf_files)
+
+    patient_type_counter, score_counter, operation_counter = collect_dataset_statistics(
+        dataset_root
+    )
+
+    summarize_counter(patient_type_counter, "patientType 的类型数量与全部值")
+    summarize_counter(score_counter, "score 的类型数量与全部值")
+    summarize_counter(
+        operation_counter,
+        "operationRemark 非空时，operation（操作过程）的类型数量与全部值",
+    )
 
 
 if __name__ == "__main__":
