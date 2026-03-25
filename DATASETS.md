@@ -207,7 +207,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 第二类唯一性确认（非重要有效键）冲突键规则：
 
-- `archiveTime` / `checkTime`：取最晚时间（不再使用“最早-最晚时间差阈值”）；
+- `archiveTime` / `checkTime`：取最晚时间；
 - `roomName`：冲突时置空；
 - `anesthesiologistName`：冲突时置空；
 - `narcosisType`：冲突时置空；
