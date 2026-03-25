@@ -210,6 +210,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `archiveTime` / `checkTime`：取最晚时间（不再使用“最早-最晚时间差阈值”）；
 - `roomName`：冲突时置空；
 - `anesthesiologistName`：冲突时置空；
+- `narcosisType`：冲突时置空；
 - `doctorName`：冲突值中先剔除含数字值，再取长度最长者。
 - `endoscopeName`：按逗号拆分多值后合并去重；仅剔除“无数字且被更长值完整包含”的泛化项（例如 `肠镜` + `肠镜136` 合并为 `肠镜136`，但 `肠镜13` 与 `肠镜136` 同时保留）。
 

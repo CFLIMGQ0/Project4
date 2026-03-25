@@ -118,6 +118,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `archiveTime`/`checkTime` 冲突：取最晚时间；
 - `roomName` 冲突：置空；
 - `anesthesiologistName` 冲突：置空；
+- `narcosisType` 冲突：置空；
 - `doctorName` 冲突：先剔除含数字值，再取剩余值里长度最长者。
 - `endoscopeName` 冲突：按逗号拆分并合并去重，仅剔除“无数字且被更长值完整包含”的泛化项（如 `肠镜` + `肠镜136` 合并为 `肠镜136`，但 `肠镜13` + `肠镜136` 会同时保留）。
 

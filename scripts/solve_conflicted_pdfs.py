@@ -48,11 +48,10 @@ NON_IMPORTANT_EFFECTIVE_KEYS = {
     'checkTime',
     'roomName',
     'anesthesiologistName',
+    'narcosisType',
     'doctorName',
     'endoscopeName',
 }
-
-
 @dataclass
 class PathConfig:
     dataset_root: Path
@@ -358,7 +357,9 @@ def choose_endoscope_name(values: set[str]) -> str | None:
 
 
 def apply_classified_round_rules(
-    results: list[ExamScanResult], target_keys: set[str], stats_template: dict[str, int]
+    results: list[ExamScanResult],
+    target_keys: set[str],
+    stats_template: dict[str, int],
 ) -> tuple[list[ExamScanResult], dict[str, int]]:
     stats = dict(stats_template)
     patched_results: list[ExamScanResult] = []
@@ -389,16 +390,20 @@ def apply_classified_round_rules(
                 new_merged_fields['roomName'] = ''
                 new_conflict_keys = [key for key in new_conflict_keys if key != 'roomName']
                 stats['roomName'] += 1
+            elif conflict_key == 'anesthesiologistName':
+                new_merged_fields['anesthesiologistName'] = ''
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'anesthesiologistName']
+                stats['anesthesiologistName'] += 1
+            elif conflict_key == 'narcosisType':
+                new_merged_fields['narcosisType'] = ''
+                new_conflict_keys = [key for key in new_conflict_keys if key != 'narcosisType']
+                stats['narcosisType'] += 1
             elif conflict_key == 'hp':
                 chosen_hp = choose_hp_value(values)
                 if chosen_hp is not None:
                     new_merged_fields['hp'] = chosen_hp
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'hp']
                     stats['hp'] += 1
-            elif conflict_key == 'anesthesiologistName':
-                new_merged_fields['anesthesiologistName'] = ''
-                new_conflict_keys = [key for key in new_conflict_keys if key != 'anesthesiologistName']
-                stats['anesthesiologistName'] += 1
             elif conflict_key == 'doctorName':
                 new_merged_fields['doctorName'] = choose_doctor_name(values)
                 new_conflict_keys = [key for key in new_conflict_keys if key != 'doctorName']
@@ -428,6 +433,7 @@ def apply_second_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[
         'checkTime': 0,
         'roomName': 0,
         'anesthesiologistName': 0,
+        'narcosisType': 0,
         'doctorName': 0,
         'endoscopeName': 0,
     }
@@ -615,6 +621,7 @@ def main() -> None:
         print(f"- 第二类按最晚时间消解 checkTime 冲突目录数：{second_class_stats['checkTime']}")
         print(f"- 第二类清空 roomName 的目录数：{second_class_stats['roomName']}")
         print(f"- 第二类清空 anesthesiologistName 的目录数：{second_class_stats['anesthesiologistName']}")
+        print(f"- 第二类清空 narcosisType 的目录数：{second_class_stats['narcosisType']}")
         print(f"- 第二类按规则处理 doctorName 的目录数：{second_class_stats['doctorName']}")
         print(f"- 第二类按合并去重规则处理 endoscopeName 的目录数：{second_class_stats['endoscopeName']}")
 
