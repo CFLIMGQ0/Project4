@@ -42,7 +42,16 @@ LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
 HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
 DIGIT_PATTERN = re.compile(r'\d')
-IMPORTANT_EFFECTIVE_KEYS = {'badness', 'hp', 'score', 'operationValue', 'specimen'}
+IMPORTANT_EFFECTIVE_KEYS = {
+    'badness',
+    'hp',
+    'score',
+    'operationValue',
+    'specimen',
+    'watch',
+    'watchResult',
+    'suggest',
+}
 NON_IMPORTANT_EFFECTIVE_KEYS = {
     'archiveTime',
     'checkTime',
@@ -383,7 +392,27 @@ def choose_operation_value(values: set[str]) -> str | None:
     for candidate in sorted_values:
         if all(other == candidate or other in candidate for other in sorted_values):
             return candidate
-    return sorted_values[0]
+    return None
+
+
+def choose_union_text_value(values: set[str]) -> str | None:
+    if not values:
+        return None
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for raw_value in sorted(values):
+        pieces = re.split(r'[,，]', raw_value)
+        for piece in pieces:
+            normalized_piece = normalize_text(piece)
+            if not normalized_piece or normalized_piece in seen:
+                continue
+            seen.add(normalized_piece)
+            merged.append(normalized_piece)
+
+    if not merged:
+        return None
+    return '，'.join(merged)
 
 
 def split_specimen_items(raw_value: str) -> list[str]:
@@ -493,6 +522,12 @@ def apply_classified_round_rules(
                     new_merged_fields['specimen'] = chosen_specimen
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'specimen']
                     stats['specimen'] += 1
+            elif conflict_key in {'watch', 'watchResult', 'suggest'}:
+                chosen_union_value = choose_union_text_value(values)
+                if chosen_union_value is not None:
+                    new_merged_fields[conflict_key] = chosen_union_value
+                    new_conflict_keys = [key for key in new_conflict_keys if key != conflict_key]
+                    stats[conflict_key] += 1
             elif conflict_key == 'doctorName':
                 new_merged_fields['doctorName'] = choose_doctor_name(values)
                 new_conflict_keys = [key for key in new_conflict_keys if key != 'doctorName']
@@ -530,7 +565,16 @@ def apply_second_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[
 
 
 def apply_third_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
-    stats_template = {'badness': 0, 'hp': 0, 'score': 0, 'operationValue': 0, 'specimen': 0}
+    stats_template = {
+        'badness': 0,
+        'hp': 0,
+        'score': 0,
+        'operationValue': 0,
+        'specimen': 0,
+        'watch': 0,
+        'watchResult': 0,
+        'suggest': 0,
+    }
     return apply_classified_round_rules(results, IMPORTANT_EFFECTIVE_KEYS, stats_template)
 
 
@@ -742,6 +786,9 @@ def main() -> None:
         print(f"- 第三类按最大分数处理 score 的目录数：{third_class_stats['score']}")
         print(f"- 第三类按包含关系处理 operationValue 的目录数：{third_class_stats['operationValue']}")
         print(f"- 第三类按部位合并处理 specimen 的目录数：{third_class_stats['specimen']}")
+        print(f"- 第三类按逗号拆分合并处理 watch 的目录数：{third_class_stats['watch']}")
+        print(f"- 第三类按逗号拆分合并处理 watchResult 的目录数：{third_class_stats['watchResult']}")
+        print(f"- 第三类按逗号拆分合并处理 suggest 的目录数：{third_class_stats['suggest']}")
 
     unresolved_round3_keys = sorted({key for item in round3_results for key in item.conflict_keys})
     for unresolved_key in unresolved_round3_keys:
