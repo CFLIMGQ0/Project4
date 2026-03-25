@@ -34,11 +34,23 @@ ROUND1_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round1.jsonl'
 ROUND2_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round2.csv'
 ROUND2_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round2.csv'
 ROUND2_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round2.jsonl'
+ROUND3_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round3.csv'
+ROUND3_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round3.csv'
+ROUND3_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round3.jsonl'
 PROCESS_CACHE_DIR_NAME = 'cache_solve_conflicted_pdfs'
 LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
 HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
 DIGIT_PATTERN = re.compile(r'\d')
+IMPORTANT_EFFECTIVE_KEYS = {'badness', 'hp'}
+NON_IMPORTANT_EFFECTIVE_KEYS = {
+    'archiveTime',
+    'checkTime',
+    'roomName',
+    'anesthesiologistName',
+    'doctorName',
+    'endoscopeName',
+}
 
 
 @dataclass
@@ -208,7 +220,7 @@ def extract_non_empty_fields(pdf_path: Path) -> dict[str, str]:
     return normalized_fields
 
 
-def verify_exam_validity(exam_dir: Path) -> ExamScanResult:
+def verify_exam_uniqueness(exam_dir: Path) -> ExamScanResult:
     pdf_files = iter_pdf_files(exam_dir)
     merged_fields: dict[str, str] = {}
     conflict_keys: set[str] = set()
@@ -345,17 +357,10 @@ def choose_endoscope_name(values: set[str]) -> str | None:
     return ','.join(selected)
 
 
-def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
-    stats = {
-        'archiveTime': 0,
-        'checkTime': 0,
-        'badness': 0,
-        'roomName': 0,
-        'hp': 0,
-        'anesthesiologistName': 0,
-        'doctorName': 0,
-        'endoscopeName': 0,
-    }
+def apply_classified_round_rules(
+    results: list[ExamScanResult], target_keys: set[str], stats_template: dict[str, int]
+) -> tuple[list[ExamScanResult], dict[str, int]]:
+    stats = dict(stats_template)
     patched_results: list[ExamScanResult] = []
 
     for item in results:
@@ -367,6 +372,8 @@ def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamSc
         new_conflict_keys = list(item.conflict_keys)
 
         for conflict_key in list(item.conflict_keys):
+            if conflict_key not in target_keys:
+                continue
             values = item.field_values.get(conflict_key, set())
             if conflict_key in {'archiveTime', 'checkTime'}:
                 chosen_value = choose_latest_time_value(values)
@@ -415,6 +422,23 @@ def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamSc
     return patched_results, stats
 
 
+def apply_second_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
+    stats_template = {
+        'archiveTime': 0,
+        'checkTime': 0,
+        'roomName': 0,
+        'anesthesiologistName': 0,
+        'doctorName': 0,
+        'endoscopeName': 0,
+    }
+    return apply_classified_round_rules(results, NON_IMPORTANT_EFFECTIVE_KEYS, stats_template)
+
+
+def apply_third_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
+    stats_template = {'badness': 0, 'hp': 0}
+    return apply_classified_round_rules(results, IMPORTANT_EFFECTIVE_KEYS, stats_template)
+
+
 def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
     exam_dirs = iter_exam_dirs(dataset_root)
     results: list[ExamScanResult] = []
@@ -422,7 +446,7 @@ def scan_all_exam_dirs(dataset_root: Path) -> list[ExamScanResult]:
 
     try:
         for exam_dir in exam_dirs:
-            results.append(verify_exam_validity(exam_dir))
+            results.append(verify_exam_uniqueness(exam_dir))
             progress.update(1)
     finally:
         if hasattr(progress, 'close'):
@@ -517,7 +541,7 @@ def print_summary(
     print(f'- 有效检查目录数：{valid_count}')
     print(f'- 无效检查目录数：{invalid_count}')
     if include_output_paths:
-        print(f'- 有效性汇总文件：{summary_path}')
+        print(f'- 唯一性汇总文件：{summary_path}')
         print(f'- 有效目录键值报告文件：{report_path}')
         print('- valid_dicts_pdf.csv 第二列规则：有效=1，无效=0')
 
@@ -545,6 +569,9 @@ def main() -> None:
     round2_summary_path = process_output_dir / ROUND2_VALID_DICTS_SUMMARY_FILE_NAME
     round2_report_path = process_output_dir / ROUND2_VALID_DICTS_REPORT_FILE_NAME
     round2_cache_path = process_output_dir / ROUND2_CACHE_FILE_NAME
+    round3_summary_path = process_output_dir / ROUND3_VALID_DICTS_SUMMARY_FILE_NAME
+    round3_report_path = process_output_dir / ROUND3_VALID_DICTS_REPORT_FILE_NAME
+    round3_cache_path = process_output_dir / ROUND3_CACHE_FILE_NAME
 
     legacy_summary_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
     legacy_report_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_REPORT_FILE_NAME
@@ -564,39 +591,58 @@ def main() -> None:
         write_valid_dicts_pdf(round1_summary_path, round1_results)
         write_valid_dicts_report(round1_report_path, round1_results)
 
-    print_summary(round1_summary_path, round1_report_path, round1_results, title='第一轮有效性确认')
+    print_summary(round1_summary_path, round1_report_path, round1_results, title='第一轮唯一性确认')
 
     round2_ready = round2_cache_path.exists() and round2_summary_path.exists() and round2_report_path.exists()
     if round2_ready:
         round2_results = load_cached_results(round2_cache_path)
-        second_round_stats = None
-        print(f'检测到第二轮确认结果，跳过第二轮计算：{round2_cache_path}')
+        second_class_stats = None
+        print(f'检测到第二类确认结果，跳过第二类计算：{round2_cache_path}')
     else:
-        round2_results, second_round_stats = apply_second_round_rules(round1_results)
+        round2_results, second_class_stats = apply_second_class_uniqueness_rules(round1_results)
         save_cached_results(round2_cache_path, round2_results)
         write_valid_dicts_pdf(round2_summary_path, round2_results)
         write_valid_dicts_report(round2_report_path, round2_results)
-        write_valid_dicts_pdf(legacy_summary_path, round2_results)
-        write_valid_dicts_report(legacy_report_path, round2_results)
-        print(f'第二轮缓存与结果已生成：{process_output_dir}')
+        print(f'第二类缓存与结果已生成：{process_output_dir}')
 
     if not round2_summary_path.exists() or not round2_report_path.exists():
         write_valid_dicts_pdf(round2_summary_path, round2_results)
         write_valid_dicts_report(round2_report_path, round2_results)
-    if not legacy_summary_path.exists() or not legacy_report_path.exists():
-        write_valid_dicts_pdf(legacy_summary_path, round2_results)
-        write_valid_dicts_report(legacy_report_path, round2_results)
 
-    print_summary(round2_summary_path, round2_report_path, round2_results, title='第二轮有效性确认（按冲突键定制规则处理）')
-    if second_round_stats is not None:
-        print(f"- 第二轮按最晚时间消解 archiveTime 冲突目录数：{second_round_stats['archiveTime']}")
-        print(f"- 第二轮按最晚时间消解 checkTime 冲突目录数：{second_round_stats['checkTime']}")
-        print(f"- 第二轮设置 badness='有' 的目录数：{second_round_stats['badness']}")
-        print(f"- 第二轮清空 roomName 的目录数：{second_round_stats['roomName']}")
-        print(f"- 第二轮按优先级处理 hp 的目录数：{second_round_stats['hp']}")
-        print(f"- 第二轮清空 anesthesiologistName 的目录数：{second_round_stats['anesthesiologistName']}")
-        print(f"- 第二轮按规则处理 doctorName 的目录数：{second_round_stats['doctorName']}")
-        print(f"- 第二轮按合并去重规则处理 endoscopeName 的目录数：{second_round_stats['endoscopeName']}")
+    print_summary(round2_summary_path, round2_report_path, round2_results, title='第二类唯一性确认（非重要有效键冲突处理）')
+    if second_class_stats is not None:
+        print(f"- 第二类按最晚时间消解 archiveTime 冲突目录数：{second_class_stats['archiveTime']}")
+        print(f"- 第二类按最晚时间消解 checkTime 冲突目录数：{second_class_stats['checkTime']}")
+        print(f"- 第二类清空 roomName 的目录数：{second_class_stats['roomName']}")
+        print(f"- 第二类清空 anesthesiologistName 的目录数：{second_class_stats['anesthesiologistName']}")
+        print(f"- 第二类按规则处理 doctorName 的目录数：{second_class_stats['doctorName']}")
+        print(f"- 第二类按合并去重规则处理 endoscopeName 的目录数：{second_class_stats['endoscopeName']}")
+
+    round3_ready = round3_cache_path.exists() and round3_summary_path.exists() and round3_report_path.exists()
+    if round3_ready:
+        round3_results = load_cached_results(round3_cache_path)
+        third_class_stats = None
+        print(f'检测到第三类确认结果，跳过第三类计算：{round3_cache_path}')
+    else:
+        round3_results, third_class_stats = apply_third_class_uniqueness_rules(round2_results)
+        save_cached_results(round3_cache_path, round3_results)
+        write_valid_dicts_pdf(round3_summary_path, round3_results)
+        write_valid_dicts_report(round3_report_path, round3_results)
+        write_valid_dicts_pdf(legacy_summary_path, round3_results)
+        write_valid_dicts_report(legacy_report_path, round3_results)
+        print(f'第三类缓存与结果已生成：{process_output_dir}')
+
+    if not round3_summary_path.exists() or not round3_report_path.exists():
+        write_valid_dicts_pdf(round3_summary_path, round3_results)
+        write_valid_dicts_report(round3_report_path, round3_results)
+    if not legacy_summary_path.exists() or not legacy_report_path.exists():
+        write_valid_dicts_pdf(legacy_summary_path, round3_results)
+        write_valid_dicts_report(legacy_report_path, round3_results)
+
+    print_summary(round3_summary_path, round3_report_path, round3_results, title='第三类唯一性确认（重要有效键冲突处理）')
+    if third_class_stats is not None:
+        print(f"- 第三类设置 badness='有' 的目录数：{third_class_stats['badness']}")
+        print(f"- 第三类按优先级处理 hp 的目录数：{third_class_stats['hp']}")
 
 
 if __name__ == '__main__':

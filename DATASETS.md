@@ -184,10 +184,10 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `admissionNo` → 由 `patientType` 指定（可为：门诊号、住院号、Z、体检号）
 - `patientType` → admissionNo 中文键类型（取值：门诊号、住院号、Z、体检号）
 
-## 10. 有效检查目录输出文件（新增）
+## 10. 唯一性确认输出文件（新增）
 
-当前有效目录判定脚本 `scripts/solve_conflicted_pdfs.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖）。
-其中过程文件默认落盘到 `paths.output_dir/paths.process_cache_dir_name`（默认 `cache_solve_conflicted_pdfs`），并按两轮清洗分别落盘：
+当前唯一性确认脚本 `scripts/solve_conflicted_pdfs.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖）。
+其中过程文件默认落盘到 `paths.output_dir/paths.process_cache_dir_name`（默认 `cache_solve_conflicted_pdfs`），并按三轮（第一轮 + 第二类 + 第三类）确认分别落盘：
 
 - 第一轮结果：
   - `valid_dicts_pdf_round1.csv`
@@ -197,18 +197,25 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_pdf_round2.csv`
   - `valid_dicts_report_round2.csv`
   - `solve_conflicted_pdfs_round2.jsonl`
+- 第三轮结果：
+  - `valid_dicts_pdf_round3.csv`
+  - `valid_dicts_report_round3.csv`
+  - `solve_conflicted_pdfs_round3.jsonl`
 - 兼容文件：
-  - `valid_dicts_pdf.csv`（写入 `paths.dataset_base_root`，等同第二轮汇总）
-  - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第二轮报告）
+  - `valid_dicts_pdf.csv`（写入 `paths.dataset_base_root`，等同第三轮汇总）
+  - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第三轮报告）
 
-第二轮冲突键规则：
+第二类唯一性确认（非重要有效键）冲突键规则：
 
 - `archiveTime` / `checkTime`：取最晚时间（不再使用“最早-最晚时间差阈值”）；
-- `badness`：冲突时置为 `有`；
 - `roomName`：冲突时置空；
-- `hp`：按优先级 `阳性 > 阴性 > 待确认 > 未检` 取值；
 - `anesthesiologistName`：冲突时置空；
 - `doctorName`：冲突值中先剔除含数字值，再取长度最长者。
 - `endoscopeName`：按逗号拆分多值后合并去重；仅剔除“无数字且被更长值完整包含”的泛化项（例如 `肠镜` + `肠镜136` 合并为 `肠镜136`，但 `肠镜13` 与 `肠镜136` 同时保留）。
+
+第三类唯一性确认（重要有效键）冲突键规则：
+
+- `badness`：冲突时置为 `有`；
+- `hp`：按优先级 `阳性 > 阴性 > 待确认 > 未检` 取值。
 
 该输出用于后续筛选高置信检查目录与构建键值分析样本，并支持按轮次缓存续跑。

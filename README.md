@@ -95,31 +95,35 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 这样可以先处理文件级异常，再处理子目录级异常，再处理检查目录级异常，最后处理患者目录级异常，减少清洗过程中的重复判断。
 
-## 有效检查目录脚本说明（新增）
+## 检查目录唯一性确认脚本说明（新增）
 
 `scripts/solve_conflicted_pdfs.py` 现用于执行两项任务：
 
-1. 对每个检查目录做第一轮有效性确认：
+1. 对每个检查目录做第一轮唯一性确认：
    - 读取该检查目录下所有 PDF 的非空键值；
    - 在逐份补充键值过程中，若同名键出现不同非空值，则记为冲突键；
    - 全部补充完成后无冲突则判定为有效目录（`is_valid=1`），有冲突则判定为无效目录（`is_valid=0`）。
 2. 对有效目录输出补充后的有效键结果。
 
 脚本输出文件默认写入 `paths.output_dir`（可通过 `--output-dir` 覆盖）。其中，过程文件会写入
-`paths.output_dir/paths.process_cache_dir_name`（默认目录名为 `cache_solve_conflicted_pdfs`），并区分两轮结果：
+`paths.output_dir/paths.process_cache_dir_name`（默认目录名为 `cache_solve_conflicted_pdfs`），并区分三轮（第一轮 + 第二类 + 第三类）结果：
 
 - 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
-- 第二轮：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
-- 为兼容历史流程，第二轮结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 第二类唯一性确认（非重要有效键）：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
+- 第三类唯一性确认（重要有效键）：`valid_dicts_pdf_round3.csv`、`valid_dicts_report_round3.csv`、`solve_conflicted_pdfs_round3.jsonl`；
+- 为兼容历史流程，第三类结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
-第二轮冲突处理规则：
+第二类唯一性确认（非重要有效键）冲突处理规则：
 
 - `archiveTime`/`checkTime` 冲突：取最晚时间；
-- `badness` 冲突：统一置为 `有`；
 - `roomName` 冲突：置空；
-- `hp` 冲突：按 `阳性 > 阴性 > 待确认 > 未检` 取值；
 - `anesthesiologistName` 冲突：置空；
 - `doctorName` 冲突：先剔除含数字值，再取剩余值里长度最长者。
 - `endoscopeName` 冲突：按逗号拆分并合并去重，仅剔除“无数字且被更长值完整包含”的泛化项（如 `肠镜` + `肠镜136` 合并为 `肠镜136`，但 `肠镜13` + `肠镜136` 会同时保留）。
+
+第三类唯一性确认（重要有效键）冲突处理规则：
+
+- `badness` 冲突：统一置为 `有`；
+- `hp` 冲突：按 `阳性 > 阴性 > 待确认 > 未检` 取值。
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。
