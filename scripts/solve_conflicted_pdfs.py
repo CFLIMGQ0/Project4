@@ -522,7 +522,13 @@ def apply_classified_round_rules(
                     new_merged_fields['specimen'] = chosen_specimen
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'specimen']
                     stats['specimen'] += 1
-            elif conflict_key in {'watch', 'watchResult', 'suggest'}:
+            elif conflict_key in {'watch', 'suggest'}:
+                chosen_contained_value = choose_operation_value(values)
+                if chosen_contained_value is not None:
+                    new_merged_fields[conflict_key] = chosen_contained_value
+                    new_conflict_keys = [key for key in new_conflict_keys if key != conflict_key]
+                    stats[conflict_key] += 1
+            elif conflict_key == 'watchResult':
                 chosen_union_value = choose_union_text_value(values)
                 if chosen_union_value is not None:
                     new_merged_fields[conflict_key] = chosen_union_value
@@ -786,9 +792,9 @@ def main() -> None:
         print(f"- 第三类按最大分数处理 score 的目录数：{third_class_stats['score']}")
         print(f"- 第三类按包含关系处理 operationValue 的目录数：{third_class_stats['operationValue']}")
         print(f"- 第三类按部位合并处理 specimen 的目录数：{third_class_stats['specimen']}")
-        print(f"- 第三类按逗号拆分合并处理 watch 的目录数：{third_class_stats['watch']}")
+        print(f"- 第三类按完整包含关系处理 watch 的目录数：{third_class_stats['watch']}")
         print(f"- 第三类按逗号拆分合并处理 watchResult 的目录数：{third_class_stats['watchResult']}")
-        print(f"- 第三类按逗号拆分合并处理 suggest 的目录数：{third_class_stats['suggest']}")
+        print(f"- 第三类按完整包含关系处理 suggest 的目录数：{third_class_stats['suggest']}")
 
     unresolved_round3_keys = sorted({key for item in round3_results for key in item.conflict_keys})
     for unresolved_key in unresolved_round3_keys:
