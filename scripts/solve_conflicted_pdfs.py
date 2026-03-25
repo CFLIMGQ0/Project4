@@ -42,7 +42,7 @@ LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
 HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
 DIGIT_PATTERN = re.compile(r'\d')
-IMPORTANT_EFFECTIVE_KEYS = {'badness', 'hp'}
+IMPORTANT_EFFECTIVE_KEYS = {'badness', 'hp', 'score', 'operationValue', 'specimen'}
 NON_IMPORTANT_EFFECTIVE_KEYS = {
     'archiveTime',
     'checkTime',
@@ -356,6 +356,77 @@ def choose_endoscope_name(values: set[str]) -> str | None:
     return ','.join(selected)
 
 
+def choose_score_value(values: set[str]) -> str | None:
+    if not values:
+        return None
+    scored_candidates: list[tuple[int, str]] = []
+    for item in values:
+        numbers = [int(match) for match in re.findall(r'\d+', item)]
+        if not numbers:
+            continue
+        scored_candidates.append((max(numbers), item))
+    if not scored_candidates:
+        return None
+    scored_candidates.sort(key=lambda x: (x[0], len(x[1]), x[1]))
+    return scored_candidates[-1][1]
+
+
+def choose_operation_value(values: set[str]) -> str | None:
+    if not values:
+        return None
+
+    normalized_values = [normalize_text(item) for item in values if normalize_text(item)]
+    if not normalized_values:
+        return None
+
+    sorted_values = sorted(set(normalized_values), key=lambda x: (len(x), x), reverse=True)
+    for candidate in sorted_values:
+        if all(other == candidate or other in candidate for other in sorted_values):
+            return candidate
+    return sorted_values[0]
+
+
+def split_specimen_items(raw_value: str) -> list[str]:
+    return [normalize_text(item) for item in re.split(r'[,，；;、\n]+', raw_value) if normalize_text(item)]
+
+
+def parse_specimen_item(item: str) -> tuple[str, int | None]:
+    matched = re.match(r'^(.*?)[xX＊*]\s*(\d+)$', item)
+    if matched is None:
+        return item, None
+    return normalize_text(matched.group(1)), int(matched.group(2))
+
+
+def choose_specimen_value(values: set[str]) -> str | None:
+    if not values:
+        return None
+
+    specimen_count_map: dict[str, int] = {}
+    specimen_text_map: dict[str, str] = {}
+    for raw_value in values:
+        for item in split_specimen_items(raw_value):
+            specimen_name, specimen_count = parse_specimen_item(item)
+            if not specimen_name:
+                continue
+            specimen_text_map.setdefault(specimen_name, specimen_name)
+            if specimen_count is None:
+                continue
+            previous_count = specimen_count_map.get(specimen_name)
+            if previous_count is None or specimen_count > previous_count:
+                specimen_count_map[specimen_name] = specimen_count
+
+    if not specimen_text_map:
+        return None
+
+    merged_items: list[str] = []
+    for specimen_name in sorted(specimen_text_map):
+        if specimen_name in specimen_count_map:
+            merged_items.append(f"{specimen_name}*{specimen_count_map[specimen_name]}")
+        else:
+            merged_items.append(specimen_text_map[specimen_name])
+    return '，'.join(merged_items)
+
+
 def apply_classified_round_rules(
     results: list[ExamScanResult],
     target_keys: set[str],
@@ -404,6 +475,24 @@ def apply_classified_round_rules(
                     new_merged_fields['hp'] = chosen_hp
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'hp']
                     stats['hp'] += 1
+            elif conflict_key == 'score':
+                chosen_score = choose_score_value(values)
+                if chosen_score is not None:
+                    new_merged_fields['score'] = chosen_score
+                    new_conflict_keys = [key for key in new_conflict_keys if key != 'score']
+                    stats['score'] += 1
+            elif conflict_key == 'operationValue':
+                chosen_operation_value = choose_operation_value(values)
+                if chosen_operation_value is not None:
+                    new_merged_fields['operationValue'] = chosen_operation_value
+                    new_conflict_keys = [key for key in new_conflict_keys if key != 'operationValue']
+                    stats['operationValue'] += 1
+            elif conflict_key == 'specimen':
+                chosen_specimen = choose_specimen_value(values)
+                if chosen_specimen is not None:
+                    new_merged_fields['specimen'] = chosen_specimen
+                    new_conflict_keys = [key for key in new_conflict_keys if key != 'specimen']
+                    stats['specimen'] += 1
             elif conflict_key == 'doctorName':
                 new_merged_fields['doctorName'] = choose_doctor_name(values)
                 new_conflict_keys = [key for key in new_conflict_keys if key != 'doctorName']
@@ -441,7 +530,7 @@ def apply_second_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[
 
 
 def apply_third_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
-    stats_template = {'badness': 0, 'hp': 0}
+    stats_template = {'badness': 0, 'hp': 0, 'score': 0, 'operationValue': 0, 'specimen': 0}
     return apply_classified_round_rules(results, IMPORTANT_EFFECTIVE_KEYS, stats_template)
 
 
@@ -650,6 +739,13 @@ def main() -> None:
     if third_class_stats is not None:
         print(f"- 第三类设置 badness='有' 的目录数：{third_class_stats['badness']}")
         print(f"- 第三类按优先级处理 hp 的目录数：{third_class_stats['hp']}")
+        print(f"- 第三类按最大分数处理 score 的目录数：{third_class_stats['score']}")
+        print(f"- 第三类按包含关系处理 operationValue 的目录数：{third_class_stats['operationValue']}")
+        print(f"- 第三类按部位合并处理 specimen 的目录数：{third_class_stats['specimen']}")
+
+    unresolved_round3_keys = sorted({key for item in round3_results for key in item.conflict_keys})
+    for unresolved_key in unresolved_round3_keys:
+        print(f'{unresolved_key}冲突未完全解决')
 
 
 if __name__ == '__main__':

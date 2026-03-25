@@ -126,5 +126,8 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 - `badness` 冲突：统一置为 `有`；
 - `hp` 冲突：按 `阳性 > 阴性 > 待确认 > 未检` 取值。
+- `score` 冲突：取分数更大的值；
+- `operationValue` 冲突：若一个值被另一个值完整包含，则保留更完整的长值；
+- `specimen` 冲突：按部位拆分后合并去重；同一部位有多个数量时取较大数量，并保留全部部位。
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。

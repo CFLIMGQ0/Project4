@@ -2,4 +2,4 @@ paths:
   dataset_base_root: /home/Lim/datasets/project4  # 兼容文件 valid_dicts_pdf.csv / valid_dicts_report.csv 输出位置
   dataset_root: /home/Lim/datasets/project4/main_data
   output_dir: /home/Lim/outputs/project4  # solve_conflicted_pdfs.py 输出根目录
-  process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1/round2 的 csv 与 jsonl 缓存）
+  process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1/round2/round3 的 csv 与 jsonl 缓存）
