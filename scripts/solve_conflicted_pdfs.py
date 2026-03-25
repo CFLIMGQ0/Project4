@@ -511,7 +511,7 @@ def apply_classified_round_rules(
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'score']
                     stats['score'] += 1
             elif conflict_key == 'operationValue':
-                chosen_operation_value = choose_operation_value(values)
+                chosen_operation_value = choose_union_text_value(values)
                 if chosen_operation_value is not None:
                     new_merged_fields['operationValue'] = chosen_operation_value
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'operationValue']
@@ -790,7 +790,7 @@ def main() -> None:
         print(f"- 第三类设置 badness='有' 的目录数：{third_class_stats['badness']}")
         print(f"- 第三类按优先级处理 hp 的目录数：{third_class_stats['hp']}")
         print(f"- 第三类按最大分数处理 score 的目录数：{third_class_stats['score']}")
-        print(f"- 第三类按包含关系处理 operationValue 的目录数：{third_class_stats['operationValue']}")
+        print(f"- 第三类按逗号拆分合并去重处理 operationValue 的目录数：{third_class_stats['operationValue']}")
         print(f"- 第三类按部位合并处理 specimen 的目录数：{third_class_stats['specimen']}")
         print(f"- 第三类按完整包含关系处理 watch 的目录数：{third_class_stats['watch']}")
         print(f"- 第三类按逗号拆分合并处理 watchResult 的目录数：{third_class_stats['watchResult']}")
