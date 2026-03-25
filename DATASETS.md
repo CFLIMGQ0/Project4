@@ -145,35 +145,40 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ### 9.2 有效键（非空次数 > 0）
 
+以下为当前已确认的“有效键 → 页面中文名称”对应关系（按报告识别优先顺序展示）：
+
+- `reportTitle` → 页面标题（用于判定报告内容类型；这是标题，不是一个明确打印出来的中文字段名）
+- `age` → 年龄
+- `anesthesiologistName` → 麻醉医生
+- `applyDeptName` → 科室
+- `applyNo` → 检查号
+- `badness` → 不良反应
+- `bedId` → 病床号
+- `checkTime` → 检查日期（页面展示为“检查日期”，时间如 `16:09:11` 可能因排版换到下一行）
+- `condition` → 患者一般情况
+- `doctorName` → 报告医师
+- `endoscopeName` → 镜号
+- `hisPatientId` → 内镜号
+- `namePatient` → 姓名
+- `narcosisType` → 麻醉方式
+- `operation` → 操作过程
+- `operationValue` → 操作名称
+- `patientAreaName` → 病区
+- `roomName` → 诊间
+- `sex` → 性别
+- `suggest` → 注意事项
+- `watch` → 内镜所见
+- `watchResult` → 诊断
+- `archiveTime` → 报告日期
+- `specimen` → 活检部位
+
+其余有效键（当前未提供稳定中文字段名映射）：
+
 - `admissionNo`
-- `age`
-- `anesthesiologistName`
-- `applyDeptName`
-- `applyNo`
-- `archiveTime`
-- `badness`
-- `bedId`
-- `checkTime`
-- `condition`
-- `doctorName`
-- `endoscopeName`
-- `hisPatientId`
 - `hp`
-- `namePatient`
-- `narcosisType`
-- `operation`
 - `operationRemark`
-- `operationValue`
-- `patientAreaName`
 - `patientType`
-- `reportTitle`
-- `roomName`
 - `score`
-- `sex`
-- `specimen`
-- `suggest`
-- `watch`
-- `watchResult`
 
 ## 10. 有效检查目录输出文件（新增）
 
