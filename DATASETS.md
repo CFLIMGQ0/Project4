@@ -204,12 +204,19 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_report_round3.csv`
   - `solve_conflicted_pdfs_round3.jsonl`
 - 第四轮结果（人工处理 `suggest`）：
-  - `solve_conflicted_suggest.csv`
+  - `valid_dicts_pdf_round4.csv`
+  - `valid_dicts_report_round4.csv`
+  - `solve_conflicted_pdfs_round4.jsonl`
 - 第五轮结果（人工处理 `watch`）：
+  - `valid_dicts_pdf_round5.csv`
+  - `valid_dicts_report_round5.csv`
+  - `solve_conflicted_pdfs_round5.jsonl`
+- 人工选择进度文件：
+  - `solve_conflicted_suggest.csv`
   - `solve_conflicted_watch.csv`
 - 兼容文件：
-  - `valid_dicts_pdf.csv`（写入 `paths.dataset_base_root`，等同第三轮汇总）
-  - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第三轮报告）
+  - `valid_dicts_pdf.csv`（写入 `paths.dataset_base_root`，等同第五轮汇总）
+  - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第五轮报告）
 
 第二类唯一性确认（非重要有效键）冲突键规则：
 
@@ -234,9 +241,10 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 第四轮与第五轮人工唯一性确认说明：
 
 - 第四轮基于 `valid_dicts_pdf_round3.csv` 的冲突目录清单，逐条展示 `suggest` 冲突候选，用户输入数字选择真值；
-- 第五轮基于 `valid_dicts_pdf_round3.csv` 的冲突目录清单，逐条展示 `watch` 冲突候选，用户输入数字选择真值；
+- 第五轮基于 `valid_dicts_pdf_round4.csv` 的冲突目录清单，逐条展示 `watch` 冲突候选，用户输入数字选择真值；
 - 选择记录按轮次保存为 `solve_conflicted_suggest.csv` / `solve_conflicted_watch.csv`；
 - 支持中断续跑：若输入 `q/quit/exit`，会先保存已选进度，下次运行自动续接未完成条目；
-- 两轮选择都完成后，脚本会刷新兼容产物 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 每轮完成后会生成该轮 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
+- 只有当第五轮选择全部完成后，脚本才会刷新兼容产物 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 该输出用于后续筛选高置信检查目录与构建键值分析样本，并支持按轮次缓存续跑。

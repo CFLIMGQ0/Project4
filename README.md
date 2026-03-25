@@ -113,9 +113,10 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
 - 第二类唯一性确认（非重要有效键）：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
 - 第三类唯一性确认（重要有效键）：`valid_dicts_pdf_round3.csv`、`valid_dicts_report_round3.csv`、`solve_conflicted_pdfs_round3.jsonl`；
-- 第四轮唯一性确认（人工处理 suggest 冲突）：`solve_conflicted_suggest.csv`；
-- 第五轮唯一性确认（人工处理 watch 冲突）：`solve_conflicted_watch.csv`；
-- 为兼容历史流程，第三类结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 第四轮唯一性确认（人工处理 suggest 冲突）：`valid_dicts_pdf_round4.csv`、`valid_dicts_report_round4.csv`、`solve_conflicted_pdfs_round4.jsonl`；
+- 第五轮唯一性确认（人工处理 watch 冲突）：`valid_dicts_pdf_round5.csv`、`valid_dicts_report_round5.csv`、`solve_conflicted_pdfs_round5.jsonl`；
+- 人工选择进度文件：`solve_conflicted_suggest.csv`、`solve_conflicted_watch.csv`；
+- 为兼容历史流程，最终（第五轮）结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 第二类唯一性确认（非重要有效键）冲突处理规则：
 
@@ -140,10 +141,11 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 第四轮与第五轮人工唯一性确认补充规则：
 
 - 第四轮读取 `valid_dicts_pdf_round3.csv`，仅按检查目录列出仍未解决的 `suggest` 冲突，并逐条要求输入数字选择真值；
-- 第五轮读取 `valid_dicts_pdf_round3.csv`，仅按检查目录列出仍未解决的 `watch` 冲突，并逐条要求输入数字选择真值；
+- 第五轮读取 `valid_dicts_pdf_round4.csv`，仅按检查目录列出仍未解决的 `watch` 冲突，并逐条要求输入数字选择真值；
 - 选择记录分别写入 `solve_conflicted_suggest.csv` 与 `solve_conflicted_watch.csv`；
 - 若中途输入 `q/quit/exit` 中断，脚本会先保存进度，下次重跑自动续接未完成条目；
 - 每次重跑第四轮/第五轮时都会先检查对应记录文件：若全部完成则直接跳过；若未完成则继续未完成进度；
-- 两轮均完成后，脚本会更新兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 每轮完成后都会生成该轮的 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
+- 仅当第五轮完成后，脚本才会更新数据集根目录兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。

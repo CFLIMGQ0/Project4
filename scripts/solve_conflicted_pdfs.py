@@ -37,6 +37,12 @@ ROUND2_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round2.jsonl'
 ROUND3_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round3.csv'
 ROUND3_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round3.csv'
 ROUND3_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round3.jsonl'
+ROUND4_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round4.csv'
+ROUND4_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round4.csv'
+ROUND4_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round4.jsonl'
+ROUND5_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round5.csv'
+ROUND5_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round5.csv'
+ROUND5_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round5.jsonl'
 ROUND4_SUGGEST_SOLVE_FILE_NAME = 'solve_conflicted_suggest.csv'
 ROUND5_WATCH_SOLVE_FILE_NAME = 'solve_conflicted_watch.csv'
 PROCESS_CACHE_DIR_NAME = 'cache_solve_conflicted_pdfs'
@@ -911,6 +917,12 @@ def main() -> None:
     round3_summary_path = process_output_dir / ROUND3_VALID_DICTS_SUMMARY_FILE_NAME
     round3_report_path = process_output_dir / ROUND3_VALID_DICTS_REPORT_FILE_NAME
     round3_cache_path = process_output_dir / ROUND3_CACHE_FILE_NAME
+    round4_summary_path = process_output_dir / ROUND4_VALID_DICTS_SUMMARY_FILE_NAME
+    round4_report_path = process_output_dir / ROUND4_VALID_DICTS_REPORT_FILE_NAME
+    round4_cache_path = process_output_dir / ROUND4_CACHE_FILE_NAME
+    round5_summary_path = process_output_dir / ROUND5_VALID_DICTS_SUMMARY_FILE_NAME
+    round5_report_path = process_output_dir / ROUND5_VALID_DICTS_REPORT_FILE_NAME
+    round5_cache_path = process_output_dir / ROUND5_CACHE_FILE_NAME
     round4_suggest_record_path = process_output_dir / path_config.suggest_solve_file_name
     round5_watch_record_path = process_output_dir / path_config.watch_solve_file_name
 
@@ -988,37 +1000,69 @@ def main() -> None:
         print(f"- 第三类按逗号拆分合并处理 watchResult 的目录数：{third_class_stats['watchResult']}")
         print(f"- 第三类按完整包含关系处理 suggest 的目录数：{third_class_stats['suggest']}")
 
-    round3_conflict_exam_dirs = load_round3_conflict_exam_dirs(round3_summary_path)
-    suggest_items = build_manual_conflict_items(round3_results, 'suggest', round3_conflict_exam_dirs['suggest'])
-    watch_items = build_manual_conflict_items(round3_results, 'watch', round3_conflict_exam_dirs['watch'])
-
-    try:
-        suggest_choice_map = run_manual_uniqueness_round(
-            round_title='第四轮唯一性确认',
-            section_title='suggest冲突',
-            key_name='suggest',
-            conflict_items=suggest_items,
-            record_path=round4_suggest_record_path,
-        )
+    round4_ready = round4_cache_path.exists() and round4_summary_path.exists() and round4_report_path.exists()
+    if round4_ready:
+        round4_results = load_cached_results(round4_cache_path)
+        print(f'检测到第四轮确认结果，跳过第四轮计算：{round4_cache_path}')
+    else:
+        round3_conflict_exam_dirs = load_round3_conflict_exam_dirs(round3_summary_path)
+        suggest_items = build_manual_conflict_items(round3_results, 'suggest', round3_conflict_exam_dirs['suggest'])
+        try:
+            suggest_choice_map = run_manual_uniqueness_round(
+                round_title='第四轮唯一性确认',
+                section_title='suggest冲突',
+                key_name='suggest',
+                conflict_items=suggest_items,
+                record_path=round4_suggest_record_path,
+            )
+        except KeyboardInterrupt as error:
+            print(str(error))
+            return
         round4_results, round4_solved_count = apply_manual_choices(round3_results, 'suggest', suggest_items, suggest_choice_map)
         print(f'- 第四轮人工处理 suggest 冲突目录数：{round4_solved_count}')
+        save_cached_results(round4_cache_path, round4_results)
+        write_valid_dicts_pdf(round4_summary_path, round4_results)
+        write_valid_dicts_report(round4_report_path, round4_results)
+        print(f'第四轮缓存与结果已生成：{process_output_dir}')
 
-        watch_choice_map = run_manual_uniqueness_round(
-            round_title='第五轮唯一性确认',
-            section_title='watch冲突',
-            key_name='watch',
-            conflict_items=watch_items,
-            record_path=round5_watch_record_path,
-        )
+    if not round4_summary_path.exists() or not round4_report_path.exists():
+        write_valid_dicts_pdf(round4_summary_path, round4_results)
+        write_valid_dicts_report(round4_report_path, round4_results)
+    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（人工处理 suggest 冲突）')
+
+    round5_ready = round5_cache_path.exists() and round5_summary_path.exists() and round5_report_path.exists()
+    if round5_ready:
+        round5_results = load_cached_results(round5_cache_path)
+        print(f'检测到第五轮确认结果，跳过第五轮计算：{round5_cache_path}')
+    else:
+        round4_conflict_exam_dirs = load_round3_conflict_exam_dirs(round4_summary_path)
+        watch_items = build_manual_conflict_items(round4_results, 'watch', round4_conflict_exam_dirs['watch'])
+        try:
+            watch_choice_map = run_manual_uniqueness_round(
+                round_title='第五轮唯一性确认',
+                section_title='watch冲突',
+                key_name='watch',
+                conflict_items=watch_items,
+                record_path=round5_watch_record_path,
+            )
+        except KeyboardInterrupt as error:
+            print(str(error))
+            return
         round5_results, round5_solved_count = apply_manual_choices(round4_results, 'watch', watch_items, watch_choice_map)
         print(f'- 第五轮人工处理 watch 冲突目录数：{round5_solved_count}')
-    except KeyboardInterrupt as error:
-        print(str(error))
-        return
+        save_cached_results(round5_cache_path, round5_results)
+        write_valid_dicts_pdf(round5_summary_path, round5_results)
+        write_valid_dicts_report(round5_report_path, round5_results)
+        print(f'第五轮缓存与结果已生成：{process_output_dir}')
+
+    if not round5_summary_path.exists() or not round5_report_path.exists():
+        write_valid_dicts_pdf(round5_summary_path, round5_results)
+        write_valid_dicts_report(round5_report_path, round5_results)
+    print_summary(round5_summary_path, round5_report_path, round5_results, title='第五轮唯一性确认（人工处理 watch 冲突）')
 
     write_valid_dicts_pdf(legacy_summary_path, round5_results)
     write_valid_dicts_report(legacy_report_path, round5_results)
-    print(f'已更新兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
+    print(f'第五轮完成，已更新数据集根目录兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
 
     unresolved_round5_keys = sorted({key for item in round5_results for key in item.conflict_keys})
     for unresolved_key in unresolved_round5_keys:
