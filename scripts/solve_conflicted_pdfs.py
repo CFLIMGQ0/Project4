@@ -51,9 +51,7 @@ IMPORTANT_EFFECTIVE_KEYS = {
     'score',
     'operationValue',
     'specimen',
-    'watch',
     'watchResult',
-    'suggest',
 }
 NON_IMPORTANT_EFFECTIVE_KEYS = {
     'archiveTime',
@@ -78,7 +76,7 @@ class ExamScanResult:
     is_valid: bool
     conflict_keys: list[str]
     merged_valid_fields: dict[str, str]
-    field_values: dict[str, set[str]]
+    field_values: dict[str, list[str]]
 
 
 class SimpleProgressBar:
@@ -238,7 +236,7 @@ def verify_exam_uniqueness(exam_dir: Path) -> ExamScanResult:
     pdf_files = iter_pdf_files(exam_dir)
     merged_fields: dict[str, str] = {}
     conflict_keys: set[str] = set()
-    field_values: dict[str, set[str]] = {}
+    field_values: dict[str, list[str]] = {}
 
     for pdf_path in pdf_files:
         try:
@@ -247,7 +245,7 @@ def verify_exam_uniqueness(exam_dir: Path) -> ExamScanResult:
             continue
 
         for key, current_value in current_fields.items():
-            field_values.setdefault(key, set()).add(current_value)
+            field_values.setdefault(key, []).append(current_value)
             previous_value = merged_fields.get(key)
             if previous_value is None:
                 merged_fields[key] = current_value
@@ -386,21 +384,6 @@ def choose_score_value(values: set[str]) -> str | None:
     return scored_candidates[-1][1]
 
 
-def choose_operation_value(values: set[str]) -> str | None:
-    if not values:
-        return None
-
-    normalized_values = [normalize_text(item) for item in values if normalize_text(item)]
-    if not normalized_values:
-        return None
-
-    sorted_values = sorted(set(normalized_values), key=lambda x: (len(x), x), reverse=True)
-    for candidate in sorted_values:
-        if all(other == candidate or other in candidate for other in sorted_values):
-            return candidate
-    return None
-
-
 def choose_union_text_value(values: set[str]) -> str | None:
     if not values:
         return None
@@ -481,7 +464,7 @@ def apply_classified_round_rules(
         for conflict_key in list(item.conflict_keys):
             if conflict_key not in target_keys:
                 continue
-            values = item.field_values.get(conflict_key, set())
+            values = item.field_values.get(conflict_key, [])
             if conflict_key in {'archiveTime', 'checkTime'}:
                 chosen_value = choose_latest_time_value(values)
                 if chosen_value is not None:
@@ -528,12 +511,6 @@ def apply_classified_round_rules(
                     new_merged_fields['specimen'] = chosen_specimen
                     new_conflict_keys = [key for key in new_conflict_keys if key != 'specimen']
                     stats['specimen'] += 1
-            elif conflict_key in {'watch', 'suggest'}:
-                chosen_contained_value = choose_operation_value(values)
-                if chosen_contained_value is not None:
-                    new_merged_fields[conflict_key] = chosen_contained_value
-                    new_conflict_keys = [key for key in new_conflict_keys if key != conflict_key]
-                    stats[conflict_key] += 1
             elif conflict_key == 'watchResult':
                 chosen_union_value = choose_union_text_value(values)
                 if chosen_union_value is not None:
@@ -583,9 +560,7 @@ def apply_third_class_uniqueness_rules(results: list[ExamScanResult]) -> tuple[l
         'score': 0,
         'operationValue': 0,
         'specimen': 0,
-        'watch': 0,
         'watchResult': 0,
-        'suggest': 0,
     }
     return apply_classified_round_rules(results, IMPORTANT_EFFECTIVE_KEYS, stats_template)
 
@@ -612,7 +587,7 @@ def serialize_result(item: ExamScanResult) -> dict[str, Any]:
         'is_valid': item.is_valid,
         'conflict_keys': item.conflict_keys,
         'merged_valid_fields': item.merged_valid_fields,
-        'field_values': {key: sorted(values) for key, values in item.field_values.items()},
+        'field_values': {key: list(values) for key, values in item.field_values.items()},
     }
 
 
@@ -626,7 +601,7 @@ def deserialize_result(payload: dict[str, Any]) -> ExamScanResult:
             for key, value in dict(payload.get('merged_valid_fields', {})).items()
         },
         field_values={
-            str(key): {str(value) for value in values}
+            str(key): [str(value) for value in values]
             for key, values in dict(payload.get('field_values', {})).items()
         },
     )
@@ -654,11 +629,11 @@ def write_valid_dicts_pdf(output_path: Path, results: list[ExamScanResult]) -> N
     def get_conflict_num(item: ExamScanResult, key_name: str) -> int:
         if key_name not in item.conflict_keys:
             return 1
-        values = {
+        values = [
             normalize_text(value)
-            for value in item.field_values.get(key_name, set())
+            for value in item.field_values.get(key_name, [])
             if normalize_text(value)
-        }
+        ]
         return max(len(values), 1)
 
     def build_conflict_types_with_num(item: ExamScanResult, suggest_num: int, watch_num: int) -> str:
@@ -676,17 +651,35 @@ def write_valid_dicts_pdf(output_path: Path, results: list[ExamScanResult]) -> N
     with output_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
-            ['exam_dir', 'is_valid', 'conflict_key_count', 'conflict_key_types', 'suggest_num', 'watch_num']
+            [
+                'exam_dir',
+                'is_valid',
+                'conflict_key_count',
+                'conflict_instance_count',
+                'conflict_key_types',
+                'suggest_num',
+                'watch_num',
+            ]
         )
         for item in results:
             suggest_num = get_conflict_num(item, 'suggest')
             watch_num = get_conflict_num(item, 'watch')
             conflict_types = build_conflict_types_with_num(item, suggest_num, watch_num)
+            suggest_conflict_instance = suggest_num if 'suggest' in item.conflict_keys else 0
+            watch_conflict_instance = watch_num if 'watch' in item.conflict_keys else 0
+            conflict_instance_count = (
+                len(item.conflict_keys)
+                - int('suggest' in item.conflict_keys)
+                - int('watch' in item.conflict_keys)
+                + suggest_conflict_instance
+                + watch_conflict_instance
+            )
             writer.writerow(
                 [
                     str(item.exam_dir),
                     1 if item.is_valid else 0,
                     len(item.conflict_keys),
+                    conflict_instance_count,
                     conflict_types,
                     suggest_num,
                     watch_num,
@@ -710,32 +703,23 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
 
 def apply_round4_suggest_watch_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
     patched_results: list[ExamScanResult] = []
-    stats = {'suggest': 0, 'watch': 0}
+    stats = {'suggest_dir': 0, 'watch_dir': 0, 'suggest_conflict_num': 0, 'watch_conflict_num': 0}
 
     for item in results:
-        new_merged_fields = dict(item.merged_valid_fields)
-        new_conflict_keys = list(item.conflict_keys)
-
         for key_name in ('suggest', 'watch'):
-            if key_name not in new_conflict_keys:
+            if key_name not in item.conflict_keys:
                 continue
-            values = {normalize_text(value) for value in item.field_values.get(key_name, set()) if normalize_text(value)}
-            if not values:
-                new_merged_fields[key_name] = ''
-                new_conflict_keys = [key for key in new_conflict_keys if key != key_name]
-                stats[key_name] += 1
-                continue
-            chosen_value = max(sorted(values), key=lambda text: (len(text), text))
-            new_merged_fields[key_name] = chosen_value
-            new_conflict_keys = [key for key in new_conflict_keys if key != key_name]
-            stats[key_name] += 1
+            values = [normalize_text(value) for value in item.field_values.get(key_name, []) if normalize_text(value)]
+            conflict_num = max(len(values), 1)
+            stats[f'{key_name}_conflict_num'] += conflict_num
+            stats[f'{key_name}_dir'] += 1
 
         patched_results.append(
             ExamScanResult(
                 exam_dir=item.exam_dir,
-                is_valid=not new_conflict_keys,
-                conflict_keys=new_conflict_keys,
-                merged_valid_fields=new_merged_fields,
+                is_valid=item.is_valid,
+                conflict_keys=list(item.conflict_keys),
+                merged_valid_fields=dict(item.merged_valid_fields),
                 field_values=item.field_values,
             )
         )
@@ -858,9 +842,7 @@ def main() -> None:
         print(f"- 第三类按最大分数处理 score 的目录数：{third_class_stats['score']}")
         print(f"- 第三类按逗号拆分合并去重处理 operationValue 的目录数：{third_class_stats['operationValue']}")
         print(f"- 第三类按部位合并处理 specimen 的目录数：{third_class_stats['specimen']}")
-        print(f"- 第三类按完整包含关系处理 watch 的目录数：{third_class_stats['watch']}")
         print(f"- 第三类按逗号拆分合并处理 watchResult 的目录数：{third_class_stats['watchResult']}")
-        print(f"- 第三类按完整包含关系处理 suggest 的目录数：{third_class_stats['suggest']}")
 
     round4_ready = round4_cache_path.exists() and round4_summary_path.exists() and round4_report_path.exists()
     if round4_ready:
@@ -869,7 +851,7 @@ def main() -> None:
         print(f'检测到第四轮确认结果，跳过第四轮计算：{round4_cache_path}')
     else:
         round4_results, round4_stats = apply_round4_suggest_watch_rules(round3_results)
-        print('第四轮自动处理 suggest/watch 冲突，不再保留这两个字段的冲突。')
+        print('第四轮统计 suggest/watch 冲突规模，保留这两个字段的冲突。')
         save_cached_results(round4_cache_path, round4_results)
         write_valid_dicts_pdf(round4_summary_path, round4_results)
         write_valid_dicts_report(round4_report_path, round4_results)
@@ -878,10 +860,12 @@ def main() -> None:
     if not round4_summary_path.exists() or not round4_report_path.exists():
         write_valid_dicts_pdf(round4_summary_path, round4_results)
         write_valid_dicts_report(round4_report_path, round4_results)
-    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（自动处理 suggest/watch 冲突）')
+    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（统计 suggest/watch 冲突并保留）')
     if round4_stats is not None:
-        print(f"- 第四轮自动处理 suggest 冲突目录数：{round4_stats['suggest']}")
-        print(f"- 第四轮自动处理 watch 冲突目录数：{round4_stats['watch']}")
+        print(f"- 第四轮 suggest 冲突目录数：{round4_stats['suggest_dir']}")
+        print(f"- 第四轮 suggest 冲突项数量：{round4_stats['suggest_conflict_num']}")
+        print(f"- 第四轮 watch 冲突目录数：{round4_stats['watch_dir']}")
+        print(f"- 第四轮 watch 冲突项数量：{round4_stats['watch_conflict_num']}")
 
     write_valid_dicts_pdf(legacy_summary_path, round4_results)
     write_valid_dicts_report(legacy_report_path, round4_results)

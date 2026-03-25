@@ -111,7 +111,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
 - 第二类唯一性确认（非重要有效键）：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
 - 第三类唯一性确认（重要有效键）：`valid_dicts_pdf_round3.csv`、`valid_dicts_report_round3.csv`、`solve_conflicted_pdfs_round3.jsonl`；
-- 第四轮唯一性确认（自动处理 suggest/watch 冲突）：`valid_dicts_pdf_round4.csv`、`valid_dicts_report_round4.csv`、`solve_conflicted_pdfs_round4.jsonl`；
+- 第四轮唯一性确认（统计 suggest/watch 冲突并保留）：`valid_dicts_pdf_round4.csv`、`valid_dicts_report_round4.csv`、`solve_conflicted_pdfs_round4.jsonl`；
 - 最终（第四轮）结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 第二类唯一性确认（非重要有效键）冲突处理规则：
@@ -130,26 +130,19 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `score` 冲突：取分数更大的值；
 - `operationValue` 冲突：按逗号拆分多值后合并去重。
 - `specimen` 冲突：按部位拆分后合并去重；同一部位有多个数量时取较大数量，并保留全部部位。
-- `watch` 冲突：仅当短文本被长文本完整包含时才消解并保留更完整的长文本；若互不包含则保留冲突。
 - `watchResult` 冲突：按逗号拆分为多个类型后合并去重。
-- `suggest` 冲突：仅当短文本被长文本完整包含时才消解并保留更完整的长文本；若互不包含则保留冲突。
 
 第四轮唯一性确认补充规则：
 
-- 第四轮会自动处理 `suggest` 与 `watch` 剩余冲突：按候选值文本长度优先（同长度按字典序）选取唯一值，并从冲突键中移除；
+- 第四轮统一统计 `suggest` 与 `watch` 冲突：不做唯一值确认，不移除冲突键，仅统计冲突目录数与冲突项数量；
 - 每轮完成后都会生成该轮的 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
 - 第四轮完成后，脚本会更新数据集根目录兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 新增输出指标说明（`valid_dicts_pdf_roundX.csv`）：
 
-- `suggest_num`：若 `suggest` 无冲突则固定为 `1`；若存在冲突且候选值数量为 `n`，则记录为 `n`；
-- `watch_num`：若 `watch` 无冲突则固定为 `1`；若存在冲突且候选值数量为 `n`，则记录为 `n`；
+- `suggest_num`：若 `suggest` 无冲突则为 `1`；若存在冲突则记录冲突总数量 `n`（按该键在目录内出现的非空值总次数统计）；
+- `watch_num`：若 `watch` 无冲突则为 `1`；若存在冲突则记录冲突总数量 `n`（按该键在目录内出现的非空值总次数统计）；
 - `conflict_key_types` 中会按数量展开：例如 `suggest_num=3` 时会出现 `suggest|suggest|suggest`，`watch_num=2` 时会出现 `watch|watch`。
-
-新增输出指标说明（`valid_dicts_pdf_roundX.csv`）：
-
-- `suggest_num`：若 `suggest` 无冲突则固定为 `1`；若存在冲突且候选值数量为 `n`，则记录为 `n`；
-- `watch_num`：若 `watch` 无冲突则固定为 `1`；若存在冲突且候选值数量为 `n`，则记录为 `n`；
-- `conflict_key_types` 中会按数量展开：例如 `suggest_num=3` 时会出现 `suggest|suggest|suggest`，`watch_num=2` 时会出现 `watch|watch`。
+- `conflict_instance_count`：冲突实例总数（`suggest`/`watch` 按其冲突数量展开计数，其余键按 1 计数）。
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。

@@ -201,7 +201,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_pdf_round3.csv`
   - `valid_dicts_report_round3.csv`
   - `solve_conflicted_pdfs_round3.jsonl`
-- 第四轮结果（自动合并 `suggest/watch` 轮次）：
+- 第四轮结果（统计 `suggest/watch` 冲突并保留）：
   - `valid_dicts_pdf_round4.csv`
   - `valid_dicts_report_round4.csv`
   - `solve_conflicted_pdfs_round4.jsonl`
@@ -225,26 +225,19 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `score`：冲突时取分数更大的值；
 - `operationValue`：冲突时按逗号拆分多值并合并去重。
 - `specimen`：冲突时按部位拆分合并；同一部位出现多个数量时取较大数量并保留全部部位。
-- `watch`：仅当短文本被长文本完整包含时才消解冲突并保留长文本；若互不包含则保留冲突。
 - `watchResult`：冲突时按逗号拆分多值并合并去重。
-- `suggest`：仅当短文本被长文本完整包含时才消解冲突并保留长文本；若互不包含则保留冲突。
 
 第四轮唯一性确认说明：
 
-- 第四轮会自动处理 `suggest` 与 `watch` 剩余冲突：按候选值文本长度优先（同长度按字典序）选取唯一值，并从冲突键中移除；
+- 第四轮统一统计 `suggest` 与 `watch` 冲突：不做唯一值确认，不移除冲突键，仅统计冲突目录数与冲突项数量；
 - 每轮完成后会生成该轮 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
 - 第四轮输出完成后，脚本会刷新兼容产物 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 `valid_dicts_pdf_roundX.csv` 新增冲突数量指标：
 
-- `suggest_num`：`suggest` 无冲突时固定为 `1`，有冲突时记录候选值数量 `n`；
-- `watch_num`：`watch` 无冲突时固定为 `1`，有冲突时记录候选值数量 `n`；
+- `suggest_num`：`suggest` 无冲突时为 `1`，有冲突时记录冲突总数量 `n`（按该键在目录内出现的非空值总次数统计）；
+- `watch_num`：`watch` 无冲突时为 `1`，有冲突时记录冲突总数量 `n`（按该键在目录内出现的非空值总次数统计）；
 - `conflict_key_types` 中会根据 `suggest_num/watch_num` 展开重复键名，便于直接看到冲突规模。
-
-`valid_dicts_pdf_roundX.csv` 新增冲突数量指标：
-
-- `suggest_num`：`suggest` 无冲突时固定为 `1`，有冲突时记录候选值数量 `n`；
-- `watch_num`：`watch` 无冲突时固定为 `1`，有冲突时记录候选值数量 `n`；
-- `conflict_key_types` 中会根据 `suggest_num/watch_num` 展开重复键名，便于直接看到冲突规模。
+- `conflict_instance_count`：冲突实例总数（`suggest`/`watch` 按其冲突数量展开计数，其余冲突键按 1 计数）。
 
 该输出用于后续筛选高置信检查目录与构建键值分析样本，并支持按轮次缓存续跑。
