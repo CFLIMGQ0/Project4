@@ -319,6 +319,32 @@ def choose_doctor_name(values: set[str]) -> str:
     return sorted_candidates[0]
 
 
+def choose_endoscope_name(values: set[str]) -> str | None:
+    if not values:
+        return None
+
+    candidates: set[str] = set()
+    for raw_value in values:
+        pieces = re.split(r'[,，]', raw_value)
+        for piece in pieces:
+            normalized_piece = normalize_text(piece)
+            if normalized_piece:
+                candidates.add(normalized_piece)
+
+    if not candidates:
+        return None
+
+    sorted_candidates = sorted(candidates, key=lambda x: (-len(x), x))
+    selected: list[str] = []
+    for candidate in sorted_candidates:
+        has_digit = bool(DIGIT_PATTERN.search(candidate))
+        if (not has_digit) and any(candidate != existing and candidate in existing for existing in selected):
+            continue
+        selected.append(candidate)
+
+    return ','.join(selected)
+
+
 def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
     stats = {
         'archiveTime': 0,
@@ -328,6 +354,7 @@ def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamSc
         'hp': 0,
         'anesthesiologistName': 0,
         'doctorName': 0,
+        'endoscopeName': 0,
     }
     patched_results: list[ExamScanResult] = []
 
@@ -369,6 +396,12 @@ def apply_second_round_rules(results: list[ExamScanResult]) -> tuple[list[ExamSc
                 new_merged_fields['doctorName'] = choose_doctor_name(values)
                 new_conflict_keys = [key for key in new_conflict_keys if key != 'doctorName']
                 stats['doctorName'] += 1
+            elif conflict_key == 'endoscopeName':
+                chosen_endoscope = choose_endoscope_name(values)
+                if chosen_endoscope is not None:
+                    new_merged_fields['endoscopeName'] = chosen_endoscope
+                    new_conflict_keys = [key for key in new_conflict_keys if key != 'endoscopeName']
+                    stats['endoscopeName'] += 1
 
         patched_results.append(
             ExamScanResult(
@@ -563,6 +596,7 @@ def main() -> None:
         print(f"- 第二轮按优先级处理 hp 的目录数：{second_round_stats['hp']}")
         print(f"- 第二轮清空 anesthesiologistName 的目录数：{second_round_stats['anesthesiologistName']}")
         print(f"- 第二轮按规则处理 doctorName 的目录数：{second_round_stats['doctorName']}")
+        print(f"- 第二轮按合并去重规则处理 endoscopeName 的目录数：{second_round_stats['endoscopeName']}")
 
 
 if __name__ == '__main__':

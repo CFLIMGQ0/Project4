@@ -120,5 +120,6 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `hp` 冲突：按 `阳性 > 阴性 > 待确认 > 未检` 取值；
 - `anesthesiologistName` 冲突：置空；
 - `doctorName` 冲突：先剔除含数字值，再取剩余值里长度最长者。
+- `endoscopeName` 冲突：按逗号拆分并合并去重，仅剔除“无数字且被更长值完整包含”的泛化项（如 `肠镜` + `肠镜136` 合并为 `肠镜136`，但 `肠镜13` + `肠镜136` 会同时保留）。
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。
