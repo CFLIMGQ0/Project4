@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from statistics import extract_pdf_fields
-
-try:
-    from pypdf import PdfReader
-except Exception:  # noqa: BLE001
-    PdfReader = None
 
 EFFECTIVE_KEYS = {
     "admissionNo",
@@ -44,12 +39,12 @@ EFFECTIVE_KEYS = {
 }
 
 
+@dataclass
 class ProgressTracker:
-    def __init__(self, total: int, width: int = 30, prefix: str = "处理进度") -> None:
-        self.total = total
-        self.width = width
-        self.prefix = prefix
-        self.current = 0
+    total: int
+    width: int = 30
+    prefix: str = "扫描进度"
+    current: int = 0
 
     def update(self, step: int = 1) -> None:
         if self.total <= 0:
@@ -77,11 +72,26 @@ def normalize_text(value: object) -> str:
     return " ".join(str(value).strip().split())
 
 
+def parse_target_keys(raw_target_keys: str) -> list[str]:
+    target_keys = [normalize_text(key) for key in raw_target_keys.split(",")]
+    target_keys = [key for key in target_keys if key]
+    if not target_keys:
+        raise ValueError("--target-keys 不能为空，至少提供 1 个键")
+
+    invalid_keys = [key for key in target_keys if key not in EFFECTIVE_KEYS]
+    if invalid_keys:
+        raise ValueError(
+            "以下键不在有效键清单内：" + ", ".join(sorted(set(invalid_keys)))
+        )
+
+    return list(dict.fromkeys(target_keys))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "扫描数据集 PDF，输出有效英文键对应的中文键名称；"
-            "若同一英文键对应多个中文键，会打上[多值]标记。"
+            "按给定英文键查找“字段值非空”的首个 PDF，并输出该 PDF 路径；"
+            "一旦所有目标键都命中，立即停止扫描。"
         )
     )
     parser.add_argument(
@@ -89,6 +99,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("/home/Lim/datasets/project4/main_data"),
         help="数据根目录（默认 /home/Lim/datasets/project4/main_data）",
+    )
+    parser.add_argument(
+        "--target-keys",
+        type=str,
+        required=True,
+        help="待查找的英文键，使用英文逗号分隔，例如 age,operation,watch",
     )
     return parser.parse_args()
 
@@ -103,68 +119,60 @@ def iter_pdf_files(dataset_root: Path):
                 yield pdf_path
 
 
-def extract_cn_labels_from_pdf(pdf_path: Path) -> dict[str, set[str]]:
-    mapping: dict[str, set[str]] = defaultdict(set)
-    if PdfReader is None:
-        return mapping
+def collect_first_hits(dataset_root: Path, target_keys: list[str]) -> dict[str, tuple[Path, str]]:
+    remaining = set(target_keys)
+    hits: dict[str, tuple[Path, str]] = {}
 
-    reader = PdfReader(str(pdf_path))
-    fields = reader.get_fields() or {}
-    for field_name, field in fields.items():
-        english_key = normalize_text(field.get("/T") or field_name)
-        if english_key not in EFFECTIVE_KEYS:
+    total_pdfs = sum(1 for _ in iter_pdf_files(dataset_root))
+    progress = ProgressTracker(total=total_pdfs)
+
+    for pdf_path in iter_pdf_files(dataset_root):
+        if not remaining:
+            break
+        try:
+            fields = extract_pdf_fields(pdf_path)
+        except Exception:  # noqa: BLE001
+            progress.update()
             continue
 
-        chinese_key = normalize_text(field.get("/TU"))
-        if chinese_key:
-            mapping[english_key].add(chinese_key)
+        normalized_fields = {
+            normalize_text(key): normalize_text(value) for key, value in fields.items()
+        }
 
-    return mapping
+        for key in tuple(remaining):
+            value = normalized_fields.get(key, "")
+            if value:
+                hits[key] = (pdf_path, value)
+                remaining.remove(key)
+
+        progress.update()
+
+    progress.close()
+    return hits
 
 
-def merge_mapping(target: dict[str, set[str]], source: dict[str, set[str]]) -> None:
-    for key, values in source.items():
-        target[key].update(values)
+def print_result(target_keys: list[str], hits: dict[str, tuple[Path, str]]) -> None:
+    print("\n查找结果：")
+    for key in target_keys:
+        matched = hits.get(key)
+        if matched is None:
+            print(f"- {key}: 未找到非空值")
+            continue
 
-
-def enrich_with_field_values(mapping: dict[str, set[str]], fields: dict[str, str]) -> None:
-    """兜底：某些 PDF 取不到 /TU 时，保留该英文键，中文先记为未知。"""
-    normalized = {normalize_text(k): normalize_text(v) for k, v in fields.items()}
-    for key in EFFECTIVE_KEYS:
-        if key in normalized and key not in mapping:
-            mapping[key].add("（未提取到中文键名）")
+        pdf_path, value = matched
+        print(f"- {key}: {pdf_path.as_uri()}")
+        print(f"  示例值: {value}")
 
 
 def main() -> None:
     args = parse_args()
     dataset_root = args.dataset_root.expanduser().resolve()
     if not dataset_root.is_dir():
-        return
+        raise FileNotFoundError(f"数据根目录不存在：{dataset_root}")
 
-    key_to_cn_names: dict[str, set[str]] = defaultdict(set)
-    total_pdfs = sum(1 for _ in iter_pdf_files(dataset_root))
-    progress = ProgressTracker(total=total_pdfs, prefix="遍历 PDF")
-
-    for pdf_path in iter_pdf_files(dataset_root):
-        try:
-            merge_mapping(key_to_cn_names, extract_cn_labels_from_pdf(pdf_path))
-            fields = extract_pdf_fields(pdf_path)
-            enrich_with_field_values(key_to_cn_names, fields)
-        except Exception:  # noqa: BLE001
-            continue
-        finally:
-            progress.update()
-
-    progress.close()
-
-    for key in sorted(EFFECTIVE_KEYS):
-        cn_names = sorted(name for name in key_to_cn_names.get(key, set()) if name)
-        if not cn_names:
-            print(f"{key} -> （未找到中文键名）")
-            continue
-
-        marker = " [多值]" if len(cn_names) > 1 else ""
-        print(f"{key} -> {' / '.join(cn_names)}{marker}")
+    target_keys = parse_target_keys(args.target_keys)
+    hits = collect_first_hits(dataset_root, target_keys)
+    print_result(target_keys, hits)
 
 
 if __name__ == "__main__":
