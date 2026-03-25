@@ -38,6 +38,15 @@ EFFECTIVE_KEYS = {
     "watchResult",
 }
 
+# 来自 DATASETS.md 第 9.2 节“其余有效键（当前未提供稳定中文字段名映射）”
+UNKNOWN_CN_EFFECTIVE_KEYS = [
+    "admissionNo",
+    "hp",
+    "operationRemark",
+    "patientType",
+    "score",
+]
+
 
 @dataclass
 class ProgressTracker:
@@ -103,8 +112,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-keys",
         type=str,
-        required=True,
-        help="待查找的英文键，使用英文逗号分隔，例如 age,operation,watch",
+        required=False,
+        default="",
+        help=(
+            "待查找的英文键，使用英文逗号分隔，例如 age,operation,watch；"
+            "若不传则默认使用 DATASETS.md 中“无中文名称”的有效键"
+        ),
     )
     return parser.parse_args()
 
@@ -170,7 +183,14 @@ def main() -> None:
     if not dataset_root.is_dir():
         raise FileNotFoundError(f"数据根目录不存在：{dataset_root}")
 
-    target_keys = parse_target_keys(args.target_keys)
+    if normalize_text(args.target_keys):
+        target_keys = parse_target_keys(args.target_keys)
+    else:
+        target_keys = UNKNOWN_CN_EFFECTIVE_KEYS
+        print(
+            "未传入 --target-keys，默认使用无中文名称有效键："
+            + ", ".join(target_keys)
+        )
     hits = collect_first_hits(dataset_root, target_keys)
     print_result(target_keys, hits)
 
