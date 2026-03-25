@@ -171,14 +171,11 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `watchResult` → 诊断
 - `archiveTime` → 报告日期
 - `specimen` → 活检部位
-- `admissionNo` → 住院号
+- `admissionNo` → 由 `patientType` 指定（可为：门诊号、住院号、Z、体检号）
 - `hp` → HP(幽门螺旋杆菌)
-- `operationRemark` → 操作过程备注
-
-其余有效键（当前未提供稳定中文字段名映射）：
-
-- `patientType`
-- `score`
+- `operationRemark` → 操作过程备注（仅当操作过程不顺利时才有可能出现）
+- `patientType` → admissionNo 中文键类型（取值：门诊号、住院号、Z、体检号）
+- `score` → 波士顿评分
 
 ## 10. 有效检查目录输出文件（新增）
 
