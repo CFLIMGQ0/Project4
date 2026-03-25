@@ -16,7 +16,7 @@
 - `paths.output_dir`：脚本输出根目录；
 - `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件目录名（默认 `cache_solve_conflicted_pdfs`）。
 - `paths.suggest_solve_file_name`：第四轮 `suggest` 人工确认记录文件名（默认 `solve_conflicted_suggest.csv`）。
-- `paths.watch_solve_file_name`：第五轮 `watch` 人工确认记录文件名（默认 `solve_conflicted_watch.csv`）。
+- `paths.watch_solve_file_name`：第四轮 `watch` 人工确认记录文件名（默认 `solve_conflicted_watch.csv`）。
 
 因此，若需要切换数据环境、迁移服务器或调整输出位置，请优先修改 `configs/path.yaml`。
 
@@ -203,11 +203,11 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_pdf_round3.csv`
   - `valid_dicts_report_round3.csv`
   - `solve_conflicted_pdfs_round3.jsonl`
-- 第四轮结果（人工处理 `suggest`）：
+- 第四轮结果（人工处理 `suggest/watch`）：
   - `valid_dicts_pdf_round4.csv`
   - `valid_dicts_report_round4.csv`
   - `solve_conflicted_pdfs_round4.jsonl`
-- 第五轮结果（人工处理 `watch`）：
+- 第五轮结果（兼容输出轮次，直接复用第四轮结果）：
   - `valid_dicts_pdf_round5.csv`
   - `valid_dicts_report_round5.csv`
   - `solve_conflicted_pdfs_round5.jsonl`
@@ -238,13 +238,19 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `watchResult`：冲突时按逗号拆分多值并合并去重。
 - `suggest`：仅当短文本被长文本完整包含时才消解冲突并保留长文本；若互不包含则保留冲突。
 
-第四轮与第五轮人工唯一性确认说明：
+第四轮与第五轮唯一性确认说明：
 
-- 第四轮基于 `valid_dicts_pdf_round3.csv` 的冲突目录清单，逐条展示 `suggest` 冲突候选，用户输入数字选择真值；
-- 第五轮基于 `valid_dicts_pdf_round4.csv` 的冲突目录清单，逐条展示 `watch` 冲突候选，用户输入数字选择真值；
+- 第四轮基于 `valid_dicts_pdf_round3.csv` 的冲突目录清单，逐条展示 `suggest` 与 `watch` 冲突候选，用户输入数字选择真值；
+- 第五轮不再新增人工输入，仅用于生成兼容轮次输出；
 - 选择记录按轮次保存为 `solve_conflicted_suggest.csv` / `solve_conflicted_watch.csv`；
 - 支持中断续跑：若输入 `q/quit/exit`，会先保存已选进度，下次运行自动续接未完成条目；
 - 每轮完成后会生成该轮 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
 - 只有当第五轮选择全部完成后，脚本才会刷新兼容产物 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+
+`valid_dicts_pdf_roundX.csv` 新增冲突数量指标：
+
+- `suggest_num`：`suggest` 无冲突时固定为 `1`，有冲突时记录候选值数量 `n`；
+- `watch_num`：`watch` 无冲突时固定为 `1`，有冲突时记录候选值数量 `n`；
+- `conflict_key_types` 中会根据 `suggest_num/watch_num` 展开重复键名，便于直接看到冲突规模。
 
 该输出用于后续筛选高置信检查目录与构建键值分析样本，并支持按轮次缓存续跑。

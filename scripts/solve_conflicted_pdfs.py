@@ -93,6 +93,7 @@ class ManualConflictItem:
     exam_dir: Path
     key: str
     options: list[str]
+    conflict_num: int
 
 
 class SimpleProgressBar:
@@ -673,17 +674,45 @@ def load_cached_results(cache_path: Path) -> list[ExamScanResult]:
 
 
 def write_valid_dicts_pdf(output_path: Path, results: list[ExamScanResult]) -> None:
+    def get_conflict_num(item: ExamScanResult, key_name: str) -> int:
+        if key_name not in item.conflict_keys:
+            return 1
+        values = {
+            normalize_text(value)
+            for value in item.field_values.get(key_name, set())
+            if normalize_text(value)
+        }
+        return max(len(values), 1)
+
+    def build_conflict_types_with_num(item: ExamScanResult, suggest_num: int, watch_num: int) -> str:
+        expanded_keys: list[str] = []
+        for key in item.conflict_keys:
+            if key == 'suggest':
+                expanded_keys.extend(['suggest'] * suggest_num)
+            elif key == 'watch':
+                expanded_keys.extend(['watch'] * watch_num)
+            else:
+                expanded_keys.append(key)
+        return '|'.join(expanded_keys)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(['exam_dir', 'is_valid', 'conflict_key_count', 'conflict_key_types'])
+        writer.writerow(
+            ['exam_dir', 'is_valid', 'conflict_key_count', 'conflict_key_types', 'suggest_num', 'watch_num']
+        )
         for item in results:
+            suggest_num = get_conflict_num(item, 'suggest')
+            watch_num = get_conflict_num(item, 'watch')
+            conflict_types = build_conflict_types_with_num(item, suggest_num, watch_num)
             writer.writerow(
                 [
                     str(item.exam_dir),
                     1 if item.is_valid else 0,
                     len(item.conflict_keys),
-                    '|'.join(item.conflict_keys),
+                    conflict_types,
+                    suggest_num,
+                    watch_num,
                 ]
             )
 
@@ -743,6 +772,7 @@ def build_manual_conflict_items(
                 exam_dir=item.exam_dir,
                 key=target_key,
                 options=options,
+                conflict_num=len(options),
             )
         )
     return conflict_items
@@ -770,7 +800,9 @@ def save_manual_choice_map(
     record_path.parent.mkdir(parents=True, exist_ok=True)
     with record_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(['exam_dir', 'key', 'selected_index', 'selected_value', 'options', 'updated_at'])
+        writer.writerow(
+            ['exam_dir', 'key', 'key_num', 'selected_index', 'selected_value', 'options', 'updated_at']
+        )
         for item in conflict_items:
             exam_dir_text = str(item.exam_dir)
             selected_value = choice_map.get(exam_dir_text, '')
@@ -781,6 +813,7 @@ def save_manual_choice_map(
                 [
                     exam_dir_text,
                     target_key,
+                    item.conflict_num,
                     selected_index,
                     selected_value,
                     '||'.join(item.options),
@@ -791,50 +824,54 @@ def save_manual_choice_map(
 
 def run_manual_uniqueness_round(
     round_title: str,
-    section_title: str,
-    key_name: str,
-    conflict_items: list[ManualConflictItem],
-    record_path: Path,
+    key_configs: list[tuple[str, str, list[ManualConflictItem], Path]],
 ) -> dict[str, str]:
-    if not conflict_items:
-        print(f'{round_title}无需人工处理，未发现未解决的 {key_name} 冲突。')
+    all_items = [item for _, _, items, _ in key_configs for item in items]
+    if not all_items:
+        print(f'{round_title}无需人工处理，未发现未解决的 suggest/watch 冲突。')
         return {}
 
-    choice_map = load_manual_choice_map(record_path, key_name)
-    completed = sum(1 for item in conflict_items if choice_map.get(str(item.exam_dir)) in item.options)
-    if completed == len(conflict_items):
-        print(f'{round_title}检测到已完成的历史选择记录：{record_path}')
-        return choice_map
-
-    print(f'\n{round_title}主要解决{key_name}冲突。')
-    print(f'{section_title}：')
-
-    for index, item in enumerate(conflict_items, start=1):
-        exam_dir_text = str(item.exam_dir)
-        existing_value = choice_map.get(exam_dir_text)
-        if existing_value in item.options:
+    print(f'\n{round_title}主要解决 suggest/watch 冲突。')
+    merged_choice_map: dict[str, str] = {}
+    for key_name, section_title, conflict_items, record_path in key_configs:
+        if not conflict_items:
+            print(f'{round_title}{section_title}：无需人工处理。')
+            continue
+        choice_map = load_manual_choice_map(record_path, key_name)
+        completed = sum(1 for item in conflict_items if choice_map.get(str(item.exam_dir)) in item.options)
+        if completed == len(conflict_items):
+            print(f'{round_title}检测到已完成的历史选择记录：{record_path}')
+            merged_choice_map.update(choice_map)
             continue
 
-        print(f'{index}.{exam_dir_text}检查目录')
-        for option_index, option in enumerate(item.options, start=1):
-            print(f'{key_name}{option_index}：{option}')
+        print(f'{section_title}：')
+        for index, item in enumerate(conflict_items, start=1):
+            exam_dir_text = str(item.exam_dir)
+            existing_value = choice_map.get(exam_dir_text)
+            if existing_value in item.options:
+                continue
 
-        while True:
-            user_input = input(f'请输入数字选择 {key_name} 真值（1-{len(item.options)}，输入 q 可中断）：').strip().lower()
-            if user_input in {'q', 'quit', 'exit'}:
-                save_manual_choice_map(record_path, key_name, conflict_items, choice_map)
-                print(f'{round_title}已中断，当前进度已保存：{record_path}')
-                raise KeyboardInterrupt(f'{round_title}人工确认被中断')
-            if user_input.isdigit():
-                selected_index = int(user_input)
-                if 1 <= selected_index <= len(item.options):
-                    choice_map[exam_dir_text] = item.options[selected_index - 1]
+            print(f'{index}.{exam_dir_text}检查目录')
+            print(f'{key_name}_num：{item.conflict_num}')
+            for option_index, option in enumerate(item.options, start=1):
+                print(f'{key_name}{option_index}：{option}')
+
+            while True:
+                user_input = input(f'请输入数字选择 {key_name} 真值（1-{len(item.options)}，输入 q 可中断）：').strip().lower()
+                if user_input in {'q', 'quit', 'exit'}:
                     save_manual_choice_map(record_path, key_name, conflict_items, choice_map)
-                    break
-            print('输入无效，请输入有效序号。')
-
-    print(f'{round_title}已完成，选择记录文件：{record_path}')
-    return choice_map
+                    print(f'{round_title}已中断，当前进度已保存：{record_path}')
+                    raise KeyboardInterrupt(f'{round_title}人工确认被中断')
+                if user_input.isdigit():
+                    selected_index = int(user_input)
+                    if 1 <= selected_index <= len(item.options):
+                        choice_map[exam_dir_text] = item.options[selected_index - 1]
+                        save_manual_choice_map(record_path, key_name, conflict_items, choice_map)
+                        break
+                print('输入无效，请输入有效序号。')
+        merged_choice_map.update(choice_map)
+        print(f'{round_title}{section_title}已完成，选择记录文件：{record_path}')
+    return merged_choice_map
 
 
 def apply_manual_choices(
@@ -1007,19 +1044,26 @@ def main() -> None:
     else:
         round3_conflict_exam_dirs = load_round3_conflict_exam_dirs(round3_summary_path)
         suggest_items = build_manual_conflict_items(round3_results, 'suggest', round3_conflict_exam_dirs['suggest'])
+        watch_items = build_manual_conflict_items(round3_results, 'watch', round3_conflict_exam_dirs['watch'])
         try:
-            suggest_choice_map = run_manual_uniqueness_round(
+            merged_choice_map = run_manual_uniqueness_round(
                 round_title='第四轮唯一性确认',
-                section_title='suggest冲突',
-                key_name='suggest',
-                conflict_items=suggest_items,
-                record_path=round4_suggest_record_path,
+                key_configs=[
+                    ('suggest', 'suggest冲突', suggest_items, round4_suggest_record_path),
+                    ('watch', 'watch冲突', watch_items, round5_watch_record_path),
+                ],
             )
         except KeyboardInterrupt as error:
             print(str(error))
             return
-        round4_results, round4_solved_count = apply_manual_choices(round3_results, 'suggest', suggest_items, suggest_choice_map)
-        print(f'- 第四轮人工处理 suggest 冲突目录数：{round4_solved_count}')
+        round4_results, round4_suggest_solved_count = apply_manual_choices(
+            round3_results, 'suggest', suggest_items, merged_choice_map
+        )
+        round4_results, round4_watch_solved_count = apply_manual_choices(
+            round4_results, 'watch', watch_items, merged_choice_map
+        )
+        print(f'- 第四轮人工处理 suggest 冲突目录数：{round4_suggest_solved_count}')
+        print(f'- 第四轮人工处理 watch 冲突目录数：{round4_watch_solved_count}')
         save_cached_results(round4_cache_path, round4_results)
         write_valid_dicts_pdf(round4_summary_path, round4_results)
         write_valid_dicts_report(round4_report_path, round4_results)
@@ -1028,28 +1072,15 @@ def main() -> None:
     if not round4_summary_path.exists() or not round4_report_path.exists():
         write_valid_dicts_pdf(round4_summary_path, round4_results)
         write_valid_dicts_report(round4_report_path, round4_results)
-    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（人工处理 suggest 冲突）')
+    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（人工处理 suggest/watch 冲突）')
 
     round5_ready = round5_cache_path.exists() and round5_summary_path.exists() and round5_report_path.exists()
     if round5_ready:
         round5_results = load_cached_results(round5_cache_path)
         print(f'检测到第五轮确认结果，跳过第五轮计算：{round5_cache_path}')
     else:
-        round4_conflict_exam_dirs = load_round3_conflict_exam_dirs(round4_summary_path)
-        watch_items = build_manual_conflict_items(round4_results, 'watch', round4_conflict_exam_dirs['watch'])
-        try:
-            watch_choice_map = run_manual_uniqueness_round(
-                round_title='第五轮唯一性确认',
-                section_title='watch冲突',
-                key_name='watch',
-                conflict_items=watch_items,
-                record_path=round5_watch_record_path,
-            )
-        except KeyboardInterrupt as error:
-            print(str(error))
-            return
-        round5_results, round5_solved_count = apply_manual_choices(round4_results, 'watch', watch_items, watch_choice_map)
-        print(f'- 第五轮人工处理 watch 冲突目录数：{round5_solved_count}')
+        round5_results = round4_results
+        print('第五轮已调整为兼容轮次：沿用第四轮结果，不再单独人工处理 watch。')
         save_cached_results(round5_cache_path, round5_results)
         write_valid_dicts_pdf(round5_summary_path, round5_results)
         write_valid_dicts_report(round5_report_path, round5_results)
@@ -1058,7 +1089,7 @@ def main() -> None:
     if not round5_summary_path.exists() or not round5_report_path.exists():
         write_valid_dicts_pdf(round5_summary_path, round5_results)
         write_valid_dicts_report(round5_report_path, round5_results)
-    print_summary(round5_summary_path, round5_report_path, round5_results, title='第五轮唯一性确认（人工处理 watch 冲突）')
+    print_summary(round5_summary_path, round5_report_path, round5_results, title='第五轮唯一性确认（兼容输出轮次）')
 
     write_valid_dicts_pdf(legacy_summary_path, round5_results)
     write_valid_dicts_report(legacy_report_path, round5_results)

@@ -4,4 +4,4 @@ paths:
   output_dir: /home/Lim/outputs/project4  # solve_conflicted_pdfs.py 输出根目录
   process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1~round5 结果及人工选择记录）
   suggest_solve_file_name: solve_conflicted_suggest.csv  # 第四轮 suggest 人工唯一性确认记录文件名
-  watch_solve_file_name: solve_conflicted_watch.csv  # 第五轮 watch 人工唯一性确认记录文件名
+  watch_solve_file_name: solve_conflicted_watch.csv  # 第四轮 watch 人工唯一性确认记录文件名
