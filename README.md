@@ -135,6 +135,8 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 第四轮唯一性确认补充规则：
 
 - 第四轮统一统计 `suggest` 与 `watch` 冲突：不做唯一值确认，不移除冲突键，仅统计冲突目录数与冲突项数量；
+- 第四轮定位为“兼容记录轮次”而非“继续处理轮次”：完成后会输出“冲突已记录”，并将 `suggest/watch` 视为“已记录冲突”；
+- 第四轮完成后，若检查目录仅剩 `suggest/watch` 冲突，则该检查目录记为有效目录（可进入后续处理）；仅当仍存在其他键冲突时，才视为“冲突未完全解决”；
 - 每轮完成后都会生成该轮的 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
 - 第四轮完成后，脚本会更新数据集根目录兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 

@@ -704,6 +704,7 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
 def apply_round4_suggest_watch_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
     patched_results: list[ExamScanResult] = []
     stats = {'suggest_dir': 0, 'watch_dir': 0, 'suggest_conflict_num': 0, 'watch_conflict_num': 0}
+    recorded_conflict_keys = {'suggest', 'watch'}
 
     for item in results:
         for key_name in ('suggest', 'watch'):
@@ -717,7 +718,7 @@ def apply_round4_suggest_watch_rules(results: list[ExamScanResult]) -> tuple[lis
         patched_results.append(
             ExamScanResult(
                 exam_dir=item.exam_dir,
-                is_valid=item.is_valid,
+                is_valid=not [key for key in item.conflict_keys if key not in recorded_conflict_keys],
                 conflict_keys=list(item.conflict_keys),
                 merged_valid_fields=dict(item.merged_valid_fields),
                 field_values=item.field_values,
@@ -866,12 +867,20 @@ def main() -> None:
         print(f"- 第四轮 suggest 冲突项数量：{round4_stats['suggest_conflict_num']}")
         print(f"- 第四轮 watch 冲突目录数：{round4_stats['watch_dir']}")
         print(f"- 第四轮 watch 冲突项数量：{round4_stats['watch_conflict_num']}")
+    print('第四轮冲突已记录（suggest/watch 为兼容记录，不计为未解决冲突）。')
 
     write_valid_dicts_pdf(legacy_summary_path, round4_results)
     write_valid_dicts_report(legacy_report_path, round4_results)
     print(f'第四轮完成，已更新数据集根目录兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
 
-    unresolved_round4_keys = sorted({key for item in round4_results for key in item.conflict_keys})
+    unresolved_round4_keys = sorted(
+        {
+            key
+            for item in round4_results
+            for key in item.conflict_keys
+            if key not in {'suggest', 'watch'}
+        }
+    )
     for unresolved_key in unresolved_round4_keys:
         print(f'{unresolved_key}冲突未完全解决')
 
