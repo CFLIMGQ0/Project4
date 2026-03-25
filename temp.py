@@ -44,6 +44,33 @@ EFFECTIVE_KEYS = {
 }
 
 
+class ProgressTracker:
+    def __init__(self, total: int, width: int = 30, prefix: str = "处理进度") -> None:
+        self.total = total
+        self.width = width
+        self.prefix = prefix
+        self.current = 0
+
+    def update(self, step: int = 1) -> None:
+        if self.total <= 0:
+            return
+        self.current = min(self.total, self.current + step)
+        ratio = self.current / self.total
+        filled = min(self.width, int(ratio * self.width))
+        bar = "#" * filled + "-" * (self.width - filled)
+        print(
+            f"\r{self.prefix}：[{bar}] {self.current}/{self.total} ({ratio:.0%})",
+            end="",
+            flush=True,
+        )
+
+    def close(self) -> None:
+        if self.total <= 0:
+            return
+        self.update(0)
+        print()
+
+
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
@@ -115,6 +142,8 @@ def main() -> None:
         return
 
     key_to_cn_names: dict[str, set[str]] = defaultdict(set)
+    total_pdfs = sum(1 for _ in iter_pdf_files(dataset_root))
+    progress = ProgressTracker(total=total_pdfs, prefix="遍历 PDF")
 
     for pdf_path in iter_pdf_files(dataset_root):
         try:
@@ -123,6 +152,10 @@ def main() -> None:
             enrich_with_field_values(key_to_cn_names, fields)
         except Exception:  # noqa: BLE001
             continue
+        finally:
+            progress.update()
+
+    progress.close()
 
     for key in sorted(EFFECTIVE_KEYS):
         cn_names = sorted(name for name in key_to_cn_names.get(key, set()) if name)
