@@ -154,7 +154,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `applyNo` → 检查号
 - `badness` → 不良反应
 - `bedId` → 病床号
-- `checkTime` → 检查日期（页面展示为“检查日期”，时间如 `16:09:11` 可能因排版换到下一行）
+- `checkTime` → 检查日期
 - `condition` → 患者一般情况
 - `doctorName` → 报告医师
 - `endoscopeName` → 镜号
