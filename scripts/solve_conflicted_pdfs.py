@@ -40,11 +40,6 @@ ROUND3_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round3.jsonl'
 ROUND4_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round4.csv'
 ROUND4_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round4.csv'
 ROUND4_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round4.jsonl'
-ROUND5_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round5.csv'
-ROUND5_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round5.csv'
-ROUND5_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round5.jsonl'
-ROUND4_SUGGEST_SOLVE_FILE_NAME = 'solve_conflicted_suggest.csv'
-ROUND5_WATCH_SOLVE_FILE_NAME = 'solve_conflicted_watch.csv'
 PROCESS_CACHE_DIR_NAME = 'cache_solve_conflicted_pdfs'
 LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
@@ -75,8 +70,6 @@ class PathConfig:
     dataset_base_root: Path
     output_dir: Path
     process_cache_dir_name: str
-    suggest_solve_file_name: str
-    watch_solve_file_name: str
 
 
 @dataclass
@@ -86,14 +79,6 @@ class ExamScanResult:
     conflict_keys: list[str]
     merged_valid_fields: dict[str, str]
     field_values: dict[str, set[str]]
-
-
-@dataclass
-class ManualConflictItem:
-    exam_dir: Path
-    key: str
-    options: list[str]
-    conflict_num: int
 
 
 class SimpleProgressBar:
@@ -202,22 +187,14 @@ def build_path_config(
     configured_process_cache_dir_name = process_cache_dir_name or str(
         paths_payload.get('process_cache_dir_name', PROCESS_CACHE_DIR_NAME)
     )
-    suggest_solve_file_name = normalize_text(str(paths_payload.get('suggest_solve_file_name', ROUND4_SUGGEST_SOLVE_FILE_NAME)))
-    watch_solve_file_name = normalize_text(str(paths_payload.get('watch_solve_file_name', ROUND5_WATCH_SOLVE_FILE_NAME)))
     cleaned_process_cache_dir_name = normalize_text(configured_process_cache_dir_name).strip('/\\')
     if not cleaned_process_cache_dir_name:
         raise ValueError('process_cache_dir_name 不能为空')
-    if not suggest_solve_file_name:
-        raise ValueError('suggest_solve_file_name 不能为空')
-    if not watch_solve_file_name:
-        raise ValueError('watch_solve_file_name 不能为空')
     return PathConfig(
         dataset_root=resolved_dataset_root,
         dataset_base_root=resolved_dataset_base_root,
         output_dir=resolved_output_dir,
         process_cache_dir_name=cleaned_process_cache_dir_name,
-        suggest_solve_file_name=suggest_solve_file_name,
-        watch_solve_file_name=watch_solve_file_name,
     )
 
 
@@ -731,173 +708,28 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
             writer.writerow(row)
 
 
-def load_round3_conflict_exam_dirs(round3_summary_path: Path) -> dict[str, set[str]]:
-    conflict_map: dict[str, set[str]] = {'suggest': set(), 'watch': set()}
-    if not round3_summary_path.exists():
-        return conflict_map
-
-    with round3_summary_path.open('r', encoding='utf-8-sig', newline='') as csv_file:
-        reader = csv.DictReader(csv_file)
-        for row in reader:
-            exam_dir = normalize_text(row.get('exam_dir', ''))
-            if not exam_dir:
-                continue
-            key_types = normalize_text(row.get('conflict_key_types', ''))
-            if not key_types:
-                continue
-            key_set = {normalize_text(item) for item in key_types.split('|') if normalize_text(item)}
-            if 'suggest' in key_set:
-                conflict_map['suggest'].add(exam_dir)
-            if 'watch' in key_set:
-                conflict_map['watch'].add(exam_dir)
-    return conflict_map
-
-
-def build_manual_conflict_items(
-    results: list[ExamScanResult], target_key: str, target_exam_dirs: set[str]
-) -> list[ManualConflictItem]:
-    conflict_items: list[ManualConflictItem] = []
-    for item in results:
-        exam_dir_text = str(item.exam_dir)
-        if exam_dir_text not in target_exam_dirs:
-            continue
-        if target_key not in item.conflict_keys:
-            continue
-        values = item.field_values.get(target_key, set())
-        options = sorted({normalize_text(value) for value in values if normalize_text(value)})
-        if len(options) < 2:
-            continue
-        conflict_items.append(
-            ManualConflictItem(
-                exam_dir=item.exam_dir,
-                key=target_key,
-                options=options,
-                conflict_num=len(options),
-            )
-        )
-    return conflict_items
-
-
-def load_manual_choice_map(record_path: Path, target_key: str) -> dict[str, str]:
-    if not record_path.exists():
-        return {}
-    choice_map: dict[str, str] = {}
-    with record_path.open('r', encoding='utf-8-sig', newline='') as csv_file:
-        reader = csv.DictReader(csv_file)
-        for row in reader:
-            key = normalize_text(row.get('key', ''))
-            exam_dir = normalize_text(row.get('exam_dir', ''))
-            selected_value = normalize_text(row.get('selected_value', ''))
-            if key != target_key or not exam_dir or not selected_value:
-                continue
-            choice_map[exam_dir] = selected_value
-    return choice_map
-
-
-def save_manual_choice_map(
-    record_path: Path, target_key: str, conflict_items: list[ManualConflictItem], choice_map: dict[str, str]
-) -> None:
-    record_path.parent.mkdir(parents=True, exist_ok=True)
-    with record_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(
-            ['exam_dir', 'key', 'key_num', 'selected_index', 'selected_value', 'options', 'updated_at']
-        )
-        for item in conflict_items:
-            exam_dir_text = str(item.exam_dir)
-            selected_value = choice_map.get(exam_dir_text, '')
-            selected_index = ''
-            if selected_value and selected_value in item.options:
-                selected_index = str(item.options.index(selected_value) + 1)
-            writer.writerow(
-                [
-                    exam_dir_text,
-                    target_key,
-                    item.conflict_num,
-                    selected_index,
-                    selected_value,
-                    '||'.join(item.options),
-                    datetime.now().isoformat(timespec='seconds'),
-                ]
-            )
-
-
-def run_manual_uniqueness_round(
-    round_title: str,
-    key_configs: list[tuple[str, str, list[ManualConflictItem], Path]],
-) -> dict[str, str]:
-    all_items = [item for _, _, items, _ in key_configs for item in items]
-    if not all_items:
-        print(f'{round_title}无需人工处理，未发现未解决的 suggest/watch 冲突。')
-        return {}
-
-    print(f'\n{round_title}主要解决 suggest/watch 冲突。')
-    merged_choice_map: dict[str, str] = {}
-    for key_name, section_title, conflict_items, record_path in key_configs:
-        if not conflict_items:
-            print(f'{round_title}{section_title}：无需人工处理。')
-            continue
-        choice_map = load_manual_choice_map(record_path, key_name)
-        completed = sum(1 for item in conflict_items if choice_map.get(str(item.exam_dir)) in item.options)
-        if completed == len(conflict_items):
-            print(f'{round_title}检测到已完成的历史选择记录：{record_path}')
-            merged_choice_map.update(choice_map)
-            continue
-
-        print(f'{section_title}：')
-        for index, item in enumerate(conflict_items, start=1):
-            exam_dir_text = str(item.exam_dir)
-            existing_value = choice_map.get(exam_dir_text)
-            if existing_value in item.options:
-                continue
-
-            print(f'{index}.{exam_dir_text}检查目录')
-            print(f'{key_name}_num：{item.conflict_num}')
-            for option_index, option in enumerate(item.options, start=1):
-                print(f'{key_name}{option_index}：{option}')
-
-            while True:
-                user_input = input(f'请输入数字选择 {key_name} 真值（1-{len(item.options)}，输入 q 可中断）：').strip().lower()
-                if user_input in {'q', 'quit', 'exit'}:
-                    save_manual_choice_map(record_path, key_name, conflict_items, choice_map)
-                    print(f'{round_title}已中断，当前进度已保存：{record_path}')
-                    raise KeyboardInterrupt(f'{round_title}人工确认被中断')
-                if user_input.isdigit():
-                    selected_index = int(user_input)
-                    if 1 <= selected_index <= len(item.options):
-                        choice_map[exam_dir_text] = item.options[selected_index - 1]
-                        save_manual_choice_map(record_path, key_name, conflict_items, choice_map)
-                        break
-                print('输入无效，请输入有效序号。')
-        merged_choice_map.update(choice_map)
-        print(f'{round_title}{section_title}已完成，选择记录文件：{record_path}')
-    return merged_choice_map
-
-
-def apply_manual_choices(
-    results: list[ExamScanResult],
-    key_name: str,
-    conflict_items: list[ManualConflictItem],
-    choice_map: dict[str, str],
-) -> tuple[list[ExamScanResult], int]:
-    choice_lookup = {str(item.exam_dir): set(item.options) for item in conflict_items}
+def apply_round4_suggest_watch_rules(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], dict[str, int]]:
     patched_results: list[ExamScanResult] = []
-    solved_count = 0
+    stats = {'suggest': 0, 'watch': 0}
+
     for item in results:
-        if key_name not in item.conflict_keys:
-            patched_results.append(item)
-            continue
-
-        exam_dir_text = str(item.exam_dir)
-        selected_value = choice_map.get(exam_dir_text)
-        valid_options = choice_lookup.get(exam_dir_text, set())
-        if not selected_value or selected_value not in valid_options:
-            patched_results.append(item)
-            continue
-
         new_merged_fields = dict(item.merged_valid_fields)
-        new_merged_fields[key_name] = selected_value
-        new_conflict_keys = [key for key in item.conflict_keys if key != key_name]
+        new_conflict_keys = list(item.conflict_keys)
+
+        for key_name in ('suggest', 'watch'):
+            if key_name not in new_conflict_keys:
+                continue
+            values = {normalize_text(value) for value in item.field_values.get(key_name, set()) if normalize_text(value)}
+            if not values:
+                new_merged_fields[key_name] = ''
+                new_conflict_keys = [key for key in new_conflict_keys if key != key_name]
+                stats[key_name] += 1
+                continue
+            chosen_value = max(sorted(values), key=lambda text: (len(text), text))
+            new_merged_fields[key_name] = chosen_value
+            new_conflict_keys = [key for key in new_conflict_keys if key != key_name]
+            stats[key_name] += 1
+
         patched_results.append(
             ExamScanResult(
                 exam_dir=item.exam_dir,
@@ -907,8 +739,7 @@ def apply_manual_choices(
                 field_values=item.field_values,
             )
         )
-        solved_count += 1
-    return patched_results, solved_count
+    return patched_results, stats
 
 
 def print_summary(
@@ -957,12 +788,6 @@ def main() -> None:
     round4_summary_path = process_output_dir / ROUND4_VALID_DICTS_SUMMARY_FILE_NAME
     round4_report_path = process_output_dir / ROUND4_VALID_DICTS_REPORT_FILE_NAME
     round4_cache_path = process_output_dir / ROUND4_CACHE_FILE_NAME
-    round5_summary_path = process_output_dir / ROUND5_VALID_DICTS_SUMMARY_FILE_NAME
-    round5_report_path = process_output_dir / ROUND5_VALID_DICTS_REPORT_FILE_NAME
-    round5_cache_path = process_output_dir / ROUND5_CACHE_FILE_NAME
-    round4_suggest_record_path = process_output_dir / path_config.suggest_solve_file_name
-    round5_watch_record_path = process_output_dir / path_config.watch_solve_file_name
-
     legacy_summary_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
     legacy_report_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_REPORT_FILE_NAME
 
@@ -1040,30 +865,11 @@ def main() -> None:
     round4_ready = round4_cache_path.exists() and round4_summary_path.exists() and round4_report_path.exists()
     if round4_ready:
         round4_results = load_cached_results(round4_cache_path)
+        round4_stats = None
         print(f'检测到第四轮确认结果，跳过第四轮计算：{round4_cache_path}')
     else:
-        round3_conflict_exam_dirs = load_round3_conflict_exam_dirs(round3_summary_path)
-        suggest_items = build_manual_conflict_items(round3_results, 'suggest', round3_conflict_exam_dirs['suggest'])
-        watch_items = build_manual_conflict_items(round3_results, 'watch', round3_conflict_exam_dirs['watch'])
-        try:
-            merged_choice_map = run_manual_uniqueness_round(
-                round_title='第四轮唯一性确认',
-                key_configs=[
-                    ('suggest', 'suggest冲突', suggest_items, round4_suggest_record_path),
-                    ('watch', 'watch冲突', watch_items, round5_watch_record_path),
-                ],
-            )
-        except KeyboardInterrupt as error:
-            print(str(error))
-            return
-        round4_results, round4_suggest_solved_count = apply_manual_choices(
-            round3_results, 'suggest', suggest_items, merged_choice_map
-        )
-        round4_results, round4_watch_solved_count = apply_manual_choices(
-            round4_results, 'watch', watch_items, merged_choice_map
-        )
-        print(f'- 第四轮人工处理 suggest 冲突目录数：{round4_suggest_solved_count}')
-        print(f'- 第四轮人工处理 watch 冲突目录数：{round4_watch_solved_count}')
+        round4_results, round4_stats = apply_round4_suggest_watch_rules(round3_results)
+        print('第四轮自动处理 suggest/watch 冲突，不再保留这两个字段的冲突。')
         save_cached_results(round4_cache_path, round4_results)
         write_valid_dicts_pdf(round4_summary_path, round4_results)
         write_valid_dicts_report(round4_report_path, round4_results)
@@ -1072,31 +878,17 @@ def main() -> None:
     if not round4_summary_path.exists() or not round4_report_path.exists():
         write_valid_dicts_pdf(round4_summary_path, round4_results)
         write_valid_dicts_report(round4_report_path, round4_results)
-    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（人工处理 suggest/watch 冲突）')
+    print_summary(round4_summary_path, round4_report_path, round4_results, title='第四轮唯一性确认（自动处理 suggest/watch 冲突）')
+    if round4_stats is not None:
+        print(f"- 第四轮自动处理 suggest 冲突目录数：{round4_stats['suggest']}")
+        print(f"- 第四轮自动处理 watch 冲突目录数：{round4_stats['watch']}")
 
-    round5_ready = round5_cache_path.exists() and round5_summary_path.exists() and round5_report_path.exists()
-    if round5_ready:
-        round5_results = load_cached_results(round5_cache_path)
-        print(f'检测到第五轮确认结果，跳过第五轮计算：{round5_cache_path}')
-    else:
-        round5_results = round4_results
-        print('第五轮已调整为兼容轮次：沿用第四轮结果，不再单独人工处理 watch。')
-        save_cached_results(round5_cache_path, round5_results)
-        write_valid_dicts_pdf(round5_summary_path, round5_results)
-        write_valid_dicts_report(round5_report_path, round5_results)
-        print(f'第五轮缓存与结果已生成：{process_output_dir}')
+    write_valid_dicts_pdf(legacy_summary_path, round4_results)
+    write_valid_dicts_report(legacy_report_path, round4_results)
+    print(f'第四轮完成，已更新数据集根目录兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
 
-    if not round5_summary_path.exists() or not round5_report_path.exists():
-        write_valid_dicts_pdf(round5_summary_path, round5_results)
-        write_valid_dicts_report(round5_report_path, round5_results)
-    print_summary(round5_summary_path, round5_report_path, round5_results, title='第五轮唯一性确认（兼容输出轮次）')
-
-    write_valid_dicts_pdf(legacy_summary_path, round5_results)
-    write_valid_dicts_report(legacy_report_path, round5_results)
-    print(f'第五轮完成，已更新数据集根目录兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
-
-    unresolved_round5_keys = sorted({key for item in round5_results for key in item.conflict_keys})
-    for unresolved_key in unresolved_round5_keys:
+    unresolved_round4_keys = sorted({key for item in round4_results for key in item.conflict_keys})
+    for unresolved_key in unresolved_round4_keys:
         print(f'{unresolved_key}冲突未完全解决')
 
 

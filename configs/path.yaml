@@ -2,6 +2,4 @@ paths:
   dataset_base_root: /home/Lim/datasets/project4  # 兼容文件 valid_dicts_pdf.csv / valid_dicts_report.csv 输出位置
   dataset_root: /home/Lim/datasets/project4/main_data
   output_dir: /home/Lim/outputs/project4  # solve_conflicted_pdfs.py 输出根目录
-  process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1~round5 结果及人工选择记录）
-  suggest_solve_file_name: solve_conflicted_suggest.csv  # 第四轮 suggest 人工唯一性确认记录文件名
-  watch_solve_file_name: solve_conflicted_watch.csv  # 第四轮 watch 人工唯一性确认记录文件名
+  process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1~round4 结果）

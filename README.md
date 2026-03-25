@@ -36,8 +36,6 @@
 - `paths.dataset_root`：实际数据目录（患者目录所在位置，脚本默认读取此路径）。
 - `paths.output_dir`：脚本输出根目录；
 - `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件子目录名（默认 `cache_solve_conflicted_pdfs`）。
-- `paths.suggest_solve_file_name`：第四轮 `suggest` 人工确认记录文件名（默认 `solve_conflicted_suggest.csv`）。
-- `paths.watch_solve_file_name`：第四轮 `watch` 人工确认记录文件名（默认 `solve_conflicted_watch.csv`）。
 
 目录组织示例如下：
 
@@ -108,15 +106,13 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 2. 对有效目录输出补充后的有效键结果。
 
 脚本输出文件默认写入 `paths.output_dir`（可通过 `--output-dir` 覆盖）。其中，过程文件会写入
-`paths.output_dir/paths.process_cache_dir_name`（默认目录名为 `cache_solve_conflicted_pdfs`），并区分五轮（第一轮 + 第二类 + 第三类 + 第四轮 + 第五轮）结果：
+`paths.output_dir/paths.process_cache_dir_name`（默认目录名为 `cache_solve_conflicted_pdfs`），并区分四轮（第一轮 + 第二类 + 第三类 + 第四轮）结果：
 
 - 第一轮：`valid_dicts_pdf_round1.csv`、`valid_dicts_report_round1.csv`、`solve_conflicted_pdfs_round1.jsonl`；
 - 第二类唯一性确认（非重要有效键）：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
 - 第三类唯一性确认（重要有效键）：`valid_dicts_pdf_round3.csv`、`valid_dicts_report_round3.csv`、`solve_conflicted_pdfs_round3.jsonl`；
-- 第四轮唯一性确认（人工处理 suggest/watch 冲突）：`valid_dicts_pdf_round4.csv`、`valid_dicts_report_round4.csv`、`solve_conflicted_pdfs_round4.jsonl`；
-- 第五轮唯一性确认（兼容输出轮次，直接复用第四轮结果）：`valid_dicts_pdf_round5.csv`、`valid_dicts_report_round5.csv`、`solve_conflicted_pdfs_round5.jsonl`；
-- 人工选择进度文件：`solve_conflicted_suggest.csv`、`solve_conflicted_watch.csv`；
-- 为兼容历史流程，最终（第五轮）结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 第四轮唯一性确认（自动处理 suggest/watch 冲突）：`valid_dicts_pdf_round4.csv`、`valid_dicts_report_round4.csv`、`solve_conflicted_pdfs_round4.jsonl`；
+- 最终（第四轮）结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
 
 第二类唯一性确认（非重要有效键）冲突处理规则：
 
@@ -138,15 +134,17 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `watchResult` 冲突：按逗号拆分为多个类型后合并去重。
 - `suggest` 冲突：仅当短文本被长文本完整包含时才消解并保留更完整的长文本；若互不包含则保留冲突。
 
-第四轮与第五轮唯一性确认补充规则：
+第四轮唯一性确认补充规则：
 
-- 第四轮读取 `valid_dicts_pdf_round3.csv`，按检查目录同时列出仍未解决的 `suggest` 与 `watch` 冲突，并逐条要求输入数字选择真值；
-- 第五轮不再新增人工输入，仅用于生成兼容轮次输出；
-- 选择记录分别写入 `solve_conflicted_suggest.csv` 与 `solve_conflicted_watch.csv`；
-- 若中途输入 `q/quit/exit` 中断，脚本会先保存进度，下次重跑自动续接未完成条目；
-- 每次重跑第四轮时都会先检查对应记录文件：若全部完成则直接跳过；若未完成则继续未完成进度；
+- 第四轮会自动处理 `suggest` 与 `watch` 剩余冲突：按候选值文本长度优先（同长度按字典序）选取唯一值，并从冲突键中移除；
 - 每轮完成后都会生成该轮的 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
-- 仅当第五轮完成后，脚本才会更新数据集根目录兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 第四轮完成后，脚本会更新数据集根目录兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+
+新增输出指标说明（`valid_dicts_pdf_roundX.csv`）：
+
+- `suggest_num`：若 `suggest` 无冲突则固定为 `1`；若存在冲突且候选值数量为 `n`，则记录为 `n`；
+- `watch_num`：若 `watch` 无冲突则固定为 `1`；若存在冲突且候选值数量为 `n`，则记录为 `n`；
+- `conflict_key_types` 中会按数量展开：例如 `suggest_num=3` 时会出现 `suggest|suggest|suggest`，`watch_num=2` 时会出现 `watch|watch`。
 
 新增输出指标说明（`valid_dicts_pdf_roundX.csv`）：
 
