@@ -19,6 +19,7 @@ except ImportError:
 
 @dataclass
 class PathConfig:
+    dataset_base_root: Path
     report_csv_path: Path
 
 
@@ -81,7 +82,7 @@ def build_path_config(config_path: Path, report_csv_override: Path | None) -> Pa
         if report_csv_override is not None
         else resolve_path(str(report_csv_config)) if report_csv_config else (dataset_base_root / 'valid_dicts_report.csv').resolve()
     )
-    return PathConfig(report_csv_path=report_csv_path)
+    return PathConfig(dataset_base_root=dataset_base_root, report_csv_path=report_csv_path)
 
 
 def load_report_rows(report_csv_path: Path) -> list[dict[str, str]]:
@@ -115,11 +116,42 @@ def load_report_title_counts(rows: list[dict[str, str]]) -> Counter[str]:
     return title_counts
 
 
-def print_report_title_counts(title_counts: Counter[str]) -> None:
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff', '.webp', '.dcm'}
+
+
+def count_images_for_exam(exam_dir: Path) -> int:
+    img_dir = exam_dir / 'img'
+    if not img_dir.is_dir():
+        return 0
+    return sum(1 for path in img_dir.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
+
+
+def load_report_title_image_counts(rows: list[dict[str, str]], dataset_base_root: Path) -> Counter[str]:
+    image_counts: Counter[str] = Counter()
+    progress = build_progress(total=len(rows), desc='统计各 reportTitle 的图像总数')
+    try:
+        for row in rows:
+            title = str(row.get('reportTitle', '')).strip()
+            if not title:
+                progress.update(1)
+                continue
+
+            exam_dir_raw = str(row.get('exam_dir', '')).strip()
+            exam_dir = Path(exam_dir_raw).expanduser()
+            if not exam_dir.is_absolute():
+                exam_dir = (dataset_base_root / exam_dir).resolve()
+            image_counts[title] += count_images_for_exam(exam_dir)
+            progress.update(1)
+    finally:
+        progress.close()
+    return image_counts
+
+
+def print_report_title_counts(title_counts: Counter[str], image_counts: Counter[str]) -> None:
     sorted_title_counts = sorted(title_counts.items(), key=lambda item: (-item[1], item[0]))
     print(f'共发现 {len(sorted_title_counts)} 种 reportTitle（按出现次数降序）：')
     for idx, (title, count) in enumerate(sorted_title_counts, start=1):
-        print(f'{idx}. {title}: {count}')
+        print(f'{idx}. {title}: 报告 {count} 条，图像 {image_counts.get(title, 0)} 张')
 
 
 def main() -> None:
@@ -129,7 +161,8 @@ def main() -> None:
     rows = load_report_rows(config.report_csv_path)
     print(f'报告记录总数：{len(rows)}')
     title_counts = load_report_title_counts(rows)
-    print_report_title_counts(title_counts)
+    image_counts = load_report_title_image_counts(rows, config.dataset_base_root)
+    print_report_title_counts(title_counts, image_counts)
 
 
 if __name__ == '__main__':
