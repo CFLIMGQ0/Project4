@@ -1,7 +1,7 @@
 paths:
-  dataset_base_root: ./dataset  # 数据集根路径（说明文件与汇总 CSV 推荐放这里）
-  dataset_root: ./dataset/main_data
-  valid_dicts_pdf_csv: ./dataset/valid_dicts_pdf.csv
-  valid_dicts_report_csv: ./dataset/valid_dicts_report.csv
-  output_dir: ./outputs/project4  # solve_conflicted_pdfs.py 输出根目录
+  dataset_base_root: /home/Lim/datasets/project4  # 数据集根路径（说明文件与汇总 CSV 推荐放这里）
+  dataset_root: /home/Lim/datasets/project4/main_data
+  valid_dicts_pdf_csv: /home/Lim/datasets/project4/valid_dicts_pdf.csv
+  valid_dicts_report_csv: /home/Lim/datasets/project4/valid_dicts_report.csv
+  output_dir: /home/Lim/outputs/project4  # solve_conflicted_pdfs.py 输出根目录
   process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1~round4，第四轮仅统计并保留 suggest/watch 冲突；有冲突时 suggest_num/watch_num 记录总数量 n）
