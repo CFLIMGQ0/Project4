@@ -19,7 +19,7 @@
 
 `scripts/show_reportTitle.py` 用于统计 `valid_dicts_report.csv` 中的 `reportTitle` 类型分布。
 
-`temp.py` 已重写为一次性抽样脚本：会按 `reportTitle` 分类，从每个类型对应的检查目录中最多抽取 10 张图片，输出到 `paths.output_dir/report_title_samples/`（可通过命令行参数覆盖）。
+`temp.py` 已调整为一次性执行文件，仅用于临时任务或短期排查，不作为长期维护脚本。建议优先使用 `scripts/` 目录下的正式清洗脚本完成日常处理。
 
 ## 当前数据目录约定
 
@@ -82,17 +82,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
    python scripts/show_reportTitle.py
    ```
 
-2. 按 `reportTitle` 导出图像样本（每类最多 10 张，输出到 `paths.output_dir/report_title_samples/`）：
-
-   ```bash
-   python temp.py --clear-output
-   ```
-
-可选参数示例：
-
-```bash
-python temp.py --max-per-type 10 --run-dir-name report_title_samples --output-dir /your/output/path --clear-output
-```
+2. 临时脚本 `temp.py` 保持为一次性执行用途（不作为长期维护入口）。
 
 ## 使用提醒
 

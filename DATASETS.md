@@ -260,22 +260,12 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 两者都建议使用**相对路径**（例如 `./dataset/valid_dicts_pdf.csv`），以便迁移环境时不依赖绝对路径。
 
 
-## 12. reportTitle 图像抽样脚本（新增）
+## 12. reportTitle 统计脚本（新增）
 
 - `scripts/show_reportTitle.py`：统计 `valid_dicts_report.csv` 中 `reportTitle` 的类型及数量。
-- `temp.py`：按 `reportTitle` 进行图像抽样导出，每个类型最多抽取 10 张图片。
-
-默认行为：
-
-- 输入：`paths.valid_dicts_report_csv`；
-- 数据定位：读取每行 `exam_dir` 下的 `img/` 目录；
-- 输出：`paths.output_dir/report_title_samples/`；
-- 目录结构：`report_title_samples/<reportTitle类型目录>/xx_原图文件名`；
-- 数量限制：每个 `reportTitle` 类型最多保留 10 张（可用 `--max-per-type` 调整）。
 
 示例命令：
 
 ```bash
 python scripts/show_reportTitle.py
-python temp.py --clear-output
 ```
