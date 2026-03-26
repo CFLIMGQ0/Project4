@@ -147,11 +147,26 @@ def load_report_title_image_counts(rows: list[dict[str, str]], dataset_base_root
     return image_counts
 
 
-def print_report_title_counts(title_counts: Counter[str], image_counts: Counter[str]) -> None:
-    sorted_title_counts = sorted(title_counts.items(), key=lambda item: (-item[1], item[0]))
-    print(f'共发现 {len(sorted_title_counts)} 种 reportTitle（按出现次数降序）：')
-    for idx, (title, count) in enumerate(sorted_title_counts, start=1):
-        print(f'{idx}. {title}: 报告 {count} 条，图像 {image_counts.get(title, 0)} 张')
+def group_title_counts_by_digestive_part(title_counts: Counter[str]) -> dict[str, Counter[str]]:
+    grouped: dict[str, Counter[str]] = {'胃': Counter(), '肠': Counter()}
+    for title, count in title_counts.items():
+        if '胃' in title:
+            grouped['胃'][title] = count
+        elif '肠' in title:
+            grouped['肠'][title] = count
+    return grouped
+
+
+def print_report_title_counts_by_group(grouped_counts: dict[str, Counter[str]], image_counts: Counter[str]) -> None:
+    for group_name in ('胃', '肠'):
+        group_counter = grouped_counts.get(group_name, Counter())
+        sorted_items = sorted(group_counter.items(), key=lambda item: (-item[1], item[0]))
+        print(f'\n【{group_name}】共 {len(sorted_items)} 种 reportTitle（按报告数量降序）')
+        if not sorted_items:
+            print('无匹配记录')
+            continue
+        for idx, (title, count) in enumerate(sorted_items, start=1):
+            print(f'{idx}. {title}: 报告 {count} 条，图像 {image_counts.get(title, 0)} 张')
 
 
 def main() -> None:
@@ -162,7 +177,8 @@ def main() -> None:
     print(f'报告记录总数：{len(rows)}')
     title_counts = load_report_title_counts(rows)
     image_counts = load_report_title_image_counts(rows, config.dataset_base_root)
-    print_report_title_counts(title_counts, image_counts)
+    grouped_counts = group_title_counts_by_digestive_part(title_counts)
+    print_report_title_counts_by_group(grouped_counts, image_counts)
 
 
 if __name__ == '__main__':
