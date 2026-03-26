@@ -34,6 +34,8 @@
 
 - `paths.dataset_base_root`：数据集根路径（说明文件、统计文件、辅助文件所在位置）；
 - `paths.dataset_root`：实际数据目录（患者目录所在位置，脚本默认读取此路径）。
+- `paths.valid_dicts_pdf_csv`：`valid_dicts_pdf.csv` 的显式路径（建议使用相对路径）；
+- `paths.valid_dicts_report_csv`：`valid_dicts_report.csv` 的显式路径（建议使用相对路径）；
 - `paths.output_dir`：脚本输出根目录；
 - `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件子目录名（默认 `cache_solve_conflicted_pdfs`）。
 
@@ -148,3 +150,10 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `conflict_instance_count`：冲突实例总数（`suggest`/`watch` 按其冲突数量展开计数，其余键按 1 计数）。
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。
+
+## `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv` 补充说明
+
+- `valid_dicts_pdf.csv`：PDF 粒度结果文件。通常用于查看每份 PDF 的冲突情况、来源与统计指标（如 `suggest_num`、`watch_num`、`conflict_instance_count`）。
+- `valid_dicts_report.csv`：检查目录粒度结果文件。通常用于查看每次检查最终确认后的字段值（含 `reportTitle`），并作为后续统计/分析输入。
+
+建议在 `configs/path.yaml` 中通过 `paths.valid_dicts_pdf_csv` 与 `paths.valid_dicts_report_csv` 显式配置两者路径，并使用相对路径，避免环境迁移时依赖固定绝对目录。

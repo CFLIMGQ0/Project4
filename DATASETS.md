@@ -13,6 +13,8 @@
 
 - `paths.dataset_base_root`：数据集根路径（说明文件、统计结果、辅助文件）；
 - `paths.dataset_root`：实际数据目录（患者目录，脚本读取该目录）。
+- `paths.valid_dicts_pdf_csv`：有效检查目录的 PDF 级汇总 CSV（显式路径，建议相对路径）；
+- `paths.valid_dicts_report_csv`：有效检查目录的报告级汇总 CSV（显式路径，建议相对路径）；
 - `paths.output_dir`：脚本输出根目录；
 - `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件目录名（默认 `cache_solve_conflicted_pdfs`）。
 
@@ -243,3 +245,16 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `conflict_instance_count`：冲突实例总数（`suggest`/`watch` 按其冲突数量展开计数，其余冲突键按 1 计数）。
 
 该输出用于后续筛选高置信检查目录与构建键值分析样本，并支持按轮次缓存续跑。
+
+## 11. 兼容汇总文件内容说明（`valid_dicts_pdf.csv` / `valid_dicts_report.csv`）
+
+你目前已准备好两份兼容汇总文件：
+
+- `valid_dicts_pdf.csv`：**PDF 级别汇总**，通常是一条 PDF 记录对应一行，主要用于排查冲突来源、定位具体 PDF，以及观察 `suggest_num` / `watch_num` / `conflict_instance_count` 等冲突统计指标。
+- `valid_dicts_report.csv`：**检查目录级汇总**，通常是一条“最终确认后的检查目录记录”对应一行，包含用于分析与建模准备的关键字段（例如 `reportTitle`、`namePatient`、`watchResult` 等）。
+
+推荐配置方式（以 `configs/path.yaml` 为准）：
+
+- `paths.valid_dicts_pdf_csv`：显式写入 `valid_dicts_pdf.csv` 路径；
+- `paths.valid_dicts_report_csv`：显式写入 `valid_dicts_report.csv` 路径；
+- 两者都建议使用**相对路径**（例如 `./dataset/valid_dicts_pdf.csv`），以便迁移环境时不依赖绝对路径。

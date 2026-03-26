@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
         '--report-csv',
         type=Path,
         default=None,
-        help='可选：覆盖配置中的 valid_dicts_report.csv 路径（默认 dataset_base_root/valid_dicts_report.csv）',
+        help='可选：覆盖配置中的 valid_dicts_report_csv 路径（未配置时默认 dataset_base_root/valid_dicts_report.csv）',
     )
     return parser.parse_args()
 
@@ -83,10 +83,11 @@ def build_path_config(config_path: Path, dataset_root_override: Path | None, rep
         else resolve_path(str(paths_payload['dataset_root']))
     )
     dataset_base_root = resolve_path(str(paths_payload['dataset_base_root']))
+    report_csv_config = paths_payload.get('valid_dicts_report_csv')
     report_csv_path = (
         report_csv_override.expanduser().resolve()
         if report_csv_override is not None
-        else (dataset_base_root / 'valid_dicts_report.csv').resolve()
+        else resolve_path(str(report_csv_config)) if report_csv_config else (dataset_base_root / 'valid_dicts_report.csv').resolve()
     )
     return PathConfig(dataset_root=dataset_root, report_csv_path=report_csv_path)
 
@@ -99,34 +100,56 @@ def iter_exam_dirs(patient_dir: Path) -> list[Path]:
     return sorted(path for path in patient_dir.iterdir() if path.is_dir())
 
 
-def is_exam_name_consistent(patient_name: str, exam_name: str) -> bool:
-    # 兼容“完全相同”与“检查目录以患者名开头（如加后缀）”两种情况。
-    return exam_name == patient_name or exam_name.startswith(f'{patient_name}_') or exam_name.startswith(patient_name)
+def normalize_patient_name(name: str) -> str:
+    return name.strip().replace(' ', '')
 
 
-def check_exam_patient_consistency(patient_dirs: list[Path]) -> list[tuple[str, str]]:
-    mismatches: list[tuple[str, str]] = []
-    progress = build_progress(total=len(patient_dirs), desc='检查患者目录与检查目录名一致性')
+def extract_patient_name_from_exam_dir(exam_name: str) -> str:
+    raw = exam_name.strip()
+    if not raw:
+        return ''
+    for sep in ('_', '-', '（', '('):
+        if sep in raw:
+            raw = raw.split(sep, 1)[0]
+            break
+    return normalize_patient_name(raw)
+
+
+def check_exam_patient_consistency(patient_dirs: list[Path]) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+    mismatches: list[tuple[str, str, str]] = []
+    patient_name_map: dict[str, str] = {}
+    progress = build_progress(total=len(patient_dirs), desc='检查同一患者目录下检查目录中的病人名是否一致')
     try:
         for patient_dir in patient_dirs:
-            patient_name = patient_dir.name
             exam_dirs = iter_exam_dirs(patient_dir)
-            for exam_dir in exam_dirs:
-                exam_name = exam_dir.name
-                if not is_exam_name_consistent(patient_name, exam_name):
-                    mismatches.append((patient_name, exam_name))
+            extracted_names = [extract_patient_name_from_exam_dir(exam_dir.name) for exam_dir in exam_dirs]
+            non_empty_names = [name for name in extracted_names if name]
+
+            if non_empty_names:
+                canonical_name = non_empty_names[0]
+                patient_name_map[str(patient_dir)] = canonical_name
+
+            if len(exam_dirs) > 1 and len(set(non_empty_names)) > 1:
+                for exam_dir, extracted in zip(exam_dirs, extracted_names):
+                    mismatches.append((str(patient_dir), exam_dir.name, extracted or '（空）'))
+
+            if len(exam_dirs) == 1 and non_empty_names:
+                patient_name_map[str(patient_dir)] = non_empty_names[0]
+
+            if len(exam_dirs) > 1 and len(set(non_empty_names)) == 1 and non_empty_names:
+                patient_name_map[str(patient_dir)] = non_empty_names[0]
             progress.update(1)
     finally:
         progress.close()
-    return mismatches
+    return mismatches, patient_name_map
 
 
-def find_duplicate_patient_names(patient_dirs: list[Path]) -> dict[str, list[str]]:
+def find_duplicate_patient_names(patient_name_map: dict[str, str]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = defaultdict(list)
-    progress = build_progress(total=len(patient_dirs), desc='检查患者重名')
+    progress = build_progress(total=len(patient_name_map), desc='检查患者重名')
     try:
-        for patient_dir in patient_dirs:
-            grouped[patient_dir.name].append(str(patient_dir))
+        for patient_dir, patient_name in patient_name_map.items():
+            grouped[patient_name].append(patient_dir)
             progress.update(1)
     finally:
         progress.close()
@@ -160,11 +183,11 @@ def load_report_titles(report_csv_path: Path) -> set[str]:
     return titles
 
 
-def print_mismatch(mismatches: Iterable[tuple[str, str]]) -> None:
+def print_mismatch(mismatches: Iterable[tuple[str, str, str]]) -> None:
     records = sorted(set(mismatches))
-    print('发现患者目录与检查目录名不一致，详情如下：')
-    for idx, (patient_name, exam_name) in enumerate(records, start=1):
-        print(f'{idx}. 患者目录名：{patient_name} | 检查目录名：{exam_name}')
+    print('发现同一患者目录下检查目录中的病人名字不一致，详情如下：')
+    for idx, (patient_dir, exam_name, extracted_name) in enumerate(records, start=1):
+        print(f'{idx}. 患者目录：{patient_dir} | 检查目录：{exam_name} | 解析病人名：{extracted_name}')
 
 
 def print_duplicates(duplicates: dict[str, list[str]]) -> None:
@@ -192,13 +215,13 @@ def main() -> None:
     patient_dirs = iter_patient_dirs(config.dataset_root)
     print(f'患者目录总数：{len(patient_dirs)}')
 
-    mismatches = check_exam_patient_consistency(patient_dirs)
+    mismatches, patient_name_map = check_exam_patient_consistency(patient_dirs)
     if mismatches:
         print_mismatch(mismatches)
         return
 
-    print('步骤1通过：所有检查目录的病人名字与患者目录一致。')
-    duplicates = find_duplicate_patient_names(patient_dirs)
+    print('步骤1通过：同一患者目录下（当存在多个检查目录时）病人名字一致。')
+    duplicates = find_duplicate_patient_names(patient_name_map)
     if duplicates:
         print_duplicates(duplicates)
         return
