@@ -96,51 +96,66 @@ def iter_patient_dirs(dataset_root: Path) -> list[Path]:
     return sorted(path for path in dataset_root.iterdir() if path.is_dir())
 
 
-def iter_exam_dirs(patient_dir: Path) -> list[Path]:
-    return sorted(path for path in patient_dir.iterdir() if path.is_dir())
-
-
 def normalize_patient_name(name: str) -> str:
     return name.strip().replace(' ', '')
 
 
-def extract_patient_name_from_exam_dir(exam_name: str) -> str:
-    raw = exam_name.strip()
-    if not raw:
-        return ''
-    for sep in ('_', '-', '（', '('):
-        if sep in raw:
-            raw = raw.split(sep, 1)[0]
-            break
-    return normalize_patient_name(raw)
+def load_report_rows(report_csv_path: Path) -> list[dict[str, str]]:
+    if not report_csv_path.is_file():
+        raise FileNotFoundError(f'未找到报告汇总文件：{report_csv_path}')
+
+    with report_csv_path.open('r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fieldnames = reader.fieldnames or []
+
+    required = {'exam_dir', 'namePatient', 'reportTitle'}
+    missing = required - set(fieldnames)
+    if missing:
+        missing_fields = '、'.join(sorted(missing))
+        raise KeyError(f'{report_csv_path} 中缺少必需字段：{missing_fields}')
+    return rows
 
 
-def check_exam_patient_consistency(patient_dirs: list[Path]) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+def check_exam_patient_consistency(rows: list[dict[str, str]], patient_dirs: list[Path]) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
     mismatches: list[tuple[str, str, str]] = []
     patient_name_map: dict[str, str] = {}
-    progress = build_progress(total=len(patient_dirs), desc='检查同一患者目录下检查目录中的病人名是否一致')
+    patient_row_map: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    patient_scope = {str(path.resolve()) for path in patient_dirs}
+    progress = build_progress(total=len(rows), desc='检查同一患者目录下不同检查目录的 namePatient 是否一致')
+
     try:
-        for patient_dir in patient_dirs:
-            exam_dirs = iter_exam_dirs(patient_dir)
-            extracted_names = [extract_patient_name_from_exam_dir(exam_dir.name) for exam_dir in exam_dirs]
-            non_empty_names = [name for name in extracted_names if name]
+        for row in rows:
+            exam_dir_raw = str(row.get('exam_dir', '')).strip()
+            name_patient = normalize_patient_name(str(row.get('namePatient', '')).strip())
+            if not exam_dir_raw:
+                progress.update(1)
+                continue
 
-            if non_empty_names:
-                canonical_name = non_empty_names[0]
-                patient_name_map[str(patient_dir)] = canonical_name
+            exam_dir = Path(exam_dir_raw).expanduser().resolve()
+            patient_dir = str(exam_dir.parent)
+            if patient_scope and patient_dir not in patient_scope:
+                progress.update(1)
+                continue
 
-            if len(exam_dirs) > 1 and len(set(non_empty_names)) > 1:
-                for exam_dir, extracted in zip(exam_dirs, extracted_names):
-                    mismatches.append((str(patient_dir), exam_dir.name, extracted or '（空）'))
-
-            if len(exam_dirs) == 1 and non_empty_names:
-                patient_name_map[str(patient_dir)] = non_empty_names[0]
-
-            if len(exam_dirs) > 1 and len(set(non_empty_names)) == 1 and non_empty_names:
-                patient_name_map[str(patient_dir)] = non_empty_names[0]
+            patient_row_map[patient_dir].append((exam_dir.name, name_patient))
             progress.update(1)
     finally:
         progress.close()
+
+    for patient_dir, records in patient_row_map.items():
+        non_empty_names = [name for _, name in records if name]
+        if non_empty_names:
+            patient_name_map[patient_dir] = non_empty_names[0]
+
+        if len(records) <= 1:
+            continue
+
+        unique_names = set(non_empty_names)
+        if len(unique_names) > 1:
+            for exam_name, name_patient in records:
+                mismatches.append((patient_dir, exam_name, name_patient or '（空）'))
+
     return mismatches, patient_name_map
 
 
@@ -156,20 +171,7 @@ def find_duplicate_patient_names(patient_name_map: dict[str, str]) -> dict[str, 
     return {name: paths for name, paths in grouped.items() if len(paths) > 1}
 
 
-def load_report_titles(report_csv_path: Path) -> set[str]:
-    if not report_csv_path.is_file():
-        raise FileNotFoundError(f'未找到报告汇总文件：{report_csv_path}')
-
-    with report_csv_path.open('r', encoding='utf-8-sig', newline='') as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-
-    if not rows:
-        return set()
-
-    if 'reportTitle' not in reader.fieldnames:
-        raise KeyError(f'{report_csv_path} 中不存在 reportTitle 字段')
-
+def load_report_titles(rows: list[dict[str, str]]) -> set[str]:
     titles: set[str] = set()
     progress = build_progress(total=len(rows), desc='统计 reportTitle 类型')
     try:
@@ -215,19 +217,22 @@ def main() -> None:
     patient_dirs = iter_patient_dirs(config.dataset_root)
     print(f'患者目录总数：{len(patient_dirs)}')
 
-    mismatches, patient_name_map = check_exam_patient_consistency(patient_dirs)
+    rows = load_report_rows(config.report_csv_path)
+    print(f'报告记录总数：{len(rows)}')
+
+    mismatches, patient_name_map = check_exam_patient_consistency(rows, patient_dirs)
     if mismatches:
         print_mismatch(mismatches)
         return
 
-    print('步骤1通过：同一患者目录下（当存在多个检查目录时）病人名字一致。')
+    print('步骤1通过：同一患者目录下不同检查目录对应 PDF 的 namePatient 一致。')
     duplicates = find_duplicate_patient_names(patient_name_map)
     if duplicates:
         print_duplicates(duplicates)
         return
 
     print('步骤2通过：未发现患者重名。')
-    titles = load_report_titles(config.report_csv_path)
+    titles = load_report_titles(rows)
     print_report_titles(titles)
 
 
