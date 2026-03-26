@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import get_terminal_size
@@ -100,25 +101,25 @@ def load_report_rows(report_csv_path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def load_report_titles(rows: list[dict[str, str]]) -> set[str]:
-    titles: set[str] = set()
+def load_report_title_counts(rows: list[dict[str, str]]) -> Counter[str]:
+    title_counts: Counter[str] = Counter()
     progress = build_progress(total=len(rows), desc='统计 reportTitle 类型')
     try:
         for row in rows:
             title = str(row.get('reportTitle', '')).strip()
             if title:
-                titles.add(title)
+                title_counts[title] += 1
             progress.update(1)
     finally:
         progress.close()
-    return titles
+    return title_counts
 
 
-def print_report_titles(titles: set[str]) -> None:
-    sorted_titles = sorted(titles)
-    print(f'共发现 {len(sorted_titles)} 种 reportTitle：')
-    for idx, title in enumerate(sorted_titles, start=1):
-        print(f'{idx}. {title}')
+def print_report_title_counts(title_counts: Counter[str]) -> None:
+    sorted_title_counts = sorted(title_counts.items(), key=lambda item: (-item[1], item[0]))
+    print(f'共发现 {len(sorted_title_counts)} 种 reportTitle（按出现次数降序）：')
+    for idx, (title, count) in enumerate(sorted_title_counts, start=1):
+        print(f'{idx}. {title}: {count}')
 
 
 def main() -> None:
@@ -127,8 +128,8 @@ def main() -> None:
 
     rows = load_report_rows(config.report_csv_path)
     print(f'报告记录总数：{len(rows)}')
-    titles = load_report_titles(rows)
-    print_report_titles(titles)
+    title_counts = load_report_title_counts(rows)
+    print_report_title_counts(title_counts)
 
 
 if __name__ == '__main__':
