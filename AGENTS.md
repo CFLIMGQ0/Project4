@@ -1,4 +1,4 @@
-# AGENTS.md（给 Codex/Agent 的开发规矩）
+# AGENTS.md（给 Claude 的开发规矩）
 
 ## 语言规范（必须遵守）
 - 与用户沟通说明：使用中文（简体）。
