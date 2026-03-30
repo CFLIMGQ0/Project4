@@ -40,6 +40,7 @@
 - `paths.valid_dicts_report_csv`：`valid_dicts_report.csv` 的显式路径（建议使用相对路径）；
 - `paths.output_dir`：脚本输出根目录；
 - `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件子目录名（默认 `cache_solve_conflicted_pdfs`）。
+- `paths.check_similarity_dir_name`：`check_similarity.py` 输出子目录名（位于 `paths.output_dir` 下，默认 `check_similarity`）。
 
 目录组织示例如下：
 

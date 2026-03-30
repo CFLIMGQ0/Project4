@@ -10,7 +10,7 @@ reportTitle 类型生成相似度 / 距离邻接矩阵，帮助判断不同报�
   2. FID（Fréchet Inception Distance）—— 业界最广泛使用的分布距离指标
   3. MMD（Maximum Mean Discrepancy，高斯 RBF 核）—— 基于核方法的两样本检验
 
-输出（写入 paths.output_dir/check_data/）：
+输出（写入 paths.output_dir/check_similarity/）：
   - gastric/ 与 intestinal/ 各自包含 3 组热力图（PNG）+ 邻接矩阵（CSV）
   - group_stats.csv（每种 reportTitle 的图像总量与采样量）
   - summary.json（全局摘要）
@@ -148,7 +148,7 @@ def build_config(args: argparse.Namespace) -> PathConfig:
     return PathConfig(
         dataset_root=ds_root,
         report_csv=report_csv,
-        output_dir=out / "check_data",
+        output_dir=out / "check_similarity",
     )
 
 
@@ -157,7 +157,7 @@ def build_config(args: argparse.Namespace) -> PathConfig:
 # ═══════════════════════════════════════════════════════════════════════════
 def setup_logger(out_dir: Path) -> logging.Logger:
     out_dir.mkdir(parents=True, exist_ok=True)
-    lg = logging.getLogger("check_data")
+    lg = logging.getLogger("check_similarity")
     lg.setLevel(logging.INFO)
     lg.handlers.clear()
 

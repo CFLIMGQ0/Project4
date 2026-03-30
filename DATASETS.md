@@ -17,6 +17,7 @@
 - `paths.valid_dicts_report_csv`：有效检查目录的报告级汇总 CSV（显式路径，建议相对路径）；
 - `paths.output_dir`：脚本输出根目录；
 - `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件目录名（默认 `cache_solve_conflicted_pdfs`）。
+- `paths.check_similarity_dir_name`：`check_similarity.py` 输出子目录名（位于 `paths.output_dir` 下，默认 `check_similarity`）。
 
 因此，若需要切换数据环境、迁移服务器或调整输出位置，请优先修改 `configs/path.yaml`。
 
@@ -309,7 +310,7 @@ python scripts/show_reportTitle.py
 
 ## 14. reportTitle 同质性分析与分类（基于图像深度特征）
 
-基于 `scripts/check_similarity.py`（ResNet18 提取特征，每类采样上限 300 张），使用三种指标（质心余弦相似度、FID、MMD）对胃镜与肠镜各 reportTitle 类型的图像分布进行两两比较，结果存放于 `outputs/project4/check_similarity/`。
+基于 `scripts/check_similarity.py`（ResNet18 提取特征，每类采样上限 300 张），使用三种指标（质心余弦相似度、FID、MMD）对胃镜与肠镜各 reportTitle 类型的图像分布进行两两比较，结果存放于 `paths.output_dir/paths.check_similarity_dir_name`（具体路径见 `configs/path.yaml`）。
 
 判定标准：
 - **高度同质**：余弦相似度 ≥ 0.99 且 MMD ≤ 0.025 且 FID ≤ 0.10
