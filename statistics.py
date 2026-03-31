@@ -1,18 +1,38 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import json
-from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Iterable
+
+import cv2
+import numpy as np
+import pandas as pd
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 
 @dataclass
-class ProgressTracker:
+class AnalyzeConfig:
+    input_dir: Path
+    output_csv: Path
+    output_md: Path
+    recursive: bool
+    # 背景黑区阈值：灰度 <= black_threshold 判定为背景
+    black_threshold: int
+    # 形态学核尺寸（奇数更稳定）
+    morph_kernel: int
+    # 最小连通域面积占比（第一阶段硬阈值）
+    min_area_ratio: float
+    # 质心稳定阈值（归一化标准差）
+    centroid_std_ratio_threshold: float
+    # 离群检测的 z-score 阈值
+    zscore_threshold: float
+
+
+@dataclass
+class ProgressBar:
     total: int
-    prefix: str = "处理 PDF"
     width: int = 30
     current: int = 0
 
@@ -24,585 +44,344 @@ class ProgressTracker:
         if self.total <= 0:
             return
         ratio = self.current / self.total
-        filled = min(self.width, int(ratio * self.width))
+        filled = int(self.width * ratio)
         bar = "#" * filled + "-" * (self.width - filled)
-        print(
-            f"\r{self.prefix}进度：[{bar}] {self.current}/{self.total} ({ratio:.0%})",
-            end="",
-            flush=True,
-        )
+        print(f"\r处理进度: [{bar}] {self.current}/{self.total} ({ratio:.0%})", end="", flush=True)
 
     def close(self) -> None:
-        if self.total <= 0:
-            return
-        self.render()
-        print()
-
-from check_pdf import (
-    CONFIG_PATH,
-    MAX_PDF_SIZE_MB,
-    PdfProcessError,
-    PdfReader,
-    clean_inline,
-    extract_form_fields,
-    load_yaml_config,
-    normalize_value,
-    options_to_dict,
-    parse_pdf_objects,
-)
+        if self.total > 0:
+            self.render()
+            print()
 
 
-@dataclass
-class PathConfig:
-    dataset_root: Path
-    patient_validity_table: Path
-
-
-@dataclass
-class PdfStat:
-    patient_id: str
-    exam_id: str
-    pdf_path: Path
-    fields: dict[str, str]
-
-    @property
-    def field_count(self) -> int:
-        return len(self.fields)
-
-    @property
-    def non_empty_field_count(self) -> int:
-        return sum(1 for value in self.fields.values() if value)
-
-
-@dataclass
-class ExamDedupResult:
-    patient_id: str
-    exam_id: str
-    pdf_count: int
-    parsed_pdf_count: int
-    status: str
-    representative_pdf: Path | None = None
-    representative_non_empty_count: int = 0
-    representative_field_count: int = 0
-    conflict_keys: list[str] | None = None
-    skipped_reason: str = ""
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="统计全部患者 PDF 表单键及患者级去重结果")
+def parse_args() -> AnalyzeConfig:
+    parser = argparse.ArgumentParser(description="批量统计内镜图像有效区域位置稳定性")
+    parser.add_argument("--input-dir", type=Path, required=True, help="图像目录")
+    parser.add_argument("--output-csv", type=Path, default=Path("effective_region_per_image.csv"), help="逐图像明细 CSV")
+    parser.add_argument("--output-md", type=Path, default=Path("effective_region_summary.md"), help="汇总统计 Markdown")
+    parser.add_argument("--recursive", action="store_true", help="是否递归遍历子目录")
+    parser.add_argument("--black-threshold", type=int, default=20, help="背景黑区阈值（0~255）")
+    parser.add_argument("--morph-kernel", type=int, default=5, help="形态学核尺寸")
+    parser.add_argument("--min-area-ratio", type=float, default=0.05, help="最大连通域面积占比下限")
     parser.add_argument(
-        "--config",
-        type=Path,
-        default=CONFIG_PATH,
-        help="路径配置文件，默认使用 configs/path.yaml",
+        "--centroid-std-ratio-threshold",
+        type=float,
+        default=0.03,
+        help="质心稳定阈值（归一化后 x/y 标准差最大值阈值）",
     )
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=None,
-        help="可选：覆盖 path.yaml 中的 dataset_root",
-    )
-    parser.add_argument(
-        "--patient-validity-table",
-        type=Path,
-        default=None,
-        help="可选：覆盖 path.yaml 中的 patient_validity_table",
-    )
-    parser.add_argument(
-        "--max-patients",
-        type=int,
-        default=None,
-        help="可选：仅处理前 N 个患者，便于快速抽查",
-    )
-    parser.add_argument(
-        "--max-examples",
-        type=int,
-        default=10,
-        help="终端展示异常样例的最大条数，默认 10",
-    )
-    parser.add_argument(
-        "--output-json",
-        type=Path,
-        default=None,
-        help="可选：将完整统计结果保存为 JSON 文件",
-    )
-    return parser.parse_args()
+    parser.add_argument("--zscore-threshold", type=float, default=3.0, help="离群检测 z-score 阈值")
 
+    args = parser.parse_args()
 
-def build_path_config(
-    config_path: Path,
-    dataset_root: Path | None,
-    patient_validity_table: Path | None,
-) -> PathConfig:
-    payload = load_yaml_config(config_path.expanduser())
-    paths_payload = payload.get("paths")
-    if not isinstance(paths_payload, dict):
-        raise ValueError("path.yaml 必须包含 paths 分组")
-
-    config_dir = config_path.expanduser().resolve().parent
-
-    def resolve_path(raw_path: str) -> Path:
-        path = Path(raw_path).expanduser()
-        if path.is_absolute():
-            return path
-        return (config_dir.parent / path).resolve()
-
-    resolved_dataset_root = dataset_root.expanduser().resolve() if dataset_root is not None else resolve_path(str(paths_payload["dataset_root"]))
-    resolved_patient_validity_table = (
-        patient_validity_table.expanduser().resolve()
-        if patient_validity_table is not None
-        else resolve_path(str(paths_payload["patient_validity_table"]))
-    )
-    return PathConfig(
-        dataset_root=resolved_dataset_root,
-        patient_validity_table=resolved_patient_validity_table,
+    return AnalyzeConfig(
+        input_dir=args.input_dir,
+        output_csv=args.output_csv,
+        output_md=args.output_md,
+        recursive=args.recursive,
+        black_threshold=args.black_threshold,
+        morph_kernel=max(1, int(args.morph_kernel)),
+        min_area_ratio=float(args.min_area_ratio),
+        centroid_std_ratio_threshold=float(args.centroid_std_ratio_threshold),
+        zscore_threshold=float(args.zscore_threshold),
     )
 
 
-def iter_patient_dirs(dataset_root: Path) -> list[Path]:
-    return sorted(path for path in dataset_root.iterdir() if path.is_dir())
+def iter_image_paths(input_dir: Path, recursive: bool) -> list[Path]:
+    iterator: Iterable[Path]
+    if recursive:
+        iterator = input_dir.rglob("*")
+    else:
+        iterator = input_dir.iterdir()
+    return sorted(path for path in iterator if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
 
 
-def load_valid_patient_ids(patient_validity_table: Path) -> set[str]:
-    valid_patient_ids: set[str] = set()
-    with patient_validity_table.open("r", encoding="utf-8-sig", newline="") as csv_file:
-        reader = csv.reader(csv_file)
-        next(reader, None)
-        for row_index, row in enumerate(reader, start=2):
-            if len(row) < 2:
-                raise ValueError(f"patient_validity.csv 第 {row_index} 行列数不足，至少需要两列")
-
-            patient_id = row[0].strip()
-            is_valid = row[1].strip()
-            if not patient_id:
-                continue
-            if is_valid not in {"0", "1"}:
-                raise ValueError(f"patient_validity.csv 第 {row_index} 行第二列必须是 0 或 1")
-            if is_valid == "1":
-                valid_patient_ids.add(patient_id)
-    return valid_patient_ids
+def safe_zscore(values: pd.Series) -> pd.Series:
+    std = float(values.std(ddof=0))
+    if std < 1e-12:
+        return pd.Series(np.zeros(len(values)), index=values.index, dtype=float)
+    mean = float(values.mean())
+    return (values - mean) / std
 
 
-def filter_valid_patient_dirs(patient_dirs: list[Path], valid_patient_ids: set[str]) -> list[Path]:
-    return [path for path in patient_dirs if path.name in valid_patient_ids]
-
-
-def iter_exam_dirs(patient_dir: Path) -> list[Path]:
-    return sorted(path for path in patient_dir.iterdir() if path.is_dir())
-
-
-def iter_pdf_files(exam_dir: Path) -> list[Path]:
-    pdf_dir = exam_dir / "pdf"
-    if not pdf_dir.is_dir():
-        return []
-    return sorted(path for path in pdf_dir.rglob("*.pdf") if path.is_file())
-
-
-def extract_pdf_fields(pdf_path: Path) -> dict[str, str]:
-    if PdfReader is not None:
-        reader = PdfReader(str(pdf_path))
-        fields = reader.get_fields() or {}
-        extracted: dict[str, str] = {}
-        for field_name, field in fields.items():
-            value = clean_inline(field.get("/V"))
-            opt_map = options_to_dict(field.get("/Opt"))
-            display_value = opt_map.get(value, value) if opt_map else value
-            extracted[field_name] = normalize_value(display_value)
-        return extracted
-
-    pdf_size_mb = pdf_path.stat().st_size / (1024 * 1024)
-    if pdf_size_mb > MAX_PDF_SIZE_MB:
-        raise PdfProcessError(
-            f"文件大小为 {pdf_size_mb:.1f} MB，超过限制 {MAX_PDF_SIZE_MB} MB，已跳过以避免内存占用过高"
-        )
-
-    pdf_bytes = pdf_path.read_bytes()
-    if not pdf_bytes.startswith(b"%PDF"):
-        raise PdfProcessError("文件头不是有效的 PDF 标识")
-
-    objects = parse_pdf_objects(pdf_bytes)
-    if not objects:
-        raise PdfProcessError("未解析到 PDF 对象，可能是加密或结构异常文件")
-
-    return {key: normalize_value(value) for key, value in extract_form_fields(objects)}
-
-
-def collect_pdf_stats(
-    dataset_root: Path,
-    valid_patient_ids: set[str],
-    max_patients: int | None = None,
-) -> tuple[list[str], dict[tuple[str, str], int], list[PdfStat], list[dict[str, str]]]:
-    patient_dirs = filter_valid_patient_dirs(iter_patient_dirs(dataset_root), valid_patient_ids)
-    if max_patients is not None and max_patients > 0:
-        patient_dirs = patient_dirs[:max_patients]
-
-    patient_ids = [path.name for path in patient_dirs]
-    exam_pdf_totals: dict[tuple[str, str], int] = {}
-    pdf_stats: list[PdfStat] = []
-    errors: list[dict[str, str]] = []
-    exam_targets: list[tuple[Path, Path, list[Path]]] = []
-
-    for patient_dir in patient_dirs:
-        for exam_dir in iter_exam_dirs(patient_dir):
-            pdf_files = iter_pdf_files(exam_dir)
-            exam_pdf_totals[(patient_dir.name, exam_dir.name)] = len(pdf_files)
-            exam_targets.append((patient_dir, exam_dir, pdf_files))
-
-    total_pdf_count = sum(len(pdf_files) for _, _, pdf_files in exam_targets)
-    progress = ProgressTracker(total=total_pdf_count)
-    if total_pdf_count > 0:
-        progress.render()
-
-    for patient_dir, exam_dir, pdf_files in exam_targets:
-        for pdf_path in pdf_files:
-            try:
-                fields = extract_pdf_fields(pdf_path)
-                pdf_stats.append(
-                    PdfStat(
-                        patient_id=patient_dir.name,
-                        exam_id=exam_dir.name,
-                        pdf_path=pdf_path,
-                        fields=fields,
-                    )
-                )
-            except Exception as exc:
-                errors.append(
-                    {
-                        "patient_id": patient_dir.name,
-                        "exam_id": exam_dir.name,
-                        "pdf_path": str(pdf_path),
-                        "reason": str(exc),
-                    }
-                )
-            finally:
-                progress.update()
-
-    progress.close()
-    return patient_ids, exam_pdf_totals, pdf_stats, errors
-
-
-def summarize_keys(pdf_stats: list[PdfStat]) -> list[dict[str, int | str]]:
-    total_counter: Counter[str] = Counter()
-    non_empty_counter: Counter[str] = Counter()
-
-    for stat in pdf_stats:
-        for key, value in stat.fields.items():
-            total_counter[key] += 1
-            if value:
-                non_empty_counter[key] += 1
-
-    return [
-        {
-            "key": key,
-            "total_count": total_counter[key],
-            "non_empty_count": non_empty_counter[key],
+def analyze_single_image(image_path: Path, cfg: AnalyzeConfig) -> dict[str, object]:
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return {
+            "image_path": str(image_path.resolve()),
+            "width": np.nan,
+            "height": np.nan,
+            "x_min": np.nan,
+            "y_min": np.nan,
+            "x_max": np.nan,
+            "y_max": np.nan,
+            "bbox_width": np.nan,
+            "bbox_height": np.nan,
+            "component_area": 0,
+            "image_area": 0,
+            "area_ratio": 0.0,
+            "centroid_x": np.nan,
+            "centroid_y": np.nan,
+            "is_abnormal": True,
+            "abnormal_reason": "图像读取失败",
         }
-        for key in sorted(total_counter)
+
+    height, width = image.shape[:2]
+    image_area = int(width * height)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    bg_mask = (gray <= cfg.black_threshold).astype(np.uint8) * 255
+    non_bg_mask = cv2.bitwise_not(bg_mask)
+
+    k = cfg.morph_kernel
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    non_bg_mask = cv2.morphologyEx(non_bg_mask, cv2.MORPH_OPEN, kernel)
+    non_bg_mask = cv2.morphologyEx(non_bg_mask, cv2.MORPH_CLOSE, kernel)
+
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(non_bg_mask, connectivity=8)
+
+    if num_labels <= 1:
+        return {
+            "image_path": str(image_path.resolve()),
+            "width": width,
+            "height": height,
+            "x_min": np.nan,
+            "y_min": np.nan,
+            "x_max": np.nan,
+            "y_max": np.nan,
+            "bbox_width": np.nan,
+            "bbox_height": np.nan,
+            "component_area": 0,
+            "image_area": image_area,
+            "area_ratio": 0.0,
+            "centroid_x": np.nan,
+            "centroid_y": np.nan,
+            "is_abnormal": True,
+            "abnormal_reason": "未检测到有效连通域",
+        }
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    largest_idx = int(np.argmax(areas)) + 1
+
+    x = int(stats[largest_idx, cv2.CC_STAT_LEFT])
+    y = int(stats[largest_idx, cv2.CC_STAT_TOP])
+    w = int(stats[largest_idx, cv2.CC_STAT_WIDTH])
+    h = int(stats[largest_idx, cv2.CC_STAT_HEIGHT])
+    component_area = int(stats[largest_idx, cv2.CC_STAT_AREA])
+    area_ratio = component_area / image_area if image_area > 0 else 0.0
+    centroid_x = float(centroids[largest_idx, 0])
+    centroid_y = float(centroids[largest_idx, 1])
+
+    reasons: list[str] = []
+    if area_ratio < cfg.min_area_ratio:
+        reasons.append(f"最大连通域面积占比过小(<{cfg.min_area_ratio:.3f})")
+
+    return {
+        "image_path": str(image_path.resolve()),
+        "width": width,
+        "height": height,
+        "x_min": x,
+        "y_min": y,
+        "x_max": x + w - 1,
+        "y_max": y + h - 1,
+        "bbox_width": w,
+        "bbox_height": h,
+        "component_area": component_area,
+        "image_area": image_area,
+        "area_ratio": area_ratio,
+        "centroid_x": centroid_x,
+        "centroid_y": centroid_y,
+        "is_abnormal": len(reasons) > 0,
+        "abnormal_reason": "；".join(reasons),
+    }
+
+
+def aggregate_stats(df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    metrics = ["x_min", "y_min", "x_max", "y_max", "area_ratio", "centroid_x", "centroid_y"]
+    stats_summary: dict[str, dict[str, float]] = {}
+    for m in metrics:
+        vals = df[m].dropna()
+        stats_summary[m] = {
+            "mean": float(vals.mean()) if len(vals) else float("nan"),
+            "std": float(vals.std(ddof=0)) if len(vals) else float("nan"),
+        }
+    return stats_summary
+
+
+def apply_outlier_rules(df: pd.DataFrame, cfg: AnalyzeConfig) -> pd.DataFrame:
+    df = df.copy()
+    valid_mask = (~df["x_min"].isna()) & (~df["centroid_x"].isna())
+    valid_df = df.loc[valid_mask]
+
+    if len(valid_df) < 2:
+        return df
+
+    columns = ["x_min", "y_min", "x_max", "y_max", "area_ratio", "centroid_x", "centroid_y"]
+    zscores = {col: safe_zscore(valid_df[col]) for col in columns}
+
+    for idx in valid_df.index:
+        reasons = []
+        for col in ["x_min", "y_min", "x_max", "y_max"]:
+            if abs(zscores[col].loc[idx]) > cfg.zscore_threshold:
+                reasons.append(f"{col}离群(|z|>{cfg.zscore_threshold:.1f})")
+        if abs(zscores["centroid_x"].loc[idx]) > cfg.zscore_threshold or abs(zscores["centroid_y"].loc[idx]) > cfg.zscore_threshold:
+            reasons.append(f"质心离群(|z|>{cfg.zscore_threshold:.1f})")
+        if abs(zscores["area_ratio"].loc[idx]) > cfg.zscore_threshold:
+            reasons.append(f"面积占比离群(|z|>{cfg.zscore_threshold:.1f})")
+
+        if reasons:
+            old = str(df.at[idx, "abnormal_reason"]).strip()
+            merged = "；".join([r for r in ([old] + reasons) if r and r != "nan"])
+            df.at[idx, "abnormal_reason"] = merged
+            df.at[idx, "is_abnormal"] = True
+
+    return df
+
+
+def centroid_stability(df: pd.DataFrame, cfg: AnalyzeConfig) -> tuple[bool, float, float]:
+    valid = df.dropna(subset=["centroid_x", "centroid_y", "width", "height"])
+    if len(valid) == 0:
+        return False, float("nan"), float("nan")
+
+    cx_norm_std = float((valid["centroid_x"] / valid["width"]).std(ddof=0))
+    cy_norm_std = float((valid["centroid_y"] / valid["height"]).std(ddof=0))
+    is_stable = max(cx_norm_std, cy_norm_std) <= cfg.centroid_std_ratio_threshold
+    return is_stable, cx_norm_std, cy_norm_std
+
+
+def write_summary_markdown(
+    output_md: Path,
+    cfg: AnalyzeConfig,
+    df: pd.DataFrame,
+    stats_summary: dict[str, dict[str, float]],
+    stable: bool,
+    cx_norm_std: float,
+    cy_norm_std: float,
+) -> None:
+    abnormal_df = df[df["is_abnormal"] == True]
+    abnormal_paths = abnormal_df["image_path"].tolist()
+
+    lines = [
+        "# 内镜图像有效区域稳定性统计报告",
+        "",
+        "## 方法说明",
+        "- 目标：在不训练模型的前提下，基于图像预处理 + 连通域分析提取每张图像的有效区域。",
+        "- 流程：背景黑区识别 → 非背景掩膜构建 → 形态学增强 → 连通域分析 → 最大连通域作为有效区域。",
+        "",
+        "## 背景黑区识别策略",
+        f"- 灰度阈值法：gray <= {cfg.black_threshold} 判定为背景黑区。",
+        "- 为减小压缩噪声影响，非背景掩膜执行开运算 + 闭运算。",
+        f"- 形态学核大小：{cfg.morph_kernel}x{cfg.morph_kernel}。",
+        "",
+        "## 连通域分析策略",
+        "- 在非背景二值图上执行 8 邻域连通域分析。",
+        "- 取面积最大的连通域作为有效图像区域。",
+        f"- 若最大连通域面积占比 < {cfg.min_area_ratio:.3f}，记为异常。",
+        "",
+        "## 质心稳定性判定规则",
+        "- 对每张图像计算最大连通域质心 (centroid_x, centroid_y)。",
+        "- 计算归一化标准差：std(centroid_x/width)、std(centroid_y/height)。",
+        f"- 若 max(上述两者) <= {cfg.centroid_std_ratio_threshold:.4f}，判定“质心稳定”；否则“不稳定”。",
+        f"- 本批次判定结果：**{'稳定' if stable else '不稳定'}**。",
+        f"  - std(centroid_x/width) = {cx_norm_std:.6f}",
+        f"  - std(centroid_y/height) = {cy_norm_std:.6f}",
+        "",
+        "## 坐标与面积统计（均值 ± 标准差）",
     ]
 
+    for key in ["x_min", "y_min", "x_max", "y_max", "area_ratio", "centroid_x", "centroid_y"]:
+        mean = stats_summary[key]["mean"]
+        std = stats_summary[key]["std"]
+        lines.append(f"- {key}: {mean:.6f} ± {std:.6f}")
 
-def group_pdfs_by_exam(pdf_stats: list[PdfStat]) -> dict[tuple[str, str], list[PdfStat]]:
-    grouped: dict[tuple[str, str], list[PdfStat]] = defaultdict(list)
-    for stat in pdf_stats:
-        grouped[(stat.patient_id, stat.exam_id)].append(stat)
-    return grouped
-
-
-def find_conflict_keys(pdf_stats: list[PdfStat]) -> list[str]:
-    key_to_values: dict[str, set[str]] = defaultdict(set)
-    for stat in pdf_stats:
-        for key, value in stat.fields.items():
-            if value:
-                key_to_values[key].add(value)
-    return sorted(key for key, values in key_to_values.items() if len(values) > 1)
-
-
-def choose_representative(pdf_stats: list[PdfStat]) -> PdfStat:
-    return max(
-        pdf_stats,
-        key=lambda item: (
-            item.non_empty_field_count,
-            item.field_count,
-            item.pdf_path.name,
-        ),
+    lines.extend(
+        [
+            "",
+            "## 异常图像统计",
+            f"- 异常图像数量：{len(abnormal_df)} / {len(df)}",
+            f"- 离群检测 z-score 阈值：{cfg.zscore_threshold:.2f}",
+            "",
+            "## 异常图像路径列表",
+        ]
     )
 
+    if abnormal_paths:
+        lines.extend([f"- {p}" for p in abnormal_paths])
+    else:
+        lines.append("- 无")
 
-def build_exam_dedup_results(
-    exam_pdf_totals: dict[tuple[str, str], int],
-    pdf_stats: list[PdfStat],
-    errors: list[dict[str, str]],
-) -> list[ExamDedupResult]:
-    grouped_stats = group_pdfs_by_exam(pdf_stats)
-    error_count_by_exam: Counter[tuple[str, str]] = Counter((item["patient_id"], item["exam_id"]) for item in errors)
-    all_exam_keys = sorted(set(exam_pdf_totals) | set(grouped_stats) | set(error_count_by_exam))
-    results: list[ExamDedupResult] = []
-
-    for patient_id, exam_id in all_exam_keys:
-        exam_pdf_stats = sorted(grouped_stats.get((patient_id, exam_id), []), key=lambda item: item.pdf_path.name)
-        pdf_count = exam_pdf_totals.get((patient_id, exam_id), len(exam_pdf_stats) + error_count_by_exam[(patient_id, exam_id)])
-
-        if pdf_count == 0:
-            results.append(
-                ExamDedupResult(
-                    patient_id=patient_id,
-                    exam_id=exam_id,
-                    pdf_count=0,
-                    parsed_pdf_count=0,
-                    status="skipped",
-                    skipped_reason="该检查目录下没有 PDF 文件",
-                )
-            )
-            continue
-
-        if not exam_pdf_stats:
-            results.append(
-                ExamDedupResult(
-                    patient_id=patient_id,
-                    exam_id=exam_id,
-                    pdf_count=pdf_count,
-                    parsed_pdf_count=0,
-                    status="skipped",
-                    skipped_reason="该检查目录下 PDF 全部解析失败",
-                )
-            )
-            continue
-
-        conflict_keys = find_conflict_keys(exam_pdf_stats)
-        if conflict_keys:
-            results.append(
-                ExamDedupResult(
-                    patient_id=patient_id,
-                    exam_id=exam_id,
-                    pdf_count=pdf_count,
-                    parsed_pdf_count=len(exam_pdf_stats),
-                    status="failed",
-                    conflict_keys=conflict_keys,
-                )
-            )
-            continue
-
-        representative = choose_representative(exam_pdf_stats)
-        results.append(
-            ExamDedupResult(
-                patient_id=patient_id,
-                exam_id=exam_id,
-                pdf_count=pdf_count,
-                parsed_pdf_count=len(exam_pdf_stats),
-                status="success",
-                representative_pdf=representative.pdf_path,
-                representative_non_empty_count=representative.non_empty_field_count,
-                representative_field_count=representative.field_count,
-                skipped_reason="该检查目录存在部分 PDF 解析失败，但保留已成功解析结果" if error_count_by_exam[(patient_id, exam_id)] else "",
-            )
-        )
-
-    return results
-
-
-def summarize_patients(patient_ids: list[str], exam_results: list[ExamDedupResult]) -> dict[str, Any]:
-    patient_to_results: dict[str, list[ExamDedupResult]] = defaultdict(list)
-    for result in exam_results:
-        patient_to_results[result.patient_id].append(result)
-
-    success_patients: list[str] = []
-    failed_patients: list[str] = []
-    skipped_patients: list[str] = []
-
-    for patient_id in sorted(patient_ids):
-        results = patient_to_results.get(patient_id, [])
-        if not results:
-            skipped_patients.append(patient_id)
-            continue
-        statuses = {item.status for item in results}
-        if "failed" in statuses:
-            failed_patients.append(patient_id)
-        elif statuses == {"success"}:
-            success_patients.append(patient_id)
-        else:
-            skipped_patients.append(patient_id)
-
-    return {
-        "patient_count": len(patient_ids),
-        "dedup_success_patient_count": len(success_patients),
-        "dedup_failed_patient_count": len(failed_patients),
-        "dedup_skipped_patient_count": len(skipped_patients),
-        "dedup_success_patients": success_patients,
-        "dedup_failed_patients": failed_patients,
-        "dedup_skipped_patients": skipped_patients,
-    }
-
-
-def build_summary(
-    dataset_root: Path,
-    patient_ids: list[str],
-    pdf_stats: list[PdfStat],
-    errors: list[dict[str, str]],
-    exam_results: list[ExamDedupResult],
-) -> dict[str, Any]:
-    patient_summary = summarize_patients(patient_ids, exam_results)
-    return {
-        "dataset_root": str(dataset_root),
-        "parsed_pdf_count": len(pdf_stats),
-        "pdf_parse_error_count": len(errors),
-        "exam_count": len(exam_results),
-        "dedup_success_exam_count": sum(1 for item in exam_results if item.status == "success"),
-        "dedup_failed_exam_count": sum(1 for item in exam_results if item.status == "failed"),
-        "dedup_skipped_exam_count": sum(1 for item in exam_results if item.status == "skipped"),
-        **patient_summary,
-    }
-
-
-def build_console_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in summary.items()
-        if key not in {"dedup_success_patients", "dedup_failed_patients", "dedup_skipped_patients"}
-    }
-
-
-def to_jsonable_exam_results(exam_results: list[ExamDedupResult]) -> list[dict[str, Any]]:
-    payload: list[dict[str, Any]] = []
-    for item in exam_results:
-        payload.append(
-            {
-                "patient_id": item.patient_id,
-                "exam_id": item.exam_id,
-                "pdf_count": item.pdf_count,
-                "parsed_pdf_count": item.parsed_pdf_count,
-                "status": item.status,
-                "representative_pdf": str(item.representative_pdf) if item.representative_pdf else "",
-                "representative_non_empty_count": item.representative_non_empty_count,
-                "representative_field_count": item.representative_field_count,
-                "conflict_keys": item.conflict_keys or [],
-                "skipped_reason": item.skipped_reason,
-            }
-        )
-    return payload
-
-
-def print_key_stats(key_stats: list[dict[str, int | str]]) -> None:
-    print("\n一、全部 PDF 表单键统计")
-    print("=" * 80)
-    if not key_stats:
-        print("未解析到任何表单键。")
-        return
-
-    for item in key_stats:
-        print(f"- {item['key']}（出现 {item['total_count']} 次）：非空 {item['non_empty_count']} 次")
-
-
-def print_exam_stats(exam_results: list[ExamDedupResult], max_examples: int) -> None:
-    print("\n二、检查目录去重统计")
-    print("=" * 80)
-    success_count = sum(1 for item in exam_results if item.status == "success")
-    failed_count = sum(1 for item in exam_results if item.status == "failed")
-    skipped_count = sum(1 for item in exam_results if item.status == "skipped")
-    print(f"- 去重成功的检查目录数：{success_count}")
-    print(f"- 去重失败的检查目录数：{failed_count}")
-    print(f"- 跳过的检查目录数：{skipped_count}")
-
-    failed_examples = [item for item in exam_results if item.status == "failed"][:max_examples]
-    if failed_examples:
-        print("\n去重失败样例：")
-        for item in failed_examples:
-            print(
-                f"- 患者 {item.patient_id} / 检查 {item.exam_id}：冲突键 {', '.join(item.conflict_keys or [])}"
-            )
-
-    skipped_examples = [item for item in exam_results if item.status == "skipped"][:max_examples]
-    if skipped_examples:
-        print("\n跳过样例：")
-        for item in skipped_examples:
-            print(
-                f"- 患者 {item.patient_id} / 检查 {item.exam_id}：{item.skipped_reason or '无可用 PDF'}"
-            )
-
-
-def print_patient_stats(summary: dict[str, Any], exam_results: list[ExamDedupResult], max_examples: int) -> None:
-    print("\n三、患者级去重结果")
-    print("=" * 80)
-    print(f"- 参与统计的患者数：{summary['patient_count']}")
-    print(f"- 去重成功患者数：{summary['dedup_success_patient_count']}")
-    print(f"- 去重失败患者数：{summary['dedup_failed_patient_count']}")
-    print(f"- 跳过患者数：{summary['dedup_skipped_patient_count']}")
-
-    success_examples = [item for item in exam_results if item.status == "success"][:max_examples]
-    if success_examples:
-        print("\n去重成功样例（不展示代表 PDF 文件名）：")
-        for item in success_examples:
-            print(
-                f"- 患者 {item.patient_id} / 检查 {item.exam_id}："
-                f"代表结果非空键数={item.representative_non_empty_count}，"
-                f"总键数={item.representative_field_count}"
-            )
-
-
-def print_error_stats(errors: list[dict[str, str]], max_examples: int) -> None:
-    print("\n四、PDF 解析异常")
-    print("=" * 80)
-    print(f"- 解析失败 PDF 数：{len(errors)}")
-    for item in errors[:max_examples]:
-        print(
-            f"- 患者 {item['patient_id']} / 检查 {item['exam_id']} / 文件 {Path(item['pdf_path']).name}：{item['reason']}"
-        )
-
-
-def save_json(
-    output_json: Path,
-    summary: dict[str, Any],
-    key_stats: list[dict[str, int | str]],
-    exam_results: list[ExamDedupResult],
-    errors: list[dict[str, str]],
-) -> None:
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "summary": summary,
-        "key_stats": key_stats,
-        "exam_results": to_jsonable_exam_results(exam_results),
-        "pdf_errors": errors,
-    }
-    output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
-    args = parse_args()
-    path_config = build_path_config(args.config, args.dataset_root, args.patient_validity_table)
+    cfg = parse_args()
 
-    if not path_config.dataset_root.exists():
-        print(f"数据集根目录不存在：{path_config.dataset_root}")
-        return
-    if not path_config.dataset_root.is_dir():
-        print(f"数据集根路径不是目录：{path_config.dataset_root}")
-        return
-    if not path_config.patient_validity_table.exists():
-        print(f"患者有效性表格不存在：{path_config.patient_validity_table}")
-        return
-    if not path_config.patient_validity_table.is_file():
-        print(f"患者有效性表格路径不是文件：{path_config.patient_validity_table}")
-        return
+    if not cfg.input_dir.exists() or not cfg.input_dir.is_dir():
+        raise FileNotFoundError(f"输入目录不存在或不可读: {cfg.input_dir}")
 
-    valid_patient_ids = load_valid_patient_ids(path_config.patient_validity_table)
+    image_paths = iter_image_paths(cfg.input_dir, cfg.recursive)
+    total = len(image_paths)
 
-    patient_ids, exam_pdf_totals, pdf_stats, errors = collect_pdf_stats(
-        path_config.dataset_root,
-        valid_patient_ids=valid_patient_ids,
-        max_patients=args.max_patients,
-    )
-    key_stats = summarize_keys(pdf_stats)
-    exam_results = build_exam_dedup_results(exam_pdf_totals, pdf_stats, errors)
-    summary = build_summary(path_config.dataset_root, patient_ids, pdf_stats, errors, exam_results)
+    print(f"总图像数: {total}")
+    rows: list[dict[str, object]] = []
 
-    print("统计完成。")
-    print(json.dumps(build_console_summary(summary), ensure_ascii=False, indent=2))
-    print_key_stats(key_stats)
-    print_exam_stats(exam_results, args.max_examples)
-    print_patient_stats(summary, exam_results, args.max_examples)
-    print_error_stats(errors, args.max_examples)
+    progress = ProgressBar(total=total)
+    for image_path in image_paths:
+        rows.append(analyze_single_image(image_path, cfg))
+        progress.update()
+    progress.close()
 
-    if args.output_json is not None:
-        save_json(args.output_json.expanduser().resolve(), summary, key_stats, exam_results, errors)
-        print(f"\n完整 JSON 结果已保存到：{args.output_json.expanduser().resolve()}")
+    if not rows:
+        df = pd.DataFrame(
+            columns=[
+                "image_path",
+                "width",
+                "height",
+                "x_min",
+                "y_min",
+                "x_max",
+                "y_max",
+                "bbox_width",
+                "bbox_height",
+                "component_area",
+                "image_area",
+                "area_ratio",
+                "centroid_x",
+                "centroid_y",
+                "is_abnormal",
+                "abnormal_reason",
+            ]
+        )
+    else:
+        df = pd.DataFrame(rows)
+
+    if len(df) > 0:
+        df = apply_outlier_rules(df, cfg)
+
+    stats_summary = aggregate_stats(df) if len(df) > 0 else {
+        k: {"mean": float("nan"), "std": float("nan")}
+        for k in ["x_min", "y_min", "x_max", "y_max", "area_ratio", "centroid_x", "centroid_y"]
+    }
+    stable, cx_norm_std, cy_norm_std = centroid_stability(df, cfg) if len(df) > 0 else (False, float("nan"), float("nan"))
+
+    cfg.output_csv.parent.mkdir(parents=True, exist_ok=True)
+    cfg.output_md.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cfg.output_csv, index=False, encoding="utf-8-sig")
+    write_summary_markdown(cfg.output_md, cfg, df, stats_summary, stable, cx_norm_std, cy_norm_std)
+
+    abnormal_df = df[df["is_abnormal"] == True] if len(df) > 0 else pd.DataFrame()
+    success_count = int((~df["x_min"].isna()).sum()) if len(df) > 0 else 0
+
+    print(f"成功检测数: {success_count}")
+    print(f"异常图像数: {len(abnormal_df)}")
+    print("异常图像路径:")
+    if len(abnormal_df) == 0:
+        print("- 无")
+    else:
+        for p in abnormal_df["image_path"].tolist():
+            print(f"- {p}")
+
+    print(f"CSV 已生成: {cfg.output_csv.resolve()}")
+    print(f"Markdown 已生成: {cfg.output_md.resolve()}")
 
 
 if __name__ == "__main__":
