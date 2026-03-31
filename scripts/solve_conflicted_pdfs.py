@@ -693,6 +693,10 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
     for reserved_key in ('suggest', 'watch'):
         if reserved_key not in all_keys:
             all_keys.append(reserved_key)
+    ordered_keys = list(all_keys)
+    insert_anchor = 'specimen'
+    insert_position = ordered_keys.index(insert_anchor) + 1 if insert_anchor in ordered_keys else len(ordered_keys)
+    ordered_keys[insert_position:insert_position] = ['suggest_num', 'watch_num']
 
     def collect_conflict_values(item: ExamScanResult, key_name: str) -> list[str]:
         values: list[str] = []
@@ -706,7 +710,7 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(['exam_dir', 'suggest_num', 'watch_num', *all_keys])
+        writer.writerow(['exam_dir', *ordered_keys])
         for item in valid_results:
             suggest_values = collect_conflict_values(item, 'suggest')
             watch_values = collect_conflict_values(item, 'watch')
@@ -717,8 +721,10 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
                 merged_fields['suggest'] = ' | '.join(suggest_values)
             if watch_values:
                 merged_fields['watch'] = ' | '.join(watch_values)
-            row = [str(item.exam_dir), suggest_num, watch_num]
-            row.extend(merged_fields.get(key, '') for key in all_keys)
+            merged_fields['suggest_num'] = str(suggest_num)
+            merged_fields['watch_num'] = str(watch_num)
+            row = [str(item.exam_dir)]
+            row.extend(merged_fields.get(key, '') for key in ordered_keys)
             writer.writerow(row)
 
 
