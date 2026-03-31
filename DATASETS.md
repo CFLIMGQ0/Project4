@@ -209,7 +209,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_report_round4.csv`
   - `solve_conflicted_pdfs_round4.jsonl`
 - 兼容文件：
-  - `valid_dicts_pdf.csv`（写入 `paths.dataset_base_root`，等同第四轮汇总）
+  - `valid_dicts_pdf.csv`（写入 `paths.output_dir/paths.process_cache_dir_name`，等同第四轮汇总）
   - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第四轮报告）
 
 第二类唯一性确认（非重要有效键）冲突键规则：
@@ -235,7 +235,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 第四轮定位为“兼容记录轮次”：完成时会输出“冲突已记录”，将 `suggest/watch` 作为已记录冲突而非未解决冲突；
 - 第四轮结束后，若检查目录只剩 `suggest/watch` 冲突，则该检查目录判定为有效检查目录；仅当还有其他键冲突时，才记为“冲突未完全解决”；
 - 每轮完成后会生成该轮 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
-- 第四轮输出完成后，脚本会刷新兼容产物 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 第四轮输出完成后，脚本会刷新兼容产物：`valid_dicts_pdf.csv`（过程目录）与 `valid_dicts_report.csv`（数据集根目录）。
 
 `valid_dicts_pdf_roundX.csv` 新增冲突数量指标：
 
@@ -250,8 +250,8 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 你目前已准备好两份兼容汇总文件：
 
-- `valid_dicts_pdf.csv`：**PDF 级别汇总**，通常是一条 PDF 记录对应一行，主要用于排查冲突来源、定位具体 PDF，以及观察 `suggest_num` / `watch_num` / `conflict_instance_count` 等冲突统计指标。
-- `valid_dicts_report.csv`：**检查目录级汇总**，通常是一条“最终确认后的检查目录记录”对应一行，包含用于分析与建模准备的关键字段（例如 `reportTitle`、`namePatient`、`watchResult` 等）。
+- `valid_dicts_pdf.csv`：**PDF 级别汇总**，仅保留在过程目录 `paths.output_dir/paths.process_cache_dir_name`，不再写入数据集根目录。
+- `valid_dicts_report.csv`：**检查目录级汇总**，写入数据集根目录。第四轮会额外写入 `suggest_num`、`watch_num`，并将多值 `suggest/watch` 以 `watch1 | watch2 | ...` 形式拼接。
 
 推荐配置方式（以 `configs/path.yaml` 为准）：
 

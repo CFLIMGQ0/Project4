@@ -127,7 +127,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 第二类唯一性确认（非重要有效键）：`valid_dicts_pdf_round2.csv`、`valid_dicts_report_round2.csv`、`solve_conflicted_pdfs_round2.jsonl`；
 - 第三类唯一性确认（重要有效键）：`valid_dicts_pdf_round3.csv`、`valid_dicts_report_round3.csv`、`solve_conflicted_pdfs_round3.jsonl`；
 - 第四轮唯一性确认（统计 suggest/watch 冲突并保留）：`valid_dicts_pdf_round4.csv`、`valid_dicts_report_round4.csv`、`solve_conflicted_pdfs_round4.jsonl`；
-- 最终（第四轮）结果会同步写入数据集根目录（`paths.dataset_base_root`）下的 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 最终（第四轮）结果会将 `valid_dicts_pdf.csv` 写入过程目录 `paths.output_dir/paths.process_cache_dir_name`，并仅将 `valid_dicts_report.csv` 写入数据集根目录（`paths.dataset_base_root`）。
 
 第二类唯一性确认（非重要有效键）冲突处理规则：
 
@@ -153,7 +153,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 第四轮定位为“兼容记录轮次”而非“继续处理轮次”：完成后会输出“冲突已记录”，并将 `suggest/watch` 视为“已记录冲突”；
 - 第四轮完成后，若检查目录仅剩 `suggest/watch` 冲突，则该检查目录记为有效目录（可进入后续处理）；仅当仍存在其他键冲突时，才视为“冲突未完全解决”；
 - 每轮完成后都会生成该轮的 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
-- 第四轮完成后，脚本会更新数据集根目录兼容输出文件 `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv`。
+- 第四轮完成后，脚本会更新兼容输出：`valid_dicts_pdf.csv`（过程目录）与 `valid_dicts_report.csv`（数据集根目录）。
 
 新增输出指标说明（`valid_dicts_pdf_roundX.csv`）：
 
@@ -164,9 +164,9 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 脚本会在每轮开始前检查过程目录（`paths.output_dir/paths.process_cache_dir_name`）中是否已有该轮确认结果（`roundX` 的 csv + jsonl）。若存在则跳过该轮计算并直接进入下一轮；若不存在则执行该轮并落盘。
 
-## `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv` 补充说明
+## `valid_dicts_pdf.csv` 与 `valid_dicts_report.csv` 补充说明（已调整）
 
-- `valid_dicts_pdf.csv`：PDF 粒度结果文件。通常用于查看每份 PDF 的冲突情况、来源与统计指标（如 `suggest_num`、`watch_num`、`conflict_instance_count`）。
-- `valid_dicts_report.csv`：检查目录粒度结果文件。通常用于查看每次检查最终确认后的字段值（含 `reportTitle`），并作为后续统计/分析输入。
+- `valid_dicts_pdf.csv`：PDF 粒度结果文件，仅保留在过程目录 `paths.output_dir/paths.process_cache_dir_name` 下，不再同步到数据集根目录。
+- `valid_dicts_report.csv`：检查目录粒度结果文件，写入数据集根目录。第四轮会额外保存 `suggest_num`、`watch_num`，并将多值 `suggest/watch` 以 `watch1 | watch2 | ...` 的形式拼接保存。
 
 建议在 `configs/path.yaml` 中通过 `paths.valid_dicts_pdf_csv` 与 `paths.valid_dicts_report_csv` 显式配置两者路径，并使用相对路径，避免环境迁移时依赖固定绝对目录。

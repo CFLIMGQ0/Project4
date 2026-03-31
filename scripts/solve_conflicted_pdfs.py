@@ -690,14 +690,35 @@ def write_valid_dicts_pdf(output_path: Path, results: list[ExamScanResult]) -> N
 def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -> None:
     valid_results = [item for item in results if item.is_valid]
     all_keys = sorted({key for item in valid_results for key in item.merged_valid_fields.keys()})
+    for reserved_key in ('suggest', 'watch'):
+        if reserved_key not in all_keys:
+            all_keys.append(reserved_key)
+
+    def collect_conflict_values(item: ExamScanResult, key_name: str) -> list[str]:
+        values: list[str] = []
+        for raw_value in item.field_values.get(key_name, []):
+            cleaned = normalize_text(raw_value)
+            if not cleaned:
+                continue
+            values.append(cleaned)
+        return values
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(['exam_dir', *all_keys])
+        writer.writerow(['exam_dir', 'suggest_num', 'watch_num', *all_keys])
         for item in valid_results:
-            row = [str(item.exam_dir)]
-            row.extend(item.merged_valid_fields.get(key, '') for key in all_keys)
+            suggest_values = collect_conflict_values(item, 'suggest')
+            watch_values = collect_conflict_values(item, 'watch')
+            suggest_num = len(suggest_values) if suggest_values else (1 if 'suggest' in item.merged_valid_fields else 0)
+            watch_num = len(watch_values) if watch_values else (1 if 'watch' in item.merged_valid_fields else 0)
+            merged_fields = dict(item.merged_valid_fields)
+            if suggest_values:
+                merged_fields['suggest'] = ' | '.join(suggest_values)
+            if watch_values:
+                merged_fields['watch'] = ' | '.join(watch_values)
+            row = [str(item.exam_dir), suggest_num, watch_num]
+            row.extend(merged_fields.get(key, '') for key in all_keys)
             writer.writerow(row)
 
 
@@ -773,8 +794,8 @@ def main() -> None:
     round4_summary_path = process_output_dir / ROUND4_VALID_DICTS_SUMMARY_FILE_NAME
     round4_report_path = process_output_dir / ROUND4_VALID_DICTS_REPORT_FILE_NAME
     round4_cache_path = process_output_dir / ROUND4_CACHE_FILE_NAME
-    legacy_summary_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
     legacy_report_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_REPORT_FILE_NAME
+    legacy_summary_path = process_output_dir / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
 
     round1_ready = round1_cache_path.exists() and round1_summary_path.exists() and round1_report_path.exists()
     if round1_ready:
@@ -829,8 +850,6 @@ def main() -> None:
         save_cached_results(round3_cache_path, round3_results)
         write_valid_dicts_pdf(round3_summary_path, round3_results)
         write_valid_dicts_report(round3_report_path, round3_results)
-        write_valid_dicts_pdf(legacy_summary_path, round3_results)
-        write_valid_dicts_report(legacy_report_path, round3_results)
         print(f'第三类缓存与结果已生成：{process_output_dir}')
 
     if not round3_summary_path.exists() or not round3_report_path.exists():
@@ -871,7 +890,7 @@ def main() -> None:
 
     write_valid_dicts_pdf(legacy_summary_path, round4_results)
     write_valid_dicts_report(legacy_report_path, round4_results)
-    print(f'第四轮完成，已更新数据集根目录兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
+    print(f'第四轮完成，已更新兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
 
     unresolved_round4_keys = sorted(
         {
