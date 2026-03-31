@@ -15,6 +15,8 @@
 3. `fid_matrix.csv`
 4. `mmd_matrix.csv`
 
+默认矩阵目录为：`/home/Lim/outputs/project4/check_similarity/gastric`（即 `check_similarity/gastric`）。
+
 ## 核心算法
 采用“**多视图关系融合 + 边界样本裁剪**”：
 
@@ -48,6 +50,7 @@ python scripts/analyze_star_report_titles.py
 
 ```bash
 python scripts/analyze_star_report_titles.py \
+  --similarity-dir /home/Lim/outputs/project4/check_similarity/gastric \
   --valid-dicts-report-csv /path/to/valid_dicts_report.csv \
   --centroid-cosine-csv /path/to/centroid_cosine_similarity.csv \
   --fid-matrix-csv /path/to/fid_matrix.csv \

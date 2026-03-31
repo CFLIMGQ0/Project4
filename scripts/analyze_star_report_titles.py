@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fid-matrix-csv", type=Path, default=None)
     p.add_argument("--mmd-matrix-csv", type=Path, default=None)
     p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument(
+        "--similarity-dir",
+        type=Path,
+        default=None,
+        help="相似度矩阵目录（目录下应包含 centroid_cosine_similarity.csv / fid_matrix.csv / mmd_matrix.csv）",
+    )
     p.add_argument("--w-cos", type=float, default=1.0)
     p.add_argument("--w-fid", type=float, default=1.0)
     p.add_argument("--w-mmd", type=float, default=1.0)
@@ -61,7 +67,12 @@ def pick_inputs(args: argparse.Namespace) -> dict[str, Path]:
     paths = load_yaml_path(cfg)
 
     output_root = args.output_dir.expanduser().resolve() if args.output_dir else resolve(cfg_root, paths.get("output_dir", "./outputs"))
-    sim_dir = output_root / str(paths.get("check_similarity_dir_name", "check_similarity"))
+    # 默认优先指向 check_similarity/gastric（用户当前任务只分析胃镜）
+    sim_dir = (
+        args.similarity_dir.expanduser().resolve()
+        if args.similarity_dir
+        else (output_root / str(paths.get("check_similarity_dir_name", "check_similarity")) / "gastric")
+    )
 
     return {
         "report": args.valid_dicts_report_csv.expanduser().resolve() if args.valid_dicts_report_csv else resolve(cfg_root, paths.get("valid_dicts_report_csv", "valid_dicts_report.csv")),
