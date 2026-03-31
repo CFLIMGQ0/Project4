@@ -1,33 +1,41 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 import cv2
 import numpy as np
 import pandas as pd
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+try:
+    import yaml  # type: ignore
+except ImportError:
+    yaml = None
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+CONFIG_PATH = PROJECT_ROOT / "configs" / "path.yaml"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".gif", ".dcm"}
 
 
 @dataclass
 class AnalyzeConfig:
-    input_dir: Path
     output_csv: Path
     output_md: Path
-    recursive: bool
-    # 背景黑区阈值：灰度 <= black_threshold 判定为背景
     black_threshold: int
-    # 形态学核尺寸（奇数更稳定）
     morph_kernel: int
-    # 最小连通域面积占比（第一阶段硬阈值）
     min_area_ratio: float
-    # 质心稳定阈值（归一化标准差）
     centroid_std_ratio_threshold: float
-    # 离群检测的 z-score 阈值
     zscore_threshold: float
+
+
+@dataclass
+class PathConfig:
+    dataset_base_root: Path
+    dataset_root: Path
+    report_csv_path: Path
 
 
 @dataclass
@@ -54,12 +62,24 @@ class ProgressBar:
             print()
 
 
-def parse_args() -> AnalyzeConfig:
-    parser = argparse.ArgumentParser(description="批量统计内镜图像有效区域位置稳定性")
-    parser.add_argument("--input-dir", type=Path, required=True, help="图像目录")
+def parse_args() -> tuple[argparse.Namespace, AnalyzeConfig]:
+    parser = argparse.ArgumentParser(description="统计无痛胃镜检查报告对应图像的有效区域稳定性")
+    parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="路径配置文件，默认 configs/path.yaml")
+    parser.add_argument("--report-csv", type=Path, default=None, help="可选：覆盖配置中的 valid_dicts_report_csv")
+    parser.add_argument(
+        "--report-title",
+        type=str,
+        default="无痛胃镜检查报告",
+        help="要筛选的 reportTitle，默认仅处理‘无痛胃镜检查报告’",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=None,
+        help="可选：直接指定图像目录（指定后将跳过 reportTitle 过滤逻辑）",
+    )
     parser.add_argument("--output-csv", type=Path, default=Path("effective_region_per_image.csv"), help="逐图像明细 CSV")
     parser.add_argument("--output-md", type=Path, default=Path("effective_region_summary.md"), help="汇总统计 Markdown")
-    parser.add_argument("--recursive", action="store_true", help="是否递归遍历子目录")
     parser.add_argument("--black-threshold", type=int, default=20, help="背景黑区阈值（0~255）")
     parser.add_argument("--morph-kernel", type=int, default=5, help="形态学核尺寸")
     parser.add_argument("--min-area-ratio", type=float, default=0.05, help="最大连通域面积占比下限")
@@ -72,27 +92,163 @@ def parse_args() -> AnalyzeConfig:
     parser.add_argument("--zscore-threshold", type=float, default=3.0, help="离群检测 z-score 阈值")
 
     args = parser.parse_args()
-
-    return AnalyzeConfig(
-        input_dir=args.input_dir,
+    cfg = AnalyzeConfig(
         output_csv=args.output_csv,
         output_md=args.output_md,
-        recursive=args.recursive,
         black_threshold=args.black_threshold,
         morph_kernel=max(1, int(args.morph_kernel)),
         min_area_ratio=float(args.min_area_ratio),
         centroid_std_ratio_threshold=float(args.centroid_std_ratio_threshold),
         zscore_threshold=float(args.zscore_threshold),
     )
+    return args, cfg
 
 
-def iter_image_paths(input_dir: Path, recursive: bool) -> list[Path]:
-    iterator: Iterable[Path]
-    if recursive:
-        iterator = input_dir.rglob("*")
-    else:
-        iterator = input_dir.iterdir()
-    return sorted(path for path in iterator if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
+def load_yaml_config(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        raise FileNotFoundError(f"路径配置文件不存在：{config_path}")
+
+    if yaml is not None:
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"路径配置文件格式错误：{config_path}")
+        return payload
+
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    payload: dict[str, Any] = {}
+    current_section: str | None = None
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        line = raw_line.strip()
+        if line.endswith(":"):
+            current_section = line[:-1]
+            payload[current_section] = {}
+            continue
+
+        key, sep, value = line.partition(":")
+        if not sep:
+            raise ValueError(f"无法解析路径配置行：{raw_line}")
+
+        cleaned_value = value.strip().strip('"').strip("'")
+        if indent == 0:
+            payload[key.strip()] = cleaned_value
+            current_section = None
+            continue
+
+        if current_section is None:
+            raise ValueError(f"发现未归属分组的缩进行：{raw_line}")
+        payload[current_section][key.strip()] = cleaned_value
+    return payload
+
+
+def build_path_config(config_path: Path, report_csv_override: Path | None) -> PathConfig:
+    payload = load_yaml_config(config_path.expanduser())
+    paths_payload = payload.get("paths")
+    if not isinstance(paths_payload, dict):
+        raise ValueError("path.yaml 必须包含 paths 分组")
+
+    config_dir = config_path.expanduser().resolve().parent
+
+    def resolve_path(raw_path: str) -> Path:
+        path = Path(raw_path).expanduser()
+        if path.is_absolute():
+            return path
+        return (config_dir.parent / path).resolve()
+
+    dataset_base_root = resolve_path(str(paths_payload["dataset_base_root"]))
+    dataset_root = resolve_path(str(paths_payload["dataset_root"]))
+    report_csv_config = paths_payload.get("valid_dicts_report_csv")
+    report_csv_path = (
+        report_csv_override.expanduser().resolve()
+        if report_csv_override is not None
+        else resolve_path(str(report_csv_config)) if report_csv_config else (dataset_base_root / "valid_dicts_report.csv").resolve()
+    )
+
+    return PathConfig(
+        dataset_base_root=dataset_base_root,
+        dataset_root=dataset_root,
+        report_csv_path=report_csv_path,
+    )
+
+
+def resolve_exam_dir(raw_exam_dir: str, path_cfg: PathConfig) -> Path:
+    exam_dir = Path(raw_exam_dir).expanduser()
+    if exam_dir.is_absolute():
+        return exam_dir
+
+    candidate1 = (path_cfg.dataset_base_root / exam_dir).resolve()
+    if candidate1.exists():
+        return candidate1
+
+    candidate2 = (path_cfg.dataset_root / exam_dir).resolve()
+    if candidate2.exists():
+        return candidate2
+
+    return candidate1
+
+
+def collect_image_paths_from_report(path_cfg: PathConfig, report_title: str) -> list[Path]:
+    if not path_cfg.report_csv_path.is_file():
+        raise FileNotFoundError(f"未找到报告汇总文件：{path_cfg.report_csv_path}")
+
+    with path_cfg.report_csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fieldnames = reader.fieldnames or []
+
+    required = {"exam_dir", "reportTitle"}
+    missing = required - set(fieldnames)
+    if missing:
+        missing_fields = "、".join(sorted(missing))
+        raise KeyError(f"{path_cfg.report_csv_path} 中缺少必需字段：{missing_fields}")
+
+    image_paths: list[Path] = []
+    matched_rows = 0
+    exam_dir_missing = 0
+
+    progress = ProgressBar(total=len(rows))
+    for row in rows:
+        title = str(row.get("reportTitle", "")).strip()
+        if title != report_title:
+            progress.update(1)
+            continue
+
+        matched_rows += 1
+        exam_dir_raw = str(row.get("exam_dir", "")).strip()
+        exam_dir = resolve_exam_dir(exam_dir_raw, path_cfg)
+        img_dir = exam_dir / "img"
+        if not img_dir.is_dir():
+            exam_dir_missing += 1
+            progress.update(1)
+            continue
+
+        for path in sorted(img_dir.iterdir()):
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                image_paths.append(path)
+        progress.update(1)
+
+    progress.close()
+    print(f"reportTitle=‘{report_title}’ 的检查记录数: {matched_rows}")
+    if exam_dir_missing > 0:
+        print(f"警告：有 {exam_dir_missing} 条记录未找到 img 目录，已跳过。")
+
+    return image_paths
+
+
+def collect_image_paths_from_input_dir(input_dir: Path) -> list[Path]:
+    if not input_dir.exists() or not input_dir.is_dir():
+        raise FileNotFoundError(f"输入目录不存在或不可读: {input_dir}")
+
+    image_paths = sorted(
+        path
+        for path in input_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    print("已启用 --input-dir，跳过 reportTitle 过滤逻辑。")
+    return image_paths
 
 
 def safe_zscore(values: pd.Series) -> pd.Series:
@@ -137,7 +293,7 @@ def analyze_single_image(image_path: Path, cfg: AnalyzeConfig) -> dict[str, obje
     non_bg_mask = cv2.morphologyEx(non_bg_mask, cv2.MORPH_OPEN, kernel)
     non_bg_mask = cv2.morphologyEx(non_bg_mask, cv2.MORPH_CLOSE, kernel)
 
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(non_bg_mask, connectivity=8)
+    num_labels, _labels, stats, centroids = cv2.connectedComponentsWithStats(non_bg_mask, connectivity=8)
 
     if num_labels <= 1:
         return {
@@ -250,6 +406,7 @@ def centroid_stability(df: pd.DataFrame, cfg: AnalyzeConfig) -> tuple[bool, floa
 
 def write_summary_markdown(
     output_md: Path,
+    source_label: str,
     cfg: AnalyzeConfig,
     df: pd.DataFrame,
     stats_summary: dict[str, dict[str, float]],
@@ -262,6 +419,9 @@ def write_summary_markdown(
 
     lines = [
         "# 内镜图像有效区域稳定性统计报告",
+        "",
+        "## 数据来源",
+        f"- {source_label}",
         "",
         "## 方法说明",
         "- 目标：在不训练模型的前提下，基于图像预处理 + 连通域分析提取每张图像的有效区域。",
@@ -312,47 +472,51 @@ def write_summary_markdown(
     output_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def build_empty_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "image_path",
+            "width",
+            "height",
+            "x_min",
+            "y_min",
+            "x_max",
+            "y_max",
+            "bbox_width",
+            "bbox_height",
+            "component_area",
+            "image_area",
+            "area_ratio",
+            "centroid_x",
+            "centroid_y",
+            "is_abnormal",
+            "abnormal_reason",
+        ]
+    )
+
+
 def main() -> None:
-    cfg = parse_args()
+    args, cfg = parse_args()
 
-    if not cfg.input_dir.exists() or not cfg.input_dir.is_dir():
-        raise FileNotFoundError(f"输入目录不存在或不可读: {cfg.input_dir}")
+    if args.input_dir is not None:
+        image_paths = collect_image_paths_from_input_dir(args.input_dir.expanduser().resolve())
+        source_label = f"输入目录：{args.input_dir.expanduser().resolve()}"
+    else:
+        path_cfg = build_path_config(args.config, args.report_csv)
+        image_paths = collect_image_paths_from_report(path_cfg, args.report_title)
+        source_label = f"报告筛选：{args.report_title}（来源 CSV：{path_cfg.report_csv_path}）"
 
-    image_paths = iter_image_paths(cfg.input_dir, cfg.recursive)
     total = len(image_paths)
-
     print(f"总图像数: {total}")
-    rows: list[dict[str, object]] = []
 
+    rows: list[dict[str, object]] = []
     progress = ProgressBar(total=total)
     for image_path in image_paths:
         rows.append(analyze_single_image(image_path, cfg))
-        progress.update()
+        progress.update(1)
     progress.close()
 
-    if not rows:
-        df = pd.DataFrame(
-            columns=[
-                "image_path",
-                "width",
-                "height",
-                "x_min",
-                "y_min",
-                "x_max",
-                "y_max",
-                "bbox_width",
-                "bbox_height",
-                "component_area",
-                "image_area",
-                "area_ratio",
-                "centroid_x",
-                "centroid_y",
-                "is_abnormal",
-                "abnormal_reason",
-            ]
-        )
-    else:
-        df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows) if rows else build_empty_df()
 
     if len(df) > 0:
         df = apply_outlier_rules(df, cfg)
@@ -366,7 +530,7 @@ def main() -> None:
     cfg.output_csv.parent.mkdir(parents=True, exist_ok=True)
     cfg.output_md.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(cfg.output_csv, index=False, encoding="utf-8-sig")
-    write_summary_markdown(cfg.output_md, cfg, df, stats_summary, stable, cx_norm_std, cy_norm_std)
+    write_summary_markdown(cfg.output_md, source_label, cfg, df, stats_summary, stable, cx_norm_std, cy_norm_std)
 
     abnormal_df = df[df["is_abnormal"] == True] if len(df) > 0 else pd.DataFrame()
     success_count = int((~df["x_min"].isna()).sum()) if len(df) > 0 else 0
