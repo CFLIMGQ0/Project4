@@ -17,6 +17,11 @@ except ImportError:
     yaml = None
 
 try:
+    from pypdf import PdfReader  # type: ignore
+except ImportError:
+    PdfReader = None
+
+try:
     from tqdm import tqdm  # type: ignore
 except ImportError:
     tqdm = None
@@ -24,8 +29,6 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from statistics import extract_pdf_fields  # noqa: E402
 
 CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
 ROUND1_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round1.csv'
@@ -219,6 +222,29 @@ def iter_pdf_files(exam_dir: Path) -> list[Path]:
     if not pdf_dir.is_dir():
         return []
     return sorted(path for path in pdf_dir.rglob('*.pdf') if path.is_file())
+
+
+def extract_pdf_fields(pdf_path: Path) -> dict[str, str]:
+    if PdfReader is None:
+        raise ImportError('缺少 pypdf 依赖，无法解析 PDF 字段。请先安装 pypdf。')
+
+    reader = PdfReader(str(pdf_path))
+    extracted: dict[str, str] = {}
+
+    try:
+        form_fields = reader.get_fields() or {}
+    except Exception:
+        form_fields = {}
+
+    for raw_key, field_meta in form_fields.items():
+        key = normalize_text(raw_key)
+        if not key:
+            continue
+        raw_value = field_meta.get('/V', '') if isinstance(field_meta, dict) else ''
+        value = normalize_text(raw_value)
+        if value:
+            extracted[key] = value
+    return extracted
 
 
 def extract_non_empty_fields(pdf_path: Path) -> dict[str, str]:
