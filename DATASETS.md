@@ -260,7 +260,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 该项目目前已准备好两份兼容汇总文件：
 
 - `valid_dicts_pdf.csv`：**PDF 级别汇总**，仅保留在过程目录 `paths.output_dir/paths.process_cache_dir_name`，不再写入数据集根目录。
-- `valid_dicts_report.csv`：**检查目录级汇总**，写入数据集根目录。第四轮会额外写入 `suggest_num`、`watch_num`，并将多值 `suggest/watch` 以 `watch1 | watch2 | ...` 形式拼接。
+- `valid_dicts_report.csv`：**检查目录级汇总**，写入数据集根目录。第四轮会额外写入 `suggest_num`、`watch_num`、`img_num`，并将多值 `suggest/watch` 以 `watch1 | watch2 | ...` 形式拼接。
 
 推荐配置方式（以 `configs/path.yaml` 为准）：
 

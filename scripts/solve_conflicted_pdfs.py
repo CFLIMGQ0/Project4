@@ -53,6 +53,7 @@ IMPORTANT_EFFECTIVE_KEYS = {
     'specimen',
     'watchResult',
 }
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
 NON_IMPORTANT_EFFECTIVE_KEYS = {
     'archiveTime',
     'checkTime',
@@ -696,7 +697,7 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
     ordered_keys = list(all_keys)
     insert_anchor = 'specimen'
     insert_position = ordered_keys.index(insert_anchor) + 1 if insert_anchor in ordered_keys else len(ordered_keys)
-    ordered_keys[insert_position:insert_position] = ['suggest_num', 'watch_num']
+    ordered_keys[insert_position:insert_position] = ['suggest_num', 'watch_num', 'img_num']
 
     def collect_conflict_values(item: ExamScanResult, key_name: str) -> list[str]:
         values: list[str] = []
@@ -706,6 +707,12 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
                 continue
             values.append(cleaned)
         return values
+
+    def count_exam_images(exam_dir: Path) -> int:
+        img_dir = exam_dir / 'img'
+        if not img_dir.is_dir():
+            return 0
+        return sum(1 for path in img_dir.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open('w', encoding='utf-8-sig', newline='') as csv_file:
@@ -723,6 +730,7 @@ def write_valid_dicts_report(output_path: Path, results: list[ExamScanResult]) -
                 merged_fields['watch'] = ' | '.join(watch_values)
             merged_fields['suggest_num'] = str(suggest_num)
             merged_fields['watch_num'] = str(watch_num)
+            merged_fields['img_num'] = str(count_exam_images(item.exam_dir))
             row = [str(item.exam_dir)]
             row.extend(merged_fields.get(key, '') for key in ordered_keys)
             writer.writerow(row)
