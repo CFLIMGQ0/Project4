@@ -93,11 +93,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='按规则生成胃镜/肠镜任务标签与统计报告')
     parser.add_argument('--config', type=Path, default=CONFIG_PATH, help='路径配置文件，默认 configs/path.yaml')
     parser.add_argument('--report-csv', type=Path, default=None, help='可选：覆盖配置中的 valid_dicts_report_csv')
-    parser.add_argument('--output-dir', type=Path, default=PROJECT_ROOT, help='输出目录（默认项目根目录）')
+    parser.add_argument('--output-dir', type=Path, default=None, help='可选：覆盖配置中的 output_dir')
     return parser.parse_args()
 
 
-def build_path_config(config_path: Path, report_csv_override: Path | None, output_dir_override: Path) -> PathConfig:
+def build_path_config(config_path: Path, report_csv_override: Path | None, output_dir_override: Path | None) -> PathConfig:
     payload = load_yaml_config(config_path.expanduser())
     paths_payload = payload.get('paths')
     if not isinstance(paths_payload, dict):
@@ -117,7 +117,14 @@ def build_path_config(config_path: Path, report_csv_override: Path | None, outpu
         if report_csv_override is not None
         else resolve_path(str(report_csv_config))
     )
-    return PathConfig(report_csv_path=report_csv_path, output_dir=output_dir_override.expanduser().resolve())
+    output_dir_config = paths_payload.get('output_dir')
+    if output_dir_override is not None:
+        output_dir = output_dir_override.expanduser().resolve()
+    elif output_dir_config:
+        output_dir = resolve_path(str(output_dir_config))
+    else:
+        output_dir = PROJECT_ROOT
+    return PathConfig(report_csv_path=report_csv_path, output_dir=output_dir)
 
 
 REQUIRED_COLUMNS = {'reportTitle', 'watchResult'}
