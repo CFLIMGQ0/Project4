@@ -15,6 +15,7 @@ SPLIT_PATTERN = re.compile(r'[，,；;。、“”\n\r、]+')
 class PathConfig:
     dataset_base_root: Path
     report_csv_path: Path
+    output_dir: Path
 
 
 class SimpleProgressBar:
@@ -80,13 +81,16 @@ def build_path_config(config_path: Path, report_csv_override: Path | None) -> Pa
     else:
         report_csv_raw = paths_payload.get('valid_dicts_report_csv', 'valid_dicts_report.csv')
         report_csv_path = resolve_path(report_csv_raw, config_path.parent)
-    return PathConfig(dataset_base_root=dataset_base_root, report_csv_path=report_csv_path)
+    output_dir_raw = paths_payload.get('output_dir', str(dataset_base_root))
+    output_dir = resolve_path(output_dir_raw, config_path.parent)
+    return PathConfig(dataset_base_root=dataset_base_root, report_csv_path=report_csv_path, output_dir=output_dir)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='统计胃/肠数据中的 watchResult 类型及出现次数（按中文标点细分）')
     parser.add_argument('--config', type=Path, default=Path('configs/path.yaml'), help='路径配置文件，默认 configs/path.yaml')
     parser.add_argument('--report-csv', type=Path, default=None, help='可选：覆盖 valid_dicts_report_csv')
+    parser.add_argument('--output-csv', type=Path, default=None, help='可选：覆盖统计汇总 CSV 输出路径')
     return parser.parse_args()
 
 
@@ -160,6 +164,17 @@ def print_counter(title: str, counter: Counter[str]) -> None:
         print(f'{idx:>4}. {item}: {count}')
 
 
+def dump_summary_csv(output_csv_path: Path, gastric_counter: Counter[str], intestinal_counter: Counter[str]) -> None:
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_csv_path.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['organ', 'watchResult', 'count'])
+        writer.writeheader()
+        for item, count in gastric_counter.most_common():
+            writer.writerow({'organ': '胃', 'watchResult': item, 'count': count})
+        for item, count in intestinal_counter.most_common():
+            writer.writerow({'organ': '肠', 'watchResult': item, 'count': count})
+
+
 def main() -> None:
     args = parse_args()
     cfg = build_path_config(args.config, args.report_csv)
@@ -170,6 +185,9 @@ def main() -> None:
     gastric_counter, intestinal_counter = count_watch_results(rows)
     print_counter('胃镜 watchResult 细分结果（按次数降序）', gastric_counter)
     print_counter('肠镜 watchResult 细分结果（按次数降序）', intestinal_counter)
+    output_csv_path = (args.output_csv.expanduser().resolve() if args.output_csv else cfg.output_dir / 'watch_result_summary.csv')
+    dump_summary_csv(output_csv_path, gastric_counter, intestinal_counter)
+    print(f'\n统计汇总 CSV 已保存：{output_csv_path}')
 
 
 if __name__ == '__main__':
