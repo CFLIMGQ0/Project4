@@ -162,10 +162,12 @@ def rewrite_hp(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[s
 
 
 def write_rows(report_csv_path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
-    with report_csv_path.open('w', encoding='utf-8-sig', newline='') as f:
+    tmp_path = report_csv_path.with_suffix(report_csv_path.suffix + '.tmp')
+    with tmp_path.open('w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+    tmp_path.replace(report_csv_path)
 
 
 def main() -> None:
