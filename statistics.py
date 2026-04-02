@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,11 +21,21 @@ class SimpleProgressBar:
         self.total = max(total, 1)
         self.current = 0
         self.desc = desc
+        self._is_tty = sys.stdout.isatty()
+        self._last_reported_percent = -1
 
     def update(self, step: int = 1) -> None:
         self.current = min(self.total, self.current + step)
-        width = min(40, max(10, get_terminal_size((80, 20)).columns - 42))
         ratio = self.current / self.total
+        percent = int(ratio * 100)
+
+        if not self._is_tty:
+            if percent > self._last_reported_percent and (percent % 10 == 0 or self.current >= self.total):
+                print(f'{self.desc}: {self.current}/{self.total} ({ratio * 100:5.1f}%)')
+                self._last_reported_percent = percent
+            return
+
+        width = min(40, max(10, get_terminal_size((80, 20)).columns - 42))
         done = int(width * ratio)
         bar = '=' * done + '-' * (width - done)
         print(f'\r{self.desc}: [{bar}] {self.current}/{self.total} ({ratio * 100:5.1f}%)', end='', flush=True)
