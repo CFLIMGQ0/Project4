@@ -34,7 +34,7 @@
 
 **理由**：
 
-- 现有 [`scripts/check_similarity.py`](/home/Lim/projects/project4/scripts/check_similarity.py) 的输入组织方式是按 `reportTitle` 汇总图像，再计算不同 `reportTitle` 间的分布差异。
+- 现有 [`scripts/check_similarity.py`](/home/Lim/Project4/scr/scripts/check_similarity.py) 的输入组织方式是按 `reportTitle` 汇总图像，再计算不同 `reportTitle` 间的分布差异。
 - 它当前做的是**类间分布分析**，不是**类内实例路由**。
 - 它可以回答：
   - “无痛胃镜”和“超声胃镜”整体像不像？”
