@@ -82,7 +82,7 @@ def build_path_config(config_path: Path, report_csv_override: Path | None) -> Pa
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='统计胃镜/肠镜 badness 与 hp 类型次数')
+    parser = argparse.ArgumentParser(description='统计胃镜/肠镜 badness、hp 与 operationValue 类型次数')
     parser.add_argument('--config', type=Path, default=Path('configs/path.yaml'), help='路径配置文件，默认 configs/path.yaml')
     parser.add_argument('--report-csv', type=Path, default=None, help='可选：覆盖 valid_dicts_report_csv')
     return parser.parse_args()
@@ -97,7 +97,7 @@ def load_rows(report_csv_path: Path) -> list[dict[str, str]]:
         rows = list(reader)
         fieldnames = set(reader.fieldnames or [])
 
-    required = {'reportTitle', 'badness', 'hp'}
+    required = {'reportTitle', 'badness', 'hp', 'operationValue'}
     missing = sorted(required - fieldnames)
     if missing:
         raise KeyError(f'CSV 缺少字段：{"、".join(missing)}')
@@ -121,11 +121,11 @@ def normalize_value(value: str, empty_label: str = '空值') -> str:
 
 def count_badness_hp(rows: list[dict[str, str]]) -> dict[str, dict[str, Counter[str]]]:
     stats = {
-        '胃镜': {'badness': Counter(), 'hp': Counter()},
-        '肠镜': {'badness': Counter(), 'hp': Counter()},
+        '胃镜': {'badness': Counter(), 'hp': Counter(), 'operationValue': Counter()},
+        '肠镜': {'badness': Counter(), 'hp': Counter(), 'operationValue': Counter()},
     }
 
-    progress = SimpleProgressBar(total=len(rows), desc='统计 badness/hp')
+    progress = SimpleProgressBar(total=len(rows), desc='统计 badness/hp/operationValue')
     try:
         for row in rows:
             report_title = str(row.get('reportTitle', '')).strip()
@@ -136,8 +136,10 @@ def count_badness_hp(rows: list[dict[str, str]]) -> dict[str, dict[str, Counter[
 
             badness = normalize_value(str(row.get('badness', '')))
             hp = normalize_value(str(row.get('hp', '')))
+            operation_value = normalize_value(str(row.get('operationValue', '')))
             stats[organ]['badness'][badness] += 1
             stats[organ]['hp'][hp] += 1
+            stats[organ]['operationValue'][operation_value] += 1
             progress.update(1)
     finally:
         progress.close()
@@ -160,6 +162,8 @@ def print_stats(stats: dict[str, dict[str, Counter[str]]]) -> None:
         print_type_counts(stats[organ]['badness'])
         print('\nhp的类型：')
         print_type_counts(stats[organ]['hp'])
+        print('\noperationValue的类型：')
+        print_type_counts(stats[organ]['operationValue'])
 
 
 def main() -> None:
