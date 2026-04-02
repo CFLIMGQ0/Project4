@@ -22,6 +22,7 @@ import argparse
 import csv
 import json
 import logging
+import os
 import random
 from collections import defaultdict
 from dataclasses import dataclass
@@ -63,6 +64,18 @@ GASTRIC_KW = "胃镜"
 INTESTINAL_KW = "肠镜"
 ORGAN_ZH = {"gastric": "胃", "intestinal": "肠"}
 FID_EPS = 1e-6  # FID 协方差矩阵正则化
+
+
+def configure_pretrained_weights_dir() -> Path:
+    """将 torch / torchvision 预训练权重统一缓存到项目根目录的 pre_weights 目录。"""
+    weights_dir = Path(__file__).resolve().parents[2] / "pre_weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["TORCH_HOME"] = str(weights_dir)
+    torch.hub.set_dir(str(weights_dir))
+    return weights_dir
+
+
+configure_pretrained_weights_dir()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

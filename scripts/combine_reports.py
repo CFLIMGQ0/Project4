@@ -33,20 +33,56 @@ if str(PROJECT_ROOT) not in sys.path:
 CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
 ROUND1_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round1.csv'
 ROUND1_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round1.csv'
-ROUND1_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round1.jsonl'
+ROUND1_CACHE_FILE_NAME = 'combine_reports_round1.jsonl'
 ROUND2_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round2.csv'
 ROUND2_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round2.csv'
-ROUND2_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round2.jsonl'
+ROUND2_CACHE_FILE_NAME = 'combine_reports_round2.jsonl'
 ROUND3_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round3.csv'
 ROUND3_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round3.csv'
-ROUND3_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round3.jsonl'
+ROUND3_CACHE_FILE_NAME = 'combine_reports_round3.jsonl'
 ROUND4_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf_round4.csv'
 ROUND4_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report_round4.csv'
-ROUND4_CACHE_FILE_NAME = 'solve_conflicted_pdfs_round4.jsonl'
-PROCESS_CACHE_DIR_NAME = 'cache_solve_conflicted_pdfs'
+ROUND4_CACHE_FILE_NAME = 'combine_reports_round4.jsonl'
+PROCESS_CACHE_DIR_NAME = 'cache_combine_reports'
 LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
 HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
+CHOICE_FIELD_DISPLAY_MAPPINGS: dict[str, dict[str, str]] = {
+    'badness': {
+        '1': '无',
+        '2': '有',
+    },
+    'condition': {
+        '1': '良好',
+        '2': '其他',
+    },
+    'hp': {
+        '1': '待确认',
+        '2': '阴性',
+        '3': '阳性',
+        '4': '未检',
+    },
+    'narcosisType': {
+        '1': '咽部局麻',
+        '2': '插管麻醉',
+        '3': '静脉麻醉',
+        '4': '咽部+插管',
+        '5': '咽部+静脉',
+    },
+    'operation': {
+        '1': '顺利',
+        '2': '不顺利',
+    },
+    'patientType': {
+        '1': '门诊号：',
+        '2': '住院号：',
+        '3': '体检号：',
+    },
+    'sex': {
+        '1': '女',
+        '2': '男',
+    },
+}
 DIGIT_PATTERN = re.compile(r'\d')
 IMPORTANT_EFFECTIVE_KEYS = {
     'badness',
@@ -210,6 +246,140 @@ def normalize_text(value: str) -> str:
     return ' '.join(str(value).strip().split())
 
 
+def resolve_pdf_object(value: Any) -> Any:
+    current = value
+    seen_ids: set[int] = set()
+    while hasattr(current, 'get_object'):
+        current_id = id(current)
+        if current_id in seen_ids:
+            break
+        seen_ids.add(current_id)
+        try:
+            resolved = current.get_object()
+        except Exception:
+            break
+        if resolved is current:
+            break
+        current = resolved
+    return current
+
+
+def decode_pdf_text_bytes(raw_bytes: bytes) -> str:
+    if not raw_bytes:
+        return ''
+    if raw_bytes.startswith(b'\xfe\xff'):
+        try:
+            return raw_bytes[2:].decode('utf-16-be')
+        except UnicodeDecodeError:
+            pass
+    if raw_bytes.startswith(b'\xff\xfe'):
+        try:
+            return raw_bytes[2:].decode('utf-16-le')
+        except UnicodeDecodeError:
+            pass
+    for encoding in ('utf-8', 'latin1'):
+        try:
+            return raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw_bytes.decode('latin1', errors='ignore')
+
+
+def pdf_object_to_text(value: Any) -> str:
+    resolved = resolve_pdf_object(value)
+    if resolved is None:
+        return ''
+    if isinstance(resolved, str):
+        return resolved.replace('\ufeff', '')
+    if isinstance(resolved, bytes):
+        return decode_pdf_text_bytes(resolved).replace('\ufeff', '')
+
+    original_bytes = getattr(resolved, 'original_bytes', None)
+    if isinstance(original_bytes, (bytes, bytearray)):
+        return decode_pdf_text_bytes(bytes(original_bytes)).replace('\ufeff', '')
+
+    return str(resolved).replace('\ufeff', '')
+
+
+def build_choice_field_mapping(field_name: str, field_meta: Any | None) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+
+    if hasattr(field_meta, 'get'):
+        options = resolve_pdf_object(field_meta.get('/Opt'))
+        if isinstance(options, (list, tuple)):
+            for option in options:
+                resolved_option = resolve_pdf_object(option)
+                if isinstance(resolved_option, (list, tuple)):
+                    if not resolved_option:
+                        continue
+                    export_text = pdf_object_to_text(resolved_option[0])
+                    display_text = pdf_object_to_text(resolved_option[-1])
+                else:
+                    export_text = pdf_object_to_text(resolved_option)
+                    display_text = export_text
+
+                export_key = normalize_text(export_text)
+                display_value = normalize_text(display_text)
+                if export_key and display_value:
+                    mapping[export_key] = display_value
+
+    for export_text, display_text in CHOICE_FIELD_DISPLAY_MAPPINGS.get(field_name, {}).items():
+        export_key = normalize_text(export_text)
+        display_value = normalize_text(display_text)
+        if export_key and display_value:
+            mapping.setdefault(export_key, display_value)
+    return mapping
+
+
+def decode_field_value(field_name: str, raw_value: Any, field_meta: Any | None = None) -> str:
+    normalized_value = normalize_text(pdf_object_to_text(raw_value))
+    if not normalized_value:
+        return ''
+    mapping = build_choice_field_mapping(field_name, field_meta)
+    return mapping.get(normalized_value, normalized_value)
+
+
+def decode_cached_result_choice_fields(item: ExamScanResult) -> tuple[ExamScanResult, bool]:
+    changed = False
+    merged_valid_fields: dict[str, str] = {}
+    for key, value in item.merged_valid_fields.items():
+        decoded_value = decode_field_value(key, value)
+        merged_valid_fields[key] = decoded_value
+        if decoded_value != value:
+            changed = True
+
+    field_values: dict[str, list[str]] = {}
+    for key, values in item.field_values.items():
+        decoded_values = [decode_field_value(key, value) for value in values]
+        field_values[key] = decoded_values
+        if decoded_values != values:
+            changed = True
+
+    if not changed:
+        return item, False
+
+    return (
+        ExamScanResult(
+            exam_dir=item.exam_dir,
+            is_valid=item.is_valid,
+            conflict_keys=list(item.conflict_keys),
+            merged_valid_fields=merged_valid_fields,
+            field_values=field_values,
+        ),
+        True,
+    )
+
+
+def decode_cached_results_choice_fields(results: list[ExamScanResult]) -> tuple[list[ExamScanResult], bool]:
+    decoded_results: list[ExamScanResult] = []
+    changed = False
+    for item in results:
+        decoded_item, item_changed = decode_cached_result_choice_fields(item)
+        decoded_results.append(decoded_item)
+        changed = changed or item_changed
+    return decoded_results, changed
+
+
 def iter_exam_dirs(dataset_root: Path) -> list[Path]:
     exam_dirs: list[Path] = []
     for patient_dir in sorted(path for path in dataset_root.iterdir() if path.is_dir()):
@@ -240,8 +410,8 @@ def extract_pdf_fields(pdf_path: Path) -> dict[str, str]:
         key = normalize_text(raw_key)
         if not key:
             continue
-        raw_value = field_meta.get('/V', '') if isinstance(field_meta, dict) else ''
-        value = normalize_text(raw_value)
+        raw_value = field_meta.get('/V', '') if hasattr(field_meta, 'get') else ''
+        value = decode_field_value(key, raw_value, field_meta)
         if value:
             extracted[key] = value
     return extracted
@@ -355,7 +525,7 @@ def choose_latest_time_value(values: set[str]) -> str | None:
 def choose_hp_value(values: set[str]) -> str | None:
     if not values:
         return None
-    normalized_values = {normalize_text(value) for value in values if normalize_text(value)}
+    normalized_values = {decode_field_value('hp', value) for value in values if decode_field_value('hp', value)}
     for candidate in HP_PRIORITY:
         if candidate in normalized_values:
             return candidate
@@ -840,7 +1010,13 @@ def main() -> None:
     round1_ready = round1_cache_path.exists() and round1_summary_path.exists() and round1_report_path.exists()
     if round1_ready:
         round1_results = load_cached_results(round1_cache_path)
+        round1_results, round1_cache_legacy = decode_cached_results_choice_fields(round1_results)
         print(f'检测到第一轮确认结果，跳过第一轮计算：{round1_cache_path}')
+        if round1_cache_legacy:
+            save_cached_results(round1_cache_path, round1_results)
+            write_valid_dicts_pdf(round1_summary_path, round1_results)
+            write_valid_dicts_report(round1_report_path, round1_results)
+            print('第一轮缓存包含旧版枚举值，已自动转换为中文并刷新输出。')
     else:
         round1_results = scan_all_exam_dirs(path_config.dataset_root)
         save_cached_results(round1_cache_path, round1_results)
@@ -857,8 +1033,14 @@ def main() -> None:
     round2_ready = round2_cache_path.exists() and round2_summary_path.exists() and round2_report_path.exists()
     if round2_ready:
         round2_results = load_cached_results(round2_cache_path)
+        round2_results, round2_cache_legacy = decode_cached_results_choice_fields(round2_results)
         second_class_stats = None
         print(f'检测到第二类确认结果，跳过第二类计算：{round2_cache_path}')
+        if round2_cache_legacy:
+            save_cached_results(round2_cache_path, round2_results)
+            write_valid_dicts_pdf(round2_summary_path, round2_results)
+            write_valid_dicts_report(round2_report_path, round2_results)
+            print('第二轮缓存包含旧版枚举值，已自动转换为中文并刷新输出。')
     else:
         round2_results, second_class_stats = apply_second_class_uniqueness_rules(round1_results)
         save_cached_results(round2_cache_path, round2_results)
@@ -882,10 +1064,24 @@ def main() -> None:
 
     round3_ready = round3_cache_path.exists() and round3_summary_path.exists() and round3_report_path.exists()
     if round3_ready:
-        round3_results = load_cached_results(round3_cache_path)
-        third_class_stats = None
-        print(f'检测到第三类确认结果，跳过第三类计算：{round3_cache_path}')
+        cached_round3_results = load_cached_results(round3_cache_path)
+        round3_results, round3_cache_legacy = decode_cached_results_choice_fields(cached_round3_results)
+        if round3_cache_legacy:
+            round3_ready = False
+            third_class_stats = None
+            print(f'检测到第三类确认结果使用旧版枚举值，重新计算第三类结果：{round3_cache_path}')
+        else:
+            third_class_stats = None
+            print(f'检测到第三类确认结果，跳过第三类计算：{round3_cache_path}')
     else:
+        round3_results, third_class_stats = apply_third_class_uniqueness_rules(round2_results)
+        save_cached_results(round3_cache_path, round3_results)
+        write_valid_dicts_pdf(round3_summary_path, round3_results)
+        write_valid_dicts_report(round3_report_path, round3_results)
+        print(f'第三类缓存与结果已生成：{process_output_dir}')
+        round3_ready = True
+
+    if not round3_ready:
         round3_results, third_class_stats = apply_third_class_uniqueness_rules(round2_results)
         save_cached_results(round3_cache_path, round3_results)
         write_valid_dicts_pdf(round3_summary_path, round3_results)
@@ -906,10 +1102,25 @@ def main() -> None:
 
     round4_ready = round4_cache_path.exists() and round4_summary_path.exists() and round4_report_path.exists()
     if round4_ready:
-        round4_results = load_cached_results(round4_cache_path)
-        round4_stats = None
-        print(f'检测到第四轮确认结果，跳过第四轮计算：{round4_cache_path}')
+        cached_round4_results = load_cached_results(round4_cache_path)
+        round4_results, round4_cache_legacy = decode_cached_results_choice_fields(cached_round4_results)
+        if round4_cache_legacy:
+            round4_ready = False
+            round4_stats = None
+            print(f'检测到第四轮确认结果使用旧版枚举值，重新计算第四轮结果：{round4_cache_path}')
+        else:
+            round4_stats = None
+            print(f'检测到第四轮确认结果，跳过第四轮计算：{round4_cache_path}')
     else:
+        round4_results, round4_stats = apply_round4_suggest_watch_rules(round3_results)
+        print('第四轮统计 suggest/watch 冲突规模，保留这两个字段的冲突。')
+        save_cached_results(round4_cache_path, round4_results)
+        write_valid_dicts_pdf(round4_summary_path, round4_results)
+        write_valid_dicts_report(round4_report_path, round4_results)
+        print(f'第四轮缓存与结果已生成：{process_output_dir}')
+        round4_ready = True
+
+    if not round4_ready:
         round4_results, round4_stats = apply_round4_suggest_watch_rules(round3_results)
         print('第四轮统计 suggest/watch 冲突规模，保留这两个字段的冲突。')
         save_cached_results(round4_cache_path, round4_results)

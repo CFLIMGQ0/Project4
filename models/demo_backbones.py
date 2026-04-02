@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Tuple
 
 import torch
@@ -9,6 +11,18 @@ from torchvision import models
 
 IMAGE_MEAN = (0.485, 0.456, 0.406)
 IMAGE_STD = (0.229, 0.224, 0.225)
+
+
+def _configure_pretrained_weights_dir() -> Path:
+    """将 torch / torchvision 预训练权重统一缓存到项目根目录的 pre_weights 目录。"""
+    weights_dir = Path(__file__).resolve().parents[2] / "pre_weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["TORCH_HOME"] = str(weights_dir)
+    torch.hub.set_dir(str(weights_dir))
+    return weights_dir
+
+
+_configure_pretrained_weights_dir()
 
 
 class _ResNetFeatureExtractor(nn.Module):

@@ -1,8 +1,9 @@
 paths:
+  project_root: /home/Lim/Project4  # 项目根目录（src/datasets/outputs/pre_weights 所在位置）
   dataset_base_root: /home/Lim/Project4/datasets  # 数据集根路径（说明文件与汇总 CSV 推荐放这里）
   dataset_root: /home/Lim/Project4/datasets/main_data
-  valid_dicts_pdf_csv: /home/Lim/Project4/outputs/cache_solve_conflicted_pdfs/valid_dicts_pdf.csv
+  valid_dicts_pdf_csv: /home/Lim/Project4/outputs/cache_combine_reports/valid_dicts_pdf.csv
   valid_dicts_report_csv: /home/Lim/Project4/datasets/valid_dicts_report.csv
-  output_dir: /home/Lim/Project4/outputs  # solve_conflicted_pdfs.py 输出根目录
-  process_cache_dir_name: cache_solve_conflicted_pdfs  # 过程文件目录名（round1~round4，第四轮仅统计并保留 suggest/watch 冲突；有冲突时 suggest_num/watch_num 记录总数量 n）
-  check_similarity_dir_name: check_similarity  # check_similarity.py 输出子目录名（位于 output_dir 下）
+  output_dir: /home/Lim/Project4/outputs  # combine_reports.py 输出根目录
+  process_cache_dir_name: cache_combine_reports  # 过程文件目录名（round1~round4，第四轮仅统计并保留 suggest/watch 冲突；有冲突时 suggest_num/watch_num 记录总数量 n）
+  check_similarity_dir_name: check_similarity  # temp_check_similarity.py 输出子目录名（位于 output_dir 下）

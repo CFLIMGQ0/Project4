@@ -1,5 +1,16 @@
 # 数据集结构说明
 
+## 项目目录约定
+
+当前项目根目录固定为 `/home/Lim/Project4`，目录分工如下：
+
+- `src/`：工作环境目录，代码、脚本、说明文档与配置文件位于此目录；
+- `datasets/`：数据集根目录；
+- `outputs/`：输出根目录；
+- `pre_weights/`：预训练模型权重目录；
+
+文档中的 `python scripts/...` 命令默认在 `/home/Lim/Project4/src` 下执行；若在项目根目录执行，请将脚本路径写成 `python src/scripts/...`。
+
 ## 1. 数据集根目录
 
 项目中需要区分“数据集根路径”和“实际数据目录”两个概念（并在 `configs/path.yaml` 中分开配置）：
@@ -11,13 +22,14 @@
 
 推荐在 `configs/path.yaml` 中显式区分：
 
+- `paths.project_root`：项目根目录（`src`、`datasets`、`outputs`、`pre_weights` 所在位置）；
 - `paths.dataset_base_root`：数据集根路径（说明文件、统计结果、辅助文件）；
-- `paths.dataset_root`：实际数据目录（患者目录，脚本读取该目录）。
-- `paths.valid_dicts_pdf_csv`：有效检查目录的 PDF 级汇总 CSV（显式路径，建议相对路径）；
-- `paths.valid_dicts_report_csv`：有效检查目录的报告级汇总 CSV（显式路径，建议相对路径）；
+- `paths.dataset_root`：实际数据目录（患者目录，脚本读取该目录）；
+- `paths.valid_dicts_pdf_csv`：有效检查目录的 PDF 级汇总 CSV（显式路径，当前环境建议使用绝对路径）；
+- `paths.valid_dicts_report_csv`：有效检查目录的报告级汇总 CSV（显式路径，当前环境建议使用绝对路径）；
 - `paths.output_dir`：脚本输出根目录；
-- `paths.process_cache_dir_name`：`solve_conflicted_pdfs.py` 过程文件目录名（默认 `cache_solve_conflicted_pdfs`）。
-- `paths.check_similarity_dir_name`：`check_similarity.py` 输出子目录名（位于 `paths.output_dir` 下，默认 `check_similarity`）。
+- `paths.process_cache_dir_name`：`combine_reports.py` 过程文件目录名（默认 `cache_combine_reports`）。
+- `paths.check_similarity_dir_name`：`temp_check_similarity.py` 输出子目录名（位于 `paths.output_dir` 下，默认 `check_similarity`）。
 
 因此，若需要切换数据环境、迁移服务器或调整输出位置，请优先修改 `configs/path.yaml`。
 
@@ -85,6 +97,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 - 在进行下一步清洗前，先确认数据目录结构是否一致；
 - 若需要调整默认数据根目录或输出路径，请先修改 `configs/path.yaml`；
+- 文档中的命令默认在 `/home/Lim/Project4/src` 下执行；
 - 若后续需要新增更多统计维度，可在现有数据处理流程上继续扩展。
 
 ## 5. 清洗脚本执行顺序与执行效果
@@ -160,7 +173,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `condition` → 患者一般情况
 - `namePatient` → 姓名
 - `operation` → 操作过程
-- `operationValue` → 操作名称
+- `operationValue` → 操作名称（多值统一使用 `|` 分隔；清洗后会去除末尾操作编码括号）
 - `operationRemark` → 操作过程备注（其值仅当操作过程不顺利时才有可能非空）
 - `sex` → 性别
 - `suggest` → 注意事项
@@ -191,25 +204,25 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ## 8. 唯一性确认输出文件
 
-当前唯一性确认脚本 `scripts/solve_conflicted_pdfs.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖）。
-其中过程文件默认落盘到 `paths.output_dir/paths.process_cache_dir_name`（默认 `cache_solve_conflicted_pdfs`），并按四轮（第一轮 + 第二类 + 第三类 + 第四轮）确认分别落盘：
+当前唯一性确认脚本 `scripts/combine_reports.py` 默认输出到 `paths.output_dir`（可通过 `--output-dir` 覆盖）。
+其中过程文件默认落盘到 `paths.output_dir/paths.process_cache_dir_name`（默认 `cache_combine_reports`），并按四轮（第一轮 + 第二类 + 第三类 + 第四轮）确认分别落盘：
 
 - 第一轮结果：
   - `valid_dicts_pdf_round1.csv`
   - `valid_dicts_report_round1.csv`
-  - `solve_conflicted_pdfs_round1.jsonl`（用于第二轮直接读取，避免重复扫描）
+  - `combine_reports_round1.jsonl`（用于第二轮直接读取，避免重复扫描）
 - 第二轮结果：
   - `valid_dicts_pdf_round2.csv`
   - `valid_dicts_report_round2.csv`
-  - `solve_conflicted_pdfs_round2.jsonl`
+  - `combine_reports_round2.jsonl`
 - 第三轮结果：
   - `valid_dicts_pdf_round3.csv`
   - `valid_dicts_report_round3.csv`
-  - `solve_conflicted_pdfs_round3.jsonl`
+  - `combine_reports_round3.jsonl`
 - 第四轮结果（统计 `suggest/watch` 冲突并保留）：
   - `valid_dicts_pdf_round4.csv`
   - `valid_dicts_report_round4.csv`
-  - `solve_conflicted_pdfs_round4.jsonl`
+  - `combine_reports_round4.jsonl`
 - 兼容文件：
   - `valid_dicts_pdf.csv`（写入 `paths.output_dir/paths.process_cache_dir_name`，等同第四轮汇总）
   - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第四轮报告）
@@ -234,7 +247,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `badness`：冲突时置为 `有`；
 - `hp`：按优先级 `阳性 > 阴性 > 待确认 > 未检` 取值。
 - `score`：冲突时取分数更大的值；
-- `operationValue`：冲突时按逗号拆分多值并合并去重。
+- `operationValue`：冲突时按逗号拆分多值并合并去重；如后续执行 `clean_values.py`，会进一步统一写成 `操作1|操作2|...`，并去除每个操作末尾的编码括号，仅保留操作名称。
 - `specimen`：冲突时按部位拆分合并；同一部位出现多个数量时取较大数量并保留全部部位。
 - `watchResult`：冲突时按逗号拆分多值并合并去重。
 
@@ -243,7 +256,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 第四轮统一统计 `suggest` 与 `watch` 冲突：不做唯一值确认，不移除冲突键，仅统计冲突目录数与冲突项数量；
 - 第四轮定位为“兼容记录轮次”：完成时会输出“冲突已记录”，将 `suggest/watch` 作为已记录冲突而非未解决冲突；
 - 第四轮结束后，若检查目录只剩 `suggest/watch` 冲突，则该检查目录判定为有效检查目录；仅当还有其他键冲突时，才记为“冲突未完全解决”；
-- 每轮完成后会生成该轮 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `solve_conflicted_pdfs_roundX.jsonl`；
+- 每轮完成后会生成该轮 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `combine_reports_roundX.jsonl`；
 - 第四轮输出完成后，脚本会刷新兼容产物：`valid_dicts_pdf.csv`（过程目录）与 `valid_dicts_report.csv`（数据集根目录）。
 
 `valid_dicts_pdf_roundX.csv` 新增冲突数量指标：
@@ -320,9 +333,6 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 4. **超声肠镜**
    - 无痛超声肠镜报告（报告 1，图像 37）
    - 超声肠镜检查报告（报告 1，图像 13）
-
-5. **其他**
-   - 十二指肠镜检查报告（报告 1，图像 35）
 
 备注：
 - 若后续同质性阈值（余弦/FID/MMD）调整，建议同步更新上述分组与数量。

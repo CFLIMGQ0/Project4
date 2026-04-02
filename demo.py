@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -12,14 +13,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import matplotlib
 import numpy as np
 import torch
 import yaml
+from sklearn.metrics import (
+    accuracy_score,
+    auc,
+    cohen_kappa_score,
+    confusion_matrix,
+    f1_score,
+    multilabel_confusion_matrix,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    roc_curve,
+)
+from torch.cuda.amp import autocast
 from torch.utils.data import DataLoader, Sampler
 
 # 尽量避免在源码目录下产生 pyc 文件。
 sys.dont_write_bytecode = True
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
 
 from models import (
     DemoColoCountAwareDebiasMIL,
@@ -35,7 +52,13 @@ from models.demo_data import (
     demo_mil_collate_fn,
     split_records,
 )
+from models.demo_metrics import to_builtin_type
 from models.demo_trainer import DemoTrainer, TrainerConfig
+
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover
+    tqdm = None
 
 
 MODEL_KEYS = (
@@ -44,6 +67,645 @@ MODEL_KEYS = (
     "demo_colo_mil_baseline",
     "demo_colo_count_aware_debias_mil",
 )
+
+
+class RichDemoTrainer(DemoTrainer):
+    """仅在 demo.py 内扩展训练输出，不修改底层 trainer 文件。"""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.loss_csv_path = self.run_dir / "loss_history.csv"
+        self.epoch_metrics_csv_path = self.run_dir / "epoch_metrics.csv"
+        self.val_metrics_latest_path = self.run_dir / "val_metrics_latest.json"
+        self.best_val_metrics_path = self.run_dir / "best_val_metrics.json"
+        self.test_metrics_path = self.run_dir / "test_metrics.json"
+        self.test_metrics_meta_path = self.run_dir / "test_metrics_meta.json"
+        self.loss_curve_path = self.run_dir / "loss_curve.png"
+        self.val_cm_path = self.run_dir / "val_confusion_matrix.png"
+        self.test_cm_path = self.run_dir / "test_confusion_matrix.png"
+        self.val_roc_path = self.run_dir / "val_roc_curve.png"
+        self.test_roc_path = self.run_dir / "test_roc_curve.png"
+        self.val_pr_path = self.run_dir / "val_pr_curve.png"
+        self.test_pr_path = self.run_dir / "test_pr_curve.png"
+
+        self.loss_history: list[dict[str, Any]] = []
+        self.metrics_history: list[dict[str, Any]] = []
+
+    def _iter_progress(self, loader, desc: str):
+        if tqdm is not None:
+            return tqdm(loader, desc=desc, leave=True, dynamic_ncols=True)
+        return loader
+
+    @staticmethod
+    def _nanmean(values: list[float]) -> float:
+        if not values:
+            return float("nan")
+        arr = np.asarray(values, dtype=np.float64)
+        if np.isnan(arr).all():
+            return float("nan")
+        return float(np.nanmean(arr))
+
+    @staticmethod
+    def _safe_kappa(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        merged = np.concatenate([y_true.reshape(-1), y_pred.reshape(-1)], axis=0)
+        if len(np.unique(merged)) < 2:
+            return 1.0 if np.array_equal(y_true, y_pred) else 0.0
+        score = float(cohen_kappa_score(y_true, y_pred))
+        return 0.0 if math.isnan(score) else score
+
+    @staticmethod
+    def _fmt_metric(value: Any) -> str:
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and math.isnan(value):
+                return "nan"
+            return f"{float(value):.4f}"
+        return str(value)
+
+    def _summary_text(self, metrics: dict[str, Any]) -> str:
+        ordered_keys = ["ACC", "Recall", "Precision", "F1", "ROC_AUC", "PR_AUC", "Kappa"]
+        parts = [f"{k}={self._fmt_metric(metrics.get(k, float('nan')))}" for k in ordered_keys]
+        return ", ".join(parts)
+
+    def _binary_artifacts(self, y_true: np.ndarray, y_prob: np.ndarray) -> tuple[dict[str, Any], dict[str, Any]]:
+        y_true = y_true.astype(np.int64).reshape(-1)
+        y_prob = y_prob.astype(np.float64).reshape(-1)
+        y_pred = (y_prob >= 0.5).astype(np.int64)
+
+        acc = float(accuracy_score(y_true, y_pred))
+        recall = float(recall_score(y_true, y_pred, zero_division=0))
+        precision = float(precision_score(y_true, y_pred, zero_division=0))
+        f1 = float(f1_score(y_true, y_pred, zero_division=0))
+        kappa = self._safe_kappa(y_true, y_pred)
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+
+        roc_auc = float("nan")
+        roc_payload: dict[str, Any] | None = None
+        if len(np.unique(y_true)) >= 2:
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_auc = float(auc(fpr, tpr))
+            roc_payload = {"fpr": fpr.tolist(), "tpr": tpr.tolist(), "auc": roc_auc}
+
+        pr_auc = float("nan")
+        pr_payload: dict[str, Any] | None = None
+        if int(y_true.sum()) > 0:
+            precision_curve, recall_curve, _ = precision_recall_curve(y_true, y_prob)
+            pr_auc = float(auc(recall_curve, precision_curve))
+            pr_payload = {
+                "precision": precision_curve.tolist(),
+                "recall": recall_curve.tolist(),
+                "auc": pr_auc,
+            }
+
+        metrics = {
+            "ACC": acc,
+            "Recall": recall,
+            "Precision": precision,
+            "F1": f1,
+            "ROC_AUC": roc_auc,
+            "PR_AUC": pr_auc,
+            "Kappa": kappa,
+            "accuracy": acc,
+            "recall": recall,
+            "precision": precision,
+            "f1_score": f1,
+            "kappa": kappa,
+        }
+        metrics.update(self._compute_metrics(y_true=y_true, y_prob=y_prob))
+
+        artifact = {
+            "mode": "binary",
+            "class_names": self.class_names if self.class_names else ["negative", "positive"],
+            "confusion_matrix": cm.tolist(),
+            "roc_curve": roc_payload,
+            "pr_curve": pr_payload,
+        }
+        return metrics, artifact
+
+    def _multilabel_artifacts(self, y_true: np.ndarray, y_prob: np.ndarray) -> tuple[dict[str, Any], dict[str, Any]]:
+        y_true = y_true.astype(np.int64)
+        y_prob = y_prob.astype(np.float64)
+        y_pred = (y_prob >= 0.5).astype(np.int64)
+
+        acc = float(accuracy_score(y_true, y_pred))
+        recall = float(recall_score(y_true, y_pred, average="macro", zero_division=0))
+        precision = float(precision_score(y_true, y_pred, average="macro", zero_division=0))
+        f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+
+        per_label_precision: dict[str, float] = {}
+        per_label_recall: dict[str, float] = {}
+        per_label_kappa: dict[str, float] = {}
+        roc_aucs: list[float] = []
+        pr_aucs: list[float] = []
+        kappas: list[float] = []
+        roc_curves: list[dict[str, Any]] = []
+        pr_curves: list[dict[str, Any]] = []
+
+        for idx, label_name in enumerate(self.label_names):
+            yt = y_true[:, idx]
+            yp = y_prob[:, idx]
+            yhat = y_pred[:, idx]
+
+            label_precision = float(precision_score(yt, yhat, zero_division=0))
+            label_recall = float(recall_score(yt, yhat, zero_division=0))
+            label_kappa = self._safe_kappa(yt, yhat)
+
+            per_label_precision[label_name] = label_precision
+            per_label_recall[label_name] = label_recall
+            per_label_kappa[label_name] = label_kappa
+            kappas.append(label_kappa)
+
+            if len(np.unique(yt)) >= 2:
+                fpr, tpr, _ = roc_curve(yt, yp)
+                roc_auc = float(auc(fpr, tpr))
+            else:
+                fpr, tpr, roc_auc = np.array([]), np.array([]), float("nan")
+            roc_aucs.append(roc_auc)
+            roc_curves.append(
+                {
+                    "label": label_name,
+                    "fpr": fpr.tolist(),
+                    "tpr": tpr.tolist(),
+                    "auc": roc_auc,
+                }
+            )
+
+            if int(yt.sum()) > 0:
+                precision_curve, recall_curve, _ = precision_recall_curve(yt, yp)
+                pr_auc = float(auc(recall_curve, precision_curve))
+            else:
+                precision_curve, recall_curve, pr_auc = np.array([]), np.array([]), float("nan")
+            pr_aucs.append(pr_auc)
+            pr_curves.append(
+                {
+                    "label": label_name,
+                    "precision": precision_curve.tolist(),
+                    "recall": recall_curve.tolist(),
+                    "auc": pr_auc,
+                }
+            )
+
+        metrics = {
+            "ACC": acc,
+            "Recall": recall,
+            "Precision": precision,
+            "F1": f1,
+            "ROC_AUC": self._nanmean(roc_aucs),
+            "PR_AUC": self._nanmean(pr_aucs),
+            "Kappa": self._nanmean(kappas),
+            "accuracy": acc,
+            "recall_macro": recall,
+            "precision_macro": precision,
+            "f1_macro_required": f1,
+            "kappa_macro": self._nanmean(kappas),
+            "per_label_precision": per_label_precision,
+            "per_label_recall": per_label_recall,
+            "per_label_kappa": per_label_kappa,
+            "metric_note": "多标签任务中 ACC 为 exact-match accuracy；Recall/Precision/F1/Kappa 为 macro 平均。",
+        }
+        metrics.update(self._compute_metrics(y_true=y_true, y_prob=y_prob))
+
+        artifact = {
+            "mode": "multilabel",
+            "label_names": self.label_names,
+            "confusion_matrices": [cm.tolist() for cm in multilabel_confusion_matrix(y_true, y_pred)],
+            "roc_curves": roc_curves,
+            "pr_curves": pr_curves,
+        }
+        return metrics, artifact
+
+    def _compute_required_metrics(self, y_true: np.ndarray, y_prob: np.ndarray) -> tuple[dict[str, Any], dict[str, Any]]:
+        if self.cfg.task_type == "gastro_multilabel":
+            return self._multilabel_artifacts(y_true=y_true, y_prob=y_prob)
+        return self._binary_artifacts(y_true=y_true, y_prob=y_prob)
+
+    @staticmethod
+    def _draw_heatmap(ax, cm: np.ndarray, labels: list[str], title: str) -> None:
+        image = ax.imshow(cm, cmap="Blues")
+        ax.set_title(title)
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=30, ha="right")
+        ax.set_yticklabels(labels)
+        ax.set_xlabel("Pred")
+        ax.set_ylabel("True")
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                value = int(cm[i, j])
+                ax.text(j, i, str(value), ha="center", va="center", color="black")
+        ax.figure.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+
+    def _save_confusion_matrix_plot(self, split: str, epoch: int, artifact: dict[str, Any]) -> None:
+        path = self.val_cm_path if split == "val" else self.test_cm_path
+        mode = artifact.get("mode")
+
+        if mode == "binary":
+            cm = np.asarray(artifact["confusion_matrix"], dtype=np.int64)
+            labels = list(artifact.get("class_names", ["negative", "positive"]))
+            fig, ax = plt.subplots(figsize=(5, 4))
+            self._draw_heatmap(ax, cm=cm, labels=labels, title=f"{split} confusion matrix | epoch {epoch}")
+        else:
+            cms = artifact.get("confusion_matrices", [])
+            labels = list(artifact.get("label_names", self.label_names))
+            cols = max(1, len(cms))
+            fig, axes = plt.subplots(1, cols, figsize=(5 * cols, 4))
+            if cols == 1:
+                axes = [axes]
+            for ax, cm, label_name in zip(axes, cms, labels):
+                self._draw_heatmap(
+                    ax,
+                    cm=np.asarray(cm, dtype=np.int64),
+                    labels=["0", "1"],
+                    title=f"{label_name} | epoch {epoch}",
+                )
+            fig.suptitle(f"{split} confusion matrix", fontsize=12)
+
+        fig.tight_layout()
+        fig.savefig(path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+    def _save_curve_plot(self, split: str, epoch: int, artifact: dict[str, Any], curve_type: str) -> None:
+        is_roc = curve_type == "roc"
+        path = self.val_roc_path if split == "val" and is_roc else self.test_roc_path if is_roc else self.val_pr_path if split == "val" else self.test_pr_path
+        mode = artifact.get("mode")
+        fig, ax = plt.subplots(figsize=(6, 5))
+
+        if mode == "binary":
+            curve_payload = artifact.get("roc_curve" if is_roc else "pr_curve")
+            if curve_payload:
+                if is_roc:
+                    ax.plot(curve_payload["fpr"], curve_payload["tpr"], label=f"AUC={curve_payload['auc']:.4f}")
+                    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1.0)
+                    ax.set_xlabel("FPR")
+                    ax.set_ylabel("TPR")
+                    ax.set_title(f"{split} ROC curve | epoch {epoch}")
+                else:
+                    ax.plot(curve_payload["recall"], curve_payload["precision"], label=f"AUC={curve_payload['auc']:.4f}")
+                    ax.set_xlabel("Recall")
+                    ax.set_ylabel("Precision")
+                    ax.set_title(f"{split} PR curve | epoch {epoch}")
+                ax.legend(loc="best")
+            else:
+                ax.text(0.5, 0.5, "Curve unavailable", ha="center", va="center")
+                ax.set_axis_off()
+        else:
+            curve_list = artifact.get("roc_curves" if is_roc else "pr_curves", [])
+            valid_aucs: list[float] = []
+            for item in curve_list:
+                curve_auc = float(item.get("auc", float("nan")))
+                if math.isnan(curve_auc):
+                    continue
+                valid_aucs.append(curve_auc)
+                if is_roc:
+                    ax.plot(item["fpr"], item["tpr"], label=f"{item['label']} | AUC={curve_auc:.4f}")
+                else:
+                    ax.plot(item["recall"], item["precision"], label=f"{item['label']} | AUC={curve_auc:.4f}")
+            if valid_aucs:
+                macro_auc = self._nanmean(valid_aucs)
+                if is_roc:
+                    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1.0)
+                    ax.set_xlabel("FPR")
+                    ax.set_ylabel("TPR")
+                    ax.set_title(f"{split} ROC curve | epoch {epoch} | macro AUC={macro_auc:.4f}")
+                else:
+                    ax.set_xlabel("Recall")
+                    ax.set_ylabel("Precision")
+                    ax.set_title(f"{split} PR curve | epoch {epoch} | macro AUC={macro_auc:.4f}")
+                ax.legend(loc="best")
+            else:
+                ax.text(0.5, 0.5, "Curve unavailable", ha="center", va="center")
+                ax.set_axis_off()
+
+        fig.tight_layout()
+        fig.savefig(path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+    def _write_loss_history_csv(self) -> None:
+        fieldnames = ["epoch", "train_loss", "val_loss"]
+        with self.loss_csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in self.loss_history:
+                writer.writerow(row)
+
+    def _write_epoch_metrics_csv(self) -> None:
+        fieldnames = [
+            "epoch",
+            "split",
+            "loss",
+            "monitor",
+            "ACC",
+            "Recall",
+            "Precision",
+            "F1",
+            "ROC_AUC",
+            "PR_AUC",
+            "Kappa",
+        ]
+        with self.epoch_metrics_csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in self.metrics_history:
+                writer.writerow(row)
+
+    def _save_loss_curve(self) -> None:
+        if not self.loss_history:
+            return
+        epochs = [int(row["epoch"]) for row in self.loss_history]
+        train_losses = [float(row["train_loss"]) for row in self.loss_history]
+        val_losses = [float(row["val_loss"]) for row in self.loss_history]
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.plot(epochs, train_losses, marker="o", label="train_loss")
+        ax.plot(epochs, val_losses, marker="o", label="val_loss")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title("Loss convergence")
+        ax.grid(alpha=0.3)
+        ax.legend(loc="best")
+        fig.tight_layout()
+        fig.savefig(self.loss_curve_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+    def _save_metrics_snapshot(self, path: Path, epoch: int, loss: float, metrics: dict[str, Any]) -> None:
+        payload = {
+            "epoch": epoch,
+            "loss": loss,
+            "metrics": to_builtin_type(metrics),
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _record_epoch_outputs(
+        self,
+        epoch: int,
+        train_loss: float,
+        val_loss: float,
+        train_metrics: dict[str, Any],
+        val_metrics: dict[str, Any],
+    ) -> None:
+        self.loss_history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+            }
+        )
+        train_monitor = self._monitor_value(train_metrics)
+        val_monitor = self._monitor_value(val_metrics)
+        self.metrics_history.append(
+            {
+                "epoch": epoch,
+                "split": "train",
+                "loss": train_loss,
+                "monitor": train_monitor,
+                "ACC": train_metrics.get("ACC", float("nan")),
+                "Recall": train_metrics.get("Recall", float("nan")),
+                "Precision": train_metrics.get("Precision", float("nan")),
+                "F1": train_metrics.get("F1", float("nan")),
+                "ROC_AUC": train_metrics.get("ROC_AUC", float("nan")),
+                "PR_AUC": train_metrics.get("PR_AUC", float("nan")),
+                "Kappa": train_metrics.get("Kappa", float("nan")),
+            }
+        )
+        self.metrics_history.append(
+            {
+                "epoch": epoch,
+                "split": "val",
+                "loss": val_loss,
+                "monitor": val_monitor,
+                "ACC": val_metrics.get("ACC", float("nan")),
+                "Recall": val_metrics.get("Recall", float("nan")),
+                "Precision": val_metrics.get("Precision", float("nan")),
+                "F1": val_metrics.get("F1", float("nan")),
+                "ROC_AUC": val_metrics.get("ROC_AUC", float("nan")),
+                "PR_AUC": val_metrics.get("PR_AUC", float("nan")),
+                "Kappa": val_metrics.get("Kappa", float("nan")),
+            }
+        )
+        self._write_loss_history_csv()
+        self._write_epoch_metrics_csv()
+        self._save_loss_curve()
+
+    def _run_one_epoch_detailed(
+        self,
+        loader,
+        epoch: int,
+        train_mode: bool,
+        split: str,
+        save_evidence: bool = False,
+    ) -> tuple[float, dict[str, Any], dict[str, Any]]:
+        if train_mode:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        total_loss = 0.0
+        total_batches = 0
+        y_true_list: list[np.ndarray] = []
+        y_prob_list: list[np.ndarray] = []
+        evidence_records: list[dict[str, Any]] = []
+        expert_weights_all: list[np.ndarray] = []
+
+        self.optimizer.zero_grad(set_to_none=True)
+        progress = self._iter_progress(loader, desc=f"{split}-epoch{epoch}")
+
+        for step, batch_cpu in enumerate(progress, start=1):
+            batch = self._move_batch_to_device(batch_cpu)
+            with torch.set_grad_enabled(train_mode):
+                with autocast(enabled=self.cfg.amp and self.device.type == "cuda"):
+                    outputs = self._forward(batch=batch, train_mode=train_mode)
+                    logits = outputs["logits"]
+                    loss_main = self._primary_loss(logits=logits, labels=batch["labels"])
+                    loss_aux = self._aux_loss(outputs)
+                    loss = loss_main + loss_aux
+
+                if train_mode:
+                    loss_step = loss / max(1, self.cfg.grad_accum_steps)
+                    self.scaler.scale(loss_step).backward()
+                    if step % max(1, self.cfg.grad_accum_steps) == 0:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        self.optimizer.zero_grad(set_to_none=True)
+                        self.scheduler.step()
+
+            total_loss += float(loss.detach().cpu().item())
+            total_batches += 1
+
+            if hasattr(progress, "set_postfix"):
+                progress.set_postfix(loss=f"{float(loss.detach().cpu().item()):.4f}")
+
+            probs = self._extract_probabilities(logits.detach())
+            y_prob = probs.detach().cpu().numpy()
+            y_true = batch["labels"].detach().cpu().numpy()
+            y_true_list.append(y_true)
+            y_prob_list.append(y_prob)
+
+            if "expert_weights" in outputs and torch.is_tensor(outputs["expert_weights"]):
+                expert_weights_all.append(outputs["expert_weights"].detach().cpu().numpy())
+
+            if save_evidence:
+                mask_cpu = batch["mask"].detach().cpu()
+                if self.cfg.task_type == "gastro_multilabel":
+                    attn = outputs["attention"].detach().cpu()
+                    topk_map = self._topk_paths_multilabel(
+                        attn=attn,
+                        mask=mask_cpu,
+                        image_paths=batch["image_paths"],
+                        topk=self.cfg.topk_evidence,
+                    )
+                    for i in range(attn.shape[0]):
+                        rec: dict[str, Any] = {
+                            "exam_dir": batch["exam_dirs"][i],
+                            "report_title": batch["report_titles"][i],
+                            "topk_attention": topk_map[i],
+                            "pred_prob": {
+                                self.label_names[j]: float(y_prob[i, j])
+                                for j in range(len(self.label_names))
+                            },
+                            "gt": {
+                                self.label_names[j]: int(y_true[i, j])
+                                for j in range(len(self.label_names))
+                            },
+                        }
+                        if "expert_weights" in outputs and torch.is_tensor(outputs["expert_weights"]):
+                            rec["expert_weights"] = outputs["expert_weights"][i].detach().cpu().tolist()
+                        if "prototype_scores" in outputs and torch.is_tensor(outputs["prototype_scores"]):
+                            rec["prototype_scores"] = outputs["prototype_scores"][i].detach().cpu().tolist()
+                        evidence_records.append(rec)
+                else:
+                    attn = outputs["attention"].detach().cpu()
+                    topk_paths = self._topk_paths_from_attention(
+                        attn=attn,
+                        mask=mask_cpu,
+                        image_paths=batch["image_paths"],
+                        topk=self.cfg.topk_evidence,
+                    )
+                    for i in range(attn.shape[0]):
+                        rec = {
+                            "exam_dir": batch["exam_dirs"][i],
+                            "report_title": batch["report_titles"][i],
+                            "topk_attention": topk_paths[i],
+                            "pred_prob": float(y_prob[i] if np.ndim(y_prob[i]) == 0 else y_prob[i, 1]),
+                            "gt": int(y_true[i]),
+                        }
+                        if "prototype_similarity" in outputs and torch.is_tensor(outputs["prototype_similarity"]):
+                            rec["prototype_similarity"] = outputs["prototype_similarity"][i].detach().cpu().tolist()
+                        evidence_records.append(rec)
+
+        if train_mode and total_batches % max(1, self.cfg.grad_accum_steps) != 0:
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.optimizer.zero_grad(set_to_none=True)
+            self.scheduler.step()
+
+        if total_batches == 0:
+            return float("nan"), {self.cfg.monitor_metric: float("nan")}, {}
+
+        avg_loss = total_loss / max(1, total_batches)
+        y_true_all = np.concatenate(y_true_list, axis=0)
+        y_prob_all = np.concatenate(y_prob_list, axis=0)
+        metrics, artifact = self._compute_required_metrics(y_true=y_true_all, y_prob=y_prob_all)
+
+        if expert_weights_all:
+            ew = np.concatenate(expert_weights_all, axis=0)
+            metrics["expert_usage_distribution"] = ew.mean(axis=0).tolist()
+
+        if save_evidence:
+            out_path = self.evidence_dir / f"{split}_evidence.jsonl"
+            with out_path.open("w", encoding="utf-8") as f:
+                for rec in evidence_records:
+                    f.write(json.dumps(to_builtin_type(rec), ensure_ascii=False) + "\n")
+
+        return avg_loss, metrics, artifact
+
+    def fit(self) -> dict[str, Any]:
+        best_val_metrics: dict[str, Any] | None = None
+        best_val_loss = float("nan")
+
+        for epoch in range(self.start_epoch, self.cfg.max_epochs + 1):
+            print("\n" + "-" * 80)
+            print(f"[{self.run_dir.name}] Epoch {epoch}/{self.cfg.max_epochs} 训练")
+            train_loss, train_metrics, _ = self._run_one_epoch_detailed(
+                loader=self.train_loader,
+                epoch=epoch,
+                train_mode=True,
+                split="train",
+                save_evidence=False,
+            )
+            print(f"[{self.run_dir.name}] 训练完成: loss={self._fmt_metric(train_loss)}, {self._summary_text(train_metrics)}")
+
+            print(f"[{self.run_dir.name}] Epoch {epoch}/{self.cfg.max_epochs} 验证")
+            val_loss, val_metrics, val_artifact = self._run_one_epoch_detailed(
+                loader=self.val_loader,
+                epoch=epoch,
+                train_mode=False,
+                split="val",
+                save_evidence=True,
+            )
+            print(f"[{self.run_dir.name}] 验证完成: loss={self._fmt_metric(val_loss)}, {self._summary_text(val_metrics)}")
+
+            train_monitor = self._monitor_value(train_metrics)
+            val_monitor = self._monitor_value(val_metrics)
+            self.logger.write(epoch, "train", train_loss, train_monitor, train_metrics)
+            self.logger.write(epoch, "val", val_loss, val_monitor, val_metrics)
+            self._record_epoch_outputs(
+                epoch=epoch,
+                train_loss=train_loss,
+                val_loss=val_loss,
+                train_metrics=train_metrics,
+                val_metrics=val_metrics,
+            )
+            self._save_metrics_snapshot(self.val_metrics_latest_path, epoch=epoch, loss=val_loss, metrics=val_metrics)
+            self._save_confusion_matrix_plot(split="val", epoch=epoch, artifact=val_artifact)
+            self._save_curve_plot(split="val", epoch=epoch, artifact=val_artifact, curve_type="roc")
+            self._save_curve_plot(split="val", epoch=epoch, artifact=val_artifact, curve_type="pr")
+
+            self._save_checkpoint(self.last_path, epoch, val_monitor)
+            if self._is_improved(val_monitor):
+                self.best_metric = val_monitor
+                self.best_epoch = epoch
+                best_val_metrics = dict(val_metrics)
+                best_val_loss = val_loss
+                self._save_checkpoint(self.best_path, epoch, val_monitor)
+                self._save_metrics_snapshot(self.best_val_metrics_path, epoch=epoch, loss=val_loss, metrics=val_metrics)
+
+        if self.best_path.is_file():
+            self._load_checkpoint(self.best_path, strict=True)
+
+        test_epoch = self.best_epoch if self.best_epoch > 0 else self.cfg.max_epochs
+        print("\n" + "-" * 80)
+        print(f"[{self.run_dir.name}] 测试（best epoch = {test_epoch}）")
+        test_loss, test_metrics, test_artifact = self._run_one_epoch_detailed(
+            loader=self.test_loader,
+            epoch=test_epoch,
+            train_mode=False,
+            split="test",
+            save_evidence=True,
+        )
+        print(f"[{self.run_dir.name}] 测试完成: loss={self._fmt_metric(test_loss)}, {self._summary_text(test_metrics)}")
+
+        self.test_metrics_path.write_text(
+            json.dumps(to_builtin_type(test_metrics), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._save_metrics_snapshot(self.test_metrics_meta_path, epoch=test_epoch, loss=test_loss, metrics=test_metrics)
+        self._save_confusion_matrix_plot(split="test", epoch=test_epoch, artifact=test_artifact)
+        self._save_curve_plot(split="test", epoch=test_epoch, artifact=test_artifact, curve_type="roc")
+        self._save_curve_plot(split="test", epoch=test_epoch, artifact=test_artifact, curve_type="pr")
+
+        result = {
+            "best_epoch": self.best_epoch,
+            "best_val_metric": self.best_metric,
+            "best_val_loss": best_val_loss,
+            "best_val_metrics": to_builtin_type(best_val_metrics or {}),
+            "test_loss": test_loss,
+            "test_metrics": to_builtin_type(test_metrics),
+        }
+
+        (self.run_dir / "result_summary.json").write_text(
+            json.dumps(to_builtin_type(result), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return result
 
 
 class InstanceAwareBatchSampler(Sampler[list[int]]):
@@ -117,8 +779,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=str, default="configs/path.yaml", help="路径配置文件")
     parser.add_argument("--demo-config", type=str, default="configs/demo.yaml", help="demo 运行参数配置")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
-    parser.add_argument("--epochs", type=int, default=3, help="每个模型训练轮数")
-    parser.add_argument("--patience", type=int, default=2, help="早停耐心轮数")
+    parser.add_argument("--epochs", type=int, default=30, help="每个模型训练轮数")
+    parser.add_argument("--patience", type=int, default=30, help="保留参数兼容；默认与训练轮数一致")
     parser.add_argument("--image-size", type=int, default=224, help="输入图像尺寸")
     parser.add_argument("--num-workers", type=int, default=-1, help="覆盖 demo.yaml 中的 num_workers；-1 表示不覆盖")
     parser.add_argument("--max-exams-per-task", type=int, default=0, help="每个任务最多样本数，0 表示不限制")
@@ -466,7 +1128,7 @@ def run_single_model(
         encoding="utf-8",
     )
 
-    trainer = DemoTrainer(
+    trainer = RichDemoTrainer(
         model=model,
         cfg=trainer_cfg,
         run_dir=run_dir,

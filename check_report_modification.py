@@ -2,6 +2,7 @@
 """检查 valid_dicts_report.csv 相对 valid_dicts_report_original.csv 的修改情况。
 
 输出仅包含不一致项，按“键 -> 取值变化 -> 次数”压缩展示。
+若两个 CSV 完全一致，则显式输出说明。
 示例：
     hp键：
     空值 -> 未检 *100
@@ -55,7 +56,6 @@ def compare_rows(
 ) -> Dict[str, Counter]:
     transition_by_key: Dict[str, Counter] = defaultdict(Counter)
 
-    total = len(list(keys))
     key_list = list(keys)
     total = len(key_list)
 
@@ -79,15 +79,20 @@ def compare_rows(
 
 
 def print_result(transition_by_key: Dict[str, Counter]) -> None:
+    has_difference = False
     for key in sorted(transition_by_key.keys()):
         transitions = transition_by_key[key]
         if not transitions:
             continue
+        has_difference = True
         print(f"{key}键：")
         for (src, dst), count in sorted(
             transitions.items(), key=lambda x: (-x[1], x[0][0], x[0][1])
         ):
             print(f"{src} -> {dst} *{count}")
+
+    if not has_difference:
+        print("两个 CSV 文件完全一致。")
 
 
 def parse_simple_yaml_mapping(yaml_path: Path) -> dict[str, str]:

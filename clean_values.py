@@ -4,16 +4,16 @@ import argparse
 import csv
 import re
 import sys
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import get_terminal_size
 from unicodedata import combining, east_asian_width
 
+OPERATION_CODE_SUFFIX_PATTERN = re.compile(r'\s*[（(]\d[0-9A-Za-z.xX.-]*[)）]\s*$')
+
 
 @dataclass
 class PathConfig:
-    dataset_base_root: Path
     report_csv_path: Path
 
 
@@ -100,8 +100,8 @@ class SimpleProgressBar:
     def update(self, step: int = 1) -> None:
         self.current = min(self.total, self.current + step)
         ratio = self.current / self.total
-        percent = int(ratio * 100)
 
+        percent = int(ratio * 100)
         if not self._is_tty:
             if percent > self._last_reported_percent and (percent % 10 == 0 or self.current >= self.total):
                 print(f'{self.desc}: {self.current}/{self.total} ({ratio * 100:5.1f}%)')
@@ -156,41 +156,29 @@ def resolve_path(raw_path: str, config_dir: Path) -> Path:
 def build_path_config(config_path: Path, report_csv_override: Path | None) -> PathConfig:
     config_path = config_path.expanduser().resolve()
     paths_payload = parse_simple_yaml_mapping(config_path)
-    dataset_base_root = resolve_path(paths_payload['dataset_base_root'], config_path.parent)
     if report_csv_override is not None:
         report_csv_path = report_csv_override.expanduser().resolve()
     else:
-        report_csv_raw = paths_payload.get('valid_dicts_report_csv', 'valid_dicts_report.csv')
+        report_csv_raw = paths_payload.get("valid_dicts_report_csv", "valid_dicts_report.csv")
         report_csv_path = resolve_path(report_csv_raw, config_path.parent)
-    return PathConfig(dataset_base_root=dataset_base_root, report_csv_path=report_csv_path)
+    return PathConfig(report_csv_path=report_csv_path)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='统计胃镜/肠镜 badness、hp 与 operationValue 类型次数')
+    parser = argparse.ArgumentParser(description='修正 valid_dicts_report.csv 中 hp 与 operationValue 字段')
     parser.add_argument('--config', type=Path, default=Path('configs/path.yaml'), help='路径配置文件，默认 configs/path.yaml')
     parser.add_argument('--report-csv', type=Path, default=None, help='可选：覆盖 valid_dicts_report_csv')
     return parser.parse_args()
 
 
-def load_rows(report_csv_path: Path) -> list[dict[str, str]]:
-    if not report_csv_path.is_file():
-        raise FileNotFoundError(f'未找到报告汇总文件：{report_csv_path}')
-
-    with report_csv_path.open('r', encoding='utf-8-sig', newline='') as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        fieldnames = set(reader.fieldnames or [])
-
-    required = {'reportTitle', 'badness', 'hp', 'operationValue'}
-    missing = sorted(required - fieldnames)
-    if missing:
-        raise KeyError(f'CSV 缺少字段：{"、".join(missing)}')
-    return rows
+def normalize_text(value: str) -> str:
+    return value.replace('\u3000', ' ').strip()
 
 
 def classify_organ(report_title: str) -> str | None:
-    has_stomach = '胃' in report_title and '肠' not in report_title
-    has_intestine = '肠' in report_title
+    title = normalize_text(report_title)
+    has_stomach = '胃' in title and '肠' not in title
+    has_intestine = '肠' in title
     if has_stomach:
         return '胃镜'
     if has_intestine:
@@ -198,84 +186,132 @@ def classify_organ(report_title: str) -> str | None:
     return None
 
 
-def normalize_value(value: str, empty_label: str = '空值') -> str:
-    cleaned = value.replace('\u3000', ' ').strip()
-    return cleaned if cleaned else empty_label
+def should_set_unchecked(organ: str | None, hp_value: str) -> bool:
+    hp_norm = normalize_text(hp_value)
+    is_empty = hp_norm == ''
+    if organ == '胃镜':
+        return is_empty or hp_norm == '待确认'
+    if organ == '肠镜':
+        return is_empty
+    return False
 
 
-def normalize_operation_item(value: str) -> str:
-    cleaned = value.replace('\u3000', ' ').strip()
-    cleaned = re.sub(r'\s*[（(]\d[0-9A-Za-z.xX.-]*[)）]\s*$', '', cleaned)
-    return cleaned.strip()
+def strip_operation_code_suffix(value: str) -> tuple[str, bool]:
+    stripped_value, replace_count = OPERATION_CODE_SUFFIX_PATTERN.subn('', normalize_text(value))
+    return stripped_value.strip(), replace_count > 0
 
 
-def split_operation_values(value: str) -> list[str]:
-    cleaned = value.replace('\u3000', ' ').strip()
-    if not cleaned:
-        return ['空值']
+def normalize_operation_value(value: str) -> tuple[str, bool, bool]:
+    raw_value = normalize_text(value)
+    if not raw_value:
+        return '', False, False
 
-    parts = [normalize_operation_item(part) for part in re.split(r'[|，,]', cleaned)]
-    values = [part for part in parts if part]
-    return values if values else ['空值']
+    separator_changed = bool(re.search(r'[，,]', raw_value))
+    code_removed = False
+    normalized_parts: list[str] = []
+    for part in re.split(r'[|，,]', raw_value):
+        part = normalize_text(part)
+        if not part:
+            continue
+        part, current_code_removed = strip_operation_code_suffix(part)
+        if part:
+            normalized_parts.append(part)
+        code_removed = code_removed or current_code_removed
+
+    return '|'.join(normalized_parts), separator_changed, code_removed
 
 
-def count_badness_hp(rows: list[dict[str, str]]) -> dict[str, dict[str, Counter[str]]]:
+def load_rows(report_csv_path: Path) -> tuple[list[dict[str, str]], list[str]]:
+    if not report_csv_path.is_file():
+        raise FileNotFoundError(f'未找到报告汇总文件：{report_csv_path}')
+
+    with report_csv_path.open('r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fieldnames = list(reader.fieldnames or [])
+
+    required = {"reportTitle", "hp", "operationValue"}
+    missing = sorted(required - set(fieldnames))
+    if missing:
+        raise KeyError(f'CSV 缺少字段：{"、".join(missing)}')
+
+    return rows, fieldnames
+
+
+def rewrite_values(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, int]]:
     stats = {
-        '胃镜': {'badness': Counter(), 'hp': Counter(), 'operationValue': Counter()},
-        '肠镜': {'badness': Counter(), 'hp': Counter(), 'operationValue': Counter()},
+        "胃镜_待确认改未检": 0,
+        "胃镜_空值改未检": 0,
+        "肠镜_空值改未检": 0,
+        "hp_总修改数": 0,
+        "operationValue_分隔符改为|": 0,
+        "operationValue_去除末尾编码": 0,
+        "operationValue_总修改数": 0,
+        "字段总修改数": 0,
     }
 
-    progress = SimpleProgressBar(total=len(rows), desc='统计 badness/hp/operationValue')
+    progress = SimpleProgressBar(total=len(rows), desc='重写 hp / operationValue')
     try:
         for row in rows:
-            report_title = str(row.get('reportTitle', '')).strip()
+            report_title = str(row.get("reportTitle", ""))
+            hp_raw = str(row.get("hp", ""))
             organ = classify_organ(report_title)
-            if organ is None:
-                progress.update(1)
-                continue
 
-            badness = normalize_value(str(row.get('badness', '')))
-            hp = normalize_value(str(row.get('hp', '')))
-            operation_values = split_operation_values(str(row.get('operationValue', '')))
-            stats[organ]['badness'][badness] += 1
-            stats[organ]['hp'][hp] += 1
-            for operation_value in operation_values:
-                stats[organ]['operationValue'][operation_value] += 1
+            if should_set_unchecked(organ, hp_raw):
+                hp_norm = normalize_text(hp_raw)
+                if organ == '胃镜' and hp_norm == '待确认':
+                    stats["胃镜_待确认改未检"] += 1
+                elif organ == '胃镜' and hp_norm == '':
+                    stats["胃镜_空值改未检"] += 1
+                elif organ == '肠镜' and hp_norm == '':
+                    stats["肠镜_空值改未检"] += 1
+
+                row["hp"] = '未检'
+                stats["hp_总修改数"] += 1
+                stats["字段总修改数"] += 1
+
+            operation_value_raw = str(row.get("operationValue", ""))
+            operation_value_norm, separator_changed, code_removed = normalize_operation_value(operation_value_raw)
+            if separator_changed:
+                stats["operationValue_分隔符改为|"] += 1
+            if code_removed:
+                stats["operationValue_去除末尾编码"] += 1
+            if operation_value_norm != operation_value_raw:
+                row["operationValue"] = operation_value_norm
+                stats["operationValue_总修改数"] += 1
+                stats["字段总修改数"] += 1
+
             progress.update(1)
     finally:
         progress.close()
 
-    return stats
+    return rows, stats
 
 
-def print_type_counts(counter: Counter[str]) -> None:
-    if not counter:
-        print('无：0')
-        return
-    for name, count in counter.most_common():
-        print(f'{name}：{count}')
-
-
-def print_stats(stats: dict[str, dict[str, Counter[str]]]) -> None:
-    for organ in ['胃镜', '肠镜']:
-        print(f'\n{organ}：')
-        print('badness的类型：')
-        print_type_counts(stats[organ]['badness'])
-        print('\nhp的类型：')
-        print_type_counts(stats[organ]['hp'])
-        print('\noperationValue的类型：')
-        print_type_counts(stats[organ]['operationValue'])
+def write_rows(report_csv_path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
+    tmp_path = report_csv_path.with_suffix(report_csv_path.suffix + '.tmp')
+    with tmp_path.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp_path.replace(report_csv_path)
 
 
 def main() -> None:
     args = parse_args()
     cfg = build_path_config(args.config, args.report_csv)
-    rows = load_rows(cfg.report_csv_path)
-    print(f'报告记录总数：{len(rows)}')
-    print(f'统计文件：{cfg.report_csv_path}')
 
-    stats = count_badness_hp(rows)
-    print_stats(stats)
+    rows, fieldnames = load_rows(cfg.report_csv_path)
+    print(f'读取记录数：{len(rows)}')
+    print(f'目标文件：{cfg.report_csv_path}')
+
+    new_rows, stats = rewrite_values(rows)
+
+    write_rows(cfg.report_csv_path, new_rows, fieldnames)
+    print('已完成覆盖写回。')
+    print('修改统计：')
+    for k, v in stats.items():
+        print(f'- "{k}"：{v}')
 
 
 if __name__ == '__main__':
