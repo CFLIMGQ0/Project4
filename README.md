@@ -19,6 +19,8 @@
 
 `scripts/show_reportTitle.py` 用于统计 `valid_dicts_report.csv` 中的 `reportTitle` 类型分布。
 
+`scripts/show_watchResult.py` 用于统计 `valid_dicts_report.csv` 中的 `watchResult` 类型分布，说明文档见 `show_watchResult.md`。
+
 `temp.py` 已调整为一次性执行文件，仅用于临时任务或短期排查，不作为长期维护脚本。建议优先使用 `scripts/` 目录下的正式清洗脚本完成日常处理。
 
 ## 当前数据目录约定
@@ -75,7 +77,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 路径配置文件；
 - 数据结构与清洗阶段说明文档。
 
-## reportTitle 相关脚本（新增）
+## reportTitle / watchResult 相关脚本（新增）
 
 1. 统计 `reportTitle` 类型分布：
 
@@ -83,7 +85,15 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
    python scripts/show_reportTitle.py
    ```
 
-2. 临时脚本 `temp.py` 保持为一次性执行用途（不作为长期维护入口）。
+2. 统计 `watchResult` 类型分布：
+
+   ```bash
+   python scripts/show_watchResult.py
+   ```
+
+   详细说明见：`show_watchResult.md`。
+
+3. 临时脚本 `temp.py` 保持为一次性执行用途（不作为长期维护入口）。
 
 ## 使用提醒
 
