@@ -8,6 +8,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import get_terminal_size
+from unicodedata import combining, east_asian_width
 
 
 @dataclass
@@ -23,6 +24,78 @@ class SimpleProgressBar:
         self.desc = desc
         self._is_tty = sys.stdout.isatty()
         self._last_reported_percent = -1
+        self._last_rendered_width = 0
+
+    @staticmethod
+    def _display_width(text: str) -> int:
+        width = 0
+        for char in text:
+            if combining(char):
+                continue
+            width += 2 if east_asian_width(char) in {'W', 'F'} else 1
+        return width
+
+    @classmethod
+    def _truncate_to_width(cls, text: str, max_width: int) -> str:
+        if max_width <= 0:
+            return ''
+        if cls._display_width(text) <= max_width:
+            return text
+
+        ellipsis = '...'
+        ellipsis_width = cls._display_width(ellipsis)
+        if max_width <= ellipsis_width:
+            return '.' * max_width
+
+        kept_chars: list[str] = []
+        kept_width = 0
+        target_width = max_width - ellipsis_width
+        for char in text:
+            char_width = cls._display_width(char)
+            if kept_width + char_width > target_width:
+                break
+            kept_chars.append(char)
+            kept_width += char_width
+        return ''.join(kept_chars) + ellipsis
+
+    def _build_line(self, ratio: float) -> str:
+        terminal_width = max(20, get_terminal_size((80, 20)).columns)
+        progress_text = f'{self.current}/{self.total}'
+        percent_text = f'({ratio * 100:5.1f}%)'
+
+        compact_line = f'{progress_text} {percent_text}'
+        if self._display_width(compact_line) >= terminal_width:
+            return compact_line
+
+        suffix = f'] {progress_text} {percent_text}'
+        max_bar_width = 40
+
+        desc_limit = terminal_width - self._display_width(': [') - self._display_width(suffix) - 10
+        desc = self._truncate_to_width(self.desc, desc_limit)
+        prefix = f'{desc}: [' if desc else '['
+        bar_width = min(
+            max_bar_width,
+            max(1, terminal_width - self._display_width(prefix) - self._display_width(suffix)),
+        )
+        if bar_width >= 10:
+            done = int(bar_width * ratio)
+            bar = '=' * done + '-' * (bar_width - done)
+            return f'{prefix}{bar}{suffix}'
+
+        fallback_desc = self._truncate_to_width(
+            self.desc,
+            terminal_width - self._display_width(f': {progress_text} {percent_text}'),
+        )
+        if fallback_desc:
+            return f'{fallback_desc}: {progress_text} {percent_text}'
+        return compact_line
+
+    def _render_tty(self, ratio: float) -> None:
+        line = self._build_line(ratio)
+        line_width = self._display_width(line)
+        padding = max(0, self._last_rendered_width - line_width)
+        print(f'\r{line}{" " * padding}', end='', flush=True)
+        self._last_rendered_width = line_width
 
     def update(self, step: int = 1) -> None:
         self.current = min(self.total, self.current + step)
@@ -35,15 +108,15 @@ class SimpleProgressBar:
                 self._last_reported_percent = percent
             return
 
-        width = min(40, max(10, get_terminal_size((80, 20)).columns - 42))
-        done = int(width * ratio)
-        bar = '=' * done + '-' * (width - done)
-        print(f'\r{self.desc}: [{bar}] {self.current}/{self.total} ({ratio * 100:5.1f}%)', end='', flush=True)
+        self._render_tty(ratio)
         if self.current >= self.total:
             print()
+            self._last_rendered_width = 0
 
     def close(self) -> None:
-        return
+        if self._is_tty and self._last_rendered_width > 0:
+            print()
+            self._last_rendered_width = 0
 
 
 def parse_simple_yaml_mapping(yaml_path: Path) -> dict[str, str]:

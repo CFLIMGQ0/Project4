@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import get_terminal_size
+from unicodedata import combining, east_asian_width
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from check_pdf import CONFIG_PATH, load_yaml_config
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -28,19 +30,99 @@ class SimpleProgressBar:
         self.total = max(total, 1)
         self.current = 0
         self.desc = desc
+        self._is_tty = sys.stdout.isatty()
+        self._last_reported_percent = -1
+        self._last_rendered_width = 0
+
+    @staticmethod
+    def _display_width(text: str) -> int:
+        width = 0
+        for char in text:
+            if combining(char):
+                continue
+            width += 2 if east_asian_width(char) in {'W', 'F'} else 1
+        return width
+
+    @classmethod
+    def _truncate_to_width(cls, text: str, max_width: int) -> str:
+        if max_width <= 0:
+            return ''
+        if cls._display_width(text) <= max_width:
+            return text
+
+        ellipsis = '...'
+        ellipsis_width = cls._display_width(ellipsis)
+        if max_width <= ellipsis_width:
+            return '.' * max_width
+
+        kept_chars: list[str] = []
+        kept_width = 0
+        target_width = max_width - ellipsis_width
+        for char in text:
+            char_width = cls._display_width(char)
+            if kept_width + char_width > target_width:
+                break
+            kept_chars.append(char)
+            kept_width += char_width
+        return ''.join(kept_chars) + ellipsis
+
+    def _build_line(self, ratio: float) -> str:
+        terminal_width = max(20, get_terminal_size((80, 20)).columns)
+        progress_text = f'{self.current}/{self.total}'
+        percent_text = f'({ratio * 100:5.1f}%)'
+
+        compact_line = f'{progress_text} {percent_text}'
+        if self._display_width(compact_line) >= terminal_width:
+            return compact_line
+
+        suffix = f'] {progress_text} {percent_text}'
+        desc_limit = terminal_width - self._display_width(': [') - self._display_width(suffix) - 10
+        desc = self._truncate_to_width(self.desc, desc_limit)
+        prefix = f'{desc}: [' if desc else '['
+        bar_width = min(
+            40,
+            max(1, terminal_width - self._display_width(prefix) - self._display_width(suffix)),
+        )
+        if bar_width >= 10:
+            done = int(bar_width * ratio)
+            bar = '=' * done + '-' * (bar_width - done)
+            return f'{prefix}{bar}{suffix}'
+
+        fallback_desc = self._truncate_to_width(
+            self.desc,
+            terminal_width - self._display_width(f': {progress_text} {percent_text}'),
+        )
+        if fallback_desc:
+            return f'{fallback_desc}: {progress_text} {percent_text}'
+        return compact_line
+
+    def _render_tty(self, ratio: float) -> None:
+        line = self._build_line(ratio)
+        line_width = self._display_width(line)
+        padding = max(0, self._last_rendered_width - line_width)
+        print(f'\r{line}{" " * padding}', end='', flush=True)
+        self._last_rendered_width = line_width
 
     def update(self, step: int = 1) -> None:
         self.current = min(self.total, self.current + step)
-        width = min(40, max(10, get_terminal_size((80, 20)).columns - 42))
         ratio = self.current / self.total
-        done = int(width * ratio)
-        bar = '=' * done + '-' * (width - done)
-        print(f'\r{self.desc}: [{bar}] {self.current}/{self.total} ({ratio * 100:5.1f}%)', end='', flush=True)
+        percent = int(ratio * 100)
+
+        if not self._is_tty:
+            if percent > self._last_reported_percent and (percent % 10 == 0 or self.current >= self.total):
+                print(f'{self.desc}: {self.current}/{self.total} ({ratio * 100:5.1f}%)')
+                self._last_reported_percent = percent
+            return
+
+        self._render_tty(ratio)
         if self.current >= self.total:
             print()
+            self._last_rendered_width = 0
 
     def close(self) -> None:
-        return
+        if self._is_tty and self._last_rendered_width > 0:
+            print()
+            self._last_rendered_width = 0
 
 
 def build_progress(total: int, desc: str):
@@ -61,26 +143,49 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def parse_simple_yaml_mapping(yaml_path: Path) -> dict[str, str]:
+    text = yaml_path.read_text(encoding='utf-8')
+    in_paths = False
+    result: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.split('#', 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if re.match(r'^\s*paths\s*:\s*$', line):
+            in_paths = True
+            continue
+        if not in_paths:
+            continue
+        if re.match(r'^\S', raw_line):
+            break
+
+        match = re.match(r'^\s{2,}([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$', line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2)
+        result[key] = value.strip().strip('"').strip("'")
+
+    if not result:
+        raise ValueError(f'无法从 {yaml_path} 解析 paths 配置')
+    return result
+
+
+def resolve_path(raw_path: str, config_dir: Path) -> Path:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (config_dir.parent / path).resolve()
+
+
 def build_path_config(config_path: Path, report_csv_override: Path | None) -> PathConfig:
-    payload = load_yaml_config(config_path.expanduser())
-    paths_payload = payload.get('paths')
-    if not isinstance(paths_payload, dict):
-        raise ValueError('path.yaml 必须包含 paths 分组')
-
-    config_dir = config_path.expanduser().resolve().parent
-
-    def resolve_path(raw_path: str) -> Path:
-        path = Path(raw_path).expanduser()
-        if path.is_absolute():
-            return path
-        return (config_dir.parent / path).resolve()
-
-    dataset_base_root = resolve_path(str(paths_payload['dataset_base_root']))
+    config_path = config_path.expanduser().resolve()
+    paths_payload = parse_simple_yaml_mapping(config_path)
+    dataset_base_root = resolve_path(paths_payload['dataset_base_root'], config_path.parent)
     report_csv_config = paths_payload.get('valid_dicts_report_csv')
     report_csv_path = (
         report_csv_override.expanduser().resolve()
         if report_csv_override is not None
-        else resolve_path(str(report_csv_config)) if report_csv_config else (dataset_base_root / 'valid_dicts_report.csv').resolve()
+        else resolve_path(report_csv_config, config_path.parent) if report_csv_config else (dataset_base_root / 'valid_dicts_report.csv').resolve()
     )
     return PathConfig(dataset_base_root=dataset_base_root, report_csv_path=report_csv_path)
 

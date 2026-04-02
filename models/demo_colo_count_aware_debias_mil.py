@@ -198,10 +198,20 @@ class DemoColoCountAwareDebiasMIL(nn.Module):
         if self.binary_num_classes == 2:
             binary_logits = binary_logits + self.proto_scale * proto_delta + self.proto_bias
 
-        max_l = max((len(x) for x in lesion_idx), default=0)
-        max_c = max((len(x) for x in context_idx), default=0)
-        lesion_idx_tensor = torch.full((len(lesion_idx), max_l), -1, dtype=torch.long, device=images.device)
-        context_idx_tensor = torch.full((len(context_idx), max_c), -1, dtype=torch.long, device=images.device)
+        # DataParallel 会对每张卡的输出做 gather，这里的宽度必须固定，
+        # 不能依赖当前卡本地 batch 中实际出现的候选数。
+        lesion_idx_tensor = torch.full(
+            (len(lesion_idx), self.topk_lesion),
+            -1,
+            dtype=torch.long,
+            device=images.device,
+        )
+        context_idx_tensor = torch.full(
+            (len(context_idx), self.topk_context),
+            -1,
+            dtype=torch.long,
+            device=images.device,
+        )
         for i, idx_list in enumerate(lesion_idx):
             if idx_list:
                 lesion_idx_tensor[i, : len(idx_list)] = torch.tensor(idx_list, dtype=torch.long, device=images.device)

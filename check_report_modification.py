@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Dict, Iterable, List
 
 EMPTY_LABEL = "空值"
 MISSING_ROW_LABEL = "<缺失行>"
+CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "path.yaml"
 
 
 def normalize_value(value: str | None) -> str:
@@ -88,6 +90,62 @@ def print_result(transition_by_key: Dict[str, Counter]) -> None:
             print(f"{src} -> {dst} *{count}")
 
 
+def parse_simple_yaml_mapping(yaml_path: Path) -> dict[str, str]:
+    text = yaml_path.read_text(encoding="utf-8")
+    in_paths = False
+    result: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if re.match(r"^\s*paths\s*:\s*$", line):
+            in_paths = True
+            continue
+        if not in_paths:
+            continue
+        if re.match(r"^\S", raw_line):
+            break
+
+        match = re.match(r"^\s{2,}([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2)
+        result[key] = value.strip().strip('"').strip("'")
+
+    if not result:
+        raise ValueError(f"无法从 {yaml_path} 解析 paths 配置")
+    return result
+
+
+def resolve_path(raw_path: str, config_dir: Path) -> Path:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (config_dir.parent / path).resolve()
+
+
+def build_report_paths(config_path: Path, dataset_base_root_override: Path | None) -> tuple[Path, Path]:
+    config_path = config_path.expanduser().resolve()
+    paths_payload = parse_simple_yaml_mapping(config_path)
+
+    dataset_base_root = (
+        dataset_base_root_override.expanduser().resolve()
+        if dataset_base_root_override is not None
+        else resolve_path(paths_payload["dataset_base_root"], config_path.parent)
+    )
+    report_csv_raw = paths_payload.get("valid_dicts_report_csv", "valid_dicts_report.csv")
+    modified_path = resolve_path(report_csv_raw, config_path.parent)
+
+    if dataset_base_root_override is not None and not modified_path.parent.exists():
+        modified_path = dataset_base_root / "valid_dicts_report.csv"
+
+    if dataset_base_root_override is not None:
+        modified_path = dataset_base_root / modified_path.name
+
+    original_path = modified_path.with_name("valid_dicts_report_original.csv")
+    return modified_path, original_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -96,20 +154,24 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument(
-        "dataset_root",
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help="路径配置文件，默认 configs/path.yaml",
+    )
+    parser.add_argument(
+        "dataset_base_root",
         nargs="?",
-        default=".",
-        help="数据集根目录（默认当前目录）",
+        default=None,
+        type=Path,
+        help="可选：覆盖配置中的 dataset_base_root",
     )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    dataset_root = Path(args.dataset_root).expanduser().resolve()
-
-    modified_path = dataset_root / "valid_dicts_report.csv"
-    original_path = dataset_root / "valid_dicts_report_original.csv"
+    modified_path, original_path = build_report_paths(args.config, args.dataset_base_root)
 
     for p in (modified_path, original_path):
         if not p.exists():
