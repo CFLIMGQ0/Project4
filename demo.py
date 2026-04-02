@@ -127,6 +127,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_config_path(raw_path: Any, config_path: Path) -> str:
+    path = Path(str(raw_path)).expanduser()
+    if not path.is_absolute():
+        path = (config_path.parent / path).resolve()
+    else:
+        path = path.resolve()
+    return str(path)
+
+
 def load_path_config(config_path: Path) -> dict[str, str]:
     if not config_path.is_file():
         raise FileNotFoundError(f"未找到配置文件: {config_path}")
@@ -142,10 +151,13 @@ def load_path_config(config_path: Path) -> dict[str, str]:
         if k not in paths:
             raise ValueError(f"paths 缺少字段: {k}")
 
-    return {
-        "valid_dicts_report_csv": str(paths["valid_dicts_report_csv"]),
-        "output_dir": str(paths["output_dir"]),
+    resolved = {
+        "valid_dicts_report_csv": resolve_config_path(paths["valid_dicts_report_csv"], config_path),
+        "output_dir": resolve_config_path(paths["output_dir"], config_path),
     }
+    if "dataset_root" in paths and str(paths["dataset_root"]).strip():
+        resolved["dataset_root"] = resolve_config_path(paths["dataset_root"], config_path)
+    return resolved
 
 
 def _load_per_model_int_map(payload: dict[str, Any], key: str, default: int) -> dict[str, int]:
@@ -512,6 +524,7 @@ def main() -> None:
     gastro_records, colo_records = build_task_records(
         report_csv_path=report_csv,
         min_instances=demo_cfg["min_instances"],
+        dataset_root=path_cfg.get("dataset_root"),
     )
     gastro_records = maybe_limit_records(gastro_records, args.max_exams_per_task, args.seed)
     colo_records = maybe_limit_records(colo_records, args.max_exams_per_task, args.seed)

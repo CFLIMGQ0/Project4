@@ -161,6 +161,31 @@ def infer_gastro_subtype(report_title_norm: str, watch_result_norm: str) -> tupl
     return 0, GASTRO_SUBTYPE_NAMES[0]
 
 
+def resolve_exam_dir(exam_dir: str | Path, dataset_root: str | Path | None = None) -> tuple[Path, bool]:
+    exam_path = Path(exam_dir).expanduser()
+    if exam_path.is_dir():
+        return exam_path, False
+
+    if dataset_root is None or not str(dataset_root).strip():
+        return exam_path, False
+
+    ds_root = Path(dataset_root).expanduser()
+    if not ds_root.is_absolute():
+        ds_root = ds_root.resolve()
+
+    if not exam_path.is_absolute():
+        candidate = (ds_root / exam_path).resolve()
+        if candidate.is_dir():
+            return candidate, True
+
+    if len(exam_path.parts) >= 2:
+        candidate = ds_root / exam_path.parts[-2] / exam_path.parts[-1]
+        if candidate.is_dir():
+            return candidate, True
+
+    return exam_path, False
+
+
 def collect_image_paths(exam_dir: str | Path) -> list[str]:
     base = Path(exam_dir)
     if not base.exists() or not base.is_dir():
@@ -186,6 +211,7 @@ def load_report_rows(report_csv_path: str | Path) -> list[dict[str, str]]:
 def build_task_records(
     report_csv_path: str | Path,
     min_instances: int = 1,
+    dataset_root: str | Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     返回:
@@ -195,6 +221,10 @@ def build_task_records(
     rows = load_report_rows(report_csv_path)
     gastro_records: list[dict[str, Any]] = []
     colo_records: list[dict[str, Any]] = []
+    skipped_non_target = 0
+    remapped_exam_dir_count = 0
+    missing_exam_dir_count = 0
+    insufficient_image_count = 0
 
     for row in _iter_progress(rows, total=len(rows), desc="构建任务样本"):
         exam_dir = str(row.get("exam_dir", "")).strip()
@@ -208,10 +238,19 @@ def build_task_records(
         is_gastro = is_gastroscopy_record(title_norm, result_norm)
         is_colo = is_colonoscopy_record(title_norm, result_norm)
         if not (is_gastro or is_colo):
+            skipped_non_target += 1
             continue
 
-        image_paths = collect_image_paths(exam_dir)
+        resolved_exam_dir, was_remapped = resolve_exam_dir(exam_dir, dataset_root=dataset_root)
+        if was_remapped:
+            remapped_exam_dir_count += 1
+
+        image_paths = collect_image_paths(resolved_exam_dir)
         if len(image_paths) < min_instances:
+            if not resolved_exam_dir.is_dir():
+                missing_exam_dir_count += 1
+            else:
+                insufficient_image_count += 1
             continue
 
         if is_gastro:
@@ -221,7 +260,7 @@ def build_task_records(
                 subtype_id, subtype_name = infer_gastro_subtype(title_norm, result_norm)
                 gastro_records.append(
                     {
-                        "exam_dir": exam_dir,
+                        "exam_dir": str(resolved_exam_dir),
                         "report_title": report_title,
                         "watch_result": watch_result,
                         "img_num": img_num,
@@ -262,7 +301,7 @@ def build_task_records(
 
                 colo_records.append(
                     {
-                        "exam_dir": exam_dir,
+                        "exam_dir": str(resolved_exam_dir),
                         "report_title": report_title,
                         "watch_result": watch_result,
                         "img_num": img_num,
@@ -273,6 +312,16 @@ def build_task_records(
                     }
                 )
 
+    print(
+        "[数据构建] 过滤统计: "
+        f"总行数={len(rows)}, "
+        f"非胃/肠记录={skipped_non_target}, "
+        f"路径重定位={remapped_exam_dir_count}, "
+        f"目录缺失={missing_exam_dir_count}, "
+        f"图像不足={insufficient_image_count}, "
+        f"胃镜有效样本={len(gastro_records)}, "
+        f"肠镜有效样本={len(colo_records)}"
+    )
     return gastro_records, colo_records
 
 
