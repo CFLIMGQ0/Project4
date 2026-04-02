@@ -212,23 +212,23 @@ class DemoColoCountAwareDebiasMIL(nn.Module):
         aux_losses: dict[str, torch.Tensor] = {}
         if labels is not None and self.binary_num_classes == 2:
             labels_float = labels.float()
-            aux_losses["proto"] = prototype_binary_contrastive_loss(normal_sim, polyp_sim, labels)
+            aux_losses["proto"] = prototype_binary_contrastive_loss(normal_sim, polyp_sim, labels).reshape(1)
             aux_losses["hard_negative"] = hard_negative_suppression(
                 instance_scores=torch.sigmoid(lesion_logits_inst.clamp(min=-20, max=20)),
                 binary_labels=labels,
                 mask=mask,
-            )
+            ).reshape(1)
             aux_losses["consistency"] = consistency_loss(
                 torch.sigmoid(lesion_only_logits),
                 torch.sigmoid(context_only_logits),
-            )
+            ).reshape(1)
 
             if count_labels is not None:
                 valid_count = (labels_float > 0.5) & (count_labels >= 0)
                 if valid_count.any():
-                    aux_losses["count"] = F.cross_entropy(count_logits[valid_count], count_labels[valid_count])
+                    aux_losses["count"] = F.cross_entropy(count_logits[valid_count], count_labels[valid_count]).reshape(1)
                 else:
-                    aux_losses["count"] = torch.zeros((), device=images.device)
+                    aux_losses["count"] = torch.zeros((1,), device=images.device)
 
         return {
             "logits": binary_logits,

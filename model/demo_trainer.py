@@ -34,8 +34,9 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # demo 场景优先吞吐量，减少确定性约束带来的性能损失。
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
 
 @dataclass
@@ -211,11 +212,14 @@ class DemoTrainer:
 
     def _primary_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         if self.cfg.task_type == "gastro_multilabel":
-            return self.criterion(logits, labels.float())
+            loss = self.criterion(logits, labels.float())
+            return loss.mean() if loss.ndim > 0 else loss
 
         if self.cfg.num_classes == 2 and logits.ndim == 1:
-            return self.criterion(logits, labels.float())
-        return self.criterion(logits, labels.long())
+            loss = self.criterion(logits, labels.float())
+            return loss.mean() if loss.ndim > 0 else loss
+        loss = self.criterion(logits, labels.long())
+        return loss.mean() if loss.ndim > 0 else loss
 
     def _aux_loss(self, outputs: dict[str, Any]) -> torch.Tensor:
         aux = outputs.get("aux_losses", {})
@@ -226,6 +230,8 @@ class DemoTrainer:
         for k, v in aux.items():
             if not torch.is_tensor(v):
                 continue
+            if v.ndim > 0:
+                v = v.mean()
             w = self.cfg.aux_loss_weights.get(k, 1.0)
             total = total + w * v
         return total

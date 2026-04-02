@@ -43,7 +43,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=3, help="每个模型训练轮数")
     parser.add_argument("--patience", type=int, default=2, help="早停耐心轮数")
     parser.add_argument("--image-size", type=int, default=224, help="输入图像尺寸")
+<<<<<<< HEAD
     parser.add_argument("--num-workers", type=int, default=2, help="DataLoader 进程数（默认 2，降低 OOM 风险）")
+=======
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader 进程数，0 表示按 GPU 自动设置")
+>>>>>>> small quick modification
     parser.add_argument("--max-exams-per-task", type=int, default=0, help="每个任务最多样本数，0 表示不限制")
     parser.add_argument("--no-pretrained", action="store_true", help="禁用 ImageNet 预训练")
     parser.add_argument("--disable-multi-gpu", action="store_true", help="禁用 DataParallel")
@@ -95,6 +99,49 @@ def compute_binary_pos_weight(train_records: list[dict[str, Any]]) -> list[float
     neg = float((y == 0).sum())
     pw = (neg + 1.0) / (pos + 1.0)
     return [float(pw)]
+
+
+def ceil_to_multiple(value: int, divisor: int) -> int:
+    if divisor <= 0:
+        return value
+    return ((value + divisor - 1) // divisor) * divisor
+
+
+def auto_num_workers(requested_workers: int, active_gpu_count: int) -> int:
+    if requested_workers > 0:
+        return requested_workers
+    cpu_total = os.cpu_count() or 8
+    target = max(4, active_gpu_count * 6)
+    return int(min(cpu_total, target))
+
+
+def tune_dl_cfg_for_gpu(dl_cfg: dict[str, Any], active_gpu_count: int, model_kind: str) -> dict[str, Any]:
+    tuned = dict(dl_cfg)
+    if active_gpu_count <= 1:
+        return tuned
+
+    if model_kind == "baseline":
+        target_train_batch = active_gpu_count * 2
+        target_eval_batch = active_gpu_count * 3
+        tuned["train_max_instances"] = max(int(tuned["train_max_instances"]), 48)
+        tuned["val_max_instances"] = max(int(tuned["val_max_instances"]), 64)
+        tuned["test_max_instances"] = max(int(tuned["test_max_instances"]), 64)
+    else:
+        target_train_batch = active_gpu_count * 1
+        target_eval_batch = active_gpu_count * 2
+        tuned["train_max_instances"] = max(int(tuned["train_max_instances"]), 32)
+        tuned["val_max_instances"] = max(int(tuned["val_max_instances"]), 48)
+        tuned["test_max_instances"] = max(int(tuned["test_max_instances"]), 48)
+
+    tuned["train_batch_size"] = ceil_to_multiple(max(int(tuned["train_batch_size"]), target_train_batch), active_gpu_count)
+    tuned["eval_batch_size"] = ceil_to_multiple(max(int(tuned["eval_batch_size"]), target_eval_batch), active_gpu_count)
+    return tuned
+
+
+def tune_grad_accum_steps(original_steps: int, active_gpu_count: int) -> int:
+    if active_gpu_count > 1:
+        return 1
+    return max(1, original_steps)
 
 
 def build_loaders(
@@ -151,6 +198,8 @@ def build_loaders(
         "collate_fn": demo_mil_collate_fn,
         "persistent_workers": num_workers > 0,
     }
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 4
 
     train_loader = DataLoader(train_ds, batch_size=train_batch_size, shuffle=True, drop_last=False, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=eval_batch_size, shuffle=False, drop_last=False, **loader_kwargs)
@@ -252,7 +301,19 @@ def main() -> None:
     session_dir.mkdir(parents=True, exist_ok=True)
 
     pretrained = not args.no_pretrained
+    visible_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     use_multi_gpu = (not args.disable_multi_gpu)
+    active_gpu_count = visible_gpu_count if (use_multi_gpu and visible_gpu_count > 1) else (1 if visible_gpu_count > 0 else 0)
+    effective_workers = auto_num_workers(args.num_workers, max(1, active_gpu_count))
+
+    if torch.cuda.is_available():
+        # 优先吞吐量，提升多卡利用率。
+        torch.backends.cudnn.benchmark = True
+
+    print(
+        f"硬件配置: visible_gpu_count={visible_gpu_count}, active_gpu_count={active_gpu_count}, "
+        f"num_workers={effective_workers}, use_multi_gpu={use_multi_gpu}"
+    )
 
     gastro_pos_weight = compute_multilabel_pos_weight(gastro_split["train"])
     colo_pos_weight = compute_binary_pos_weight(colo_split["train"])
@@ -285,7 +346,7 @@ def main() -> None:
         lr=2e-4,
         weight_decay=1e-4,
         warmup_ratio=0.1,
-        grad_accum_steps=2,
+        grad_accum_steps=tune_grad_accum_steps(2, active_gpu_count),
         amp=True,
         monitor_metric="macro_auc",
         monitor_mode="max",
@@ -307,6 +368,7 @@ def main() -> None:
         "eval_sampling": "uniform",
         "random_instance_dropout": 0.05,
     }
+    dl_cfg_1 = tune_dl_cfg_for_gpu(dl_cfg_1, active_gpu_count=active_gpu_count, model_kind="baseline")
     result_1 = run_single_model(
         model_name="demo_gastro_mil_baseline",
         model=model_1,
@@ -314,7 +376,7 @@ def main() -> None:
         split_data=gastro_split,
         task_name="gastro_multilabel",
         image_size=args.image_size,
-        num_workers=args.num_workers,
+        num_workers=effective_workers,
         run_dir=session_dir / "01_demo_gastro_mil_baseline",
         seed=args.seed,
         dl_cfg=dl_cfg_1,
@@ -348,7 +410,7 @@ def main() -> None:
         lr=1.5e-4,
         weight_decay=1e-4,
         warmup_ratio=0.1,
-        grad_accum_steps=4,
+        grad_accum_steps=tune_grad_accum_steps(4, active_gpu_count),
         amp=True,
         monitor_metric="macro_auc",
         monitor_mode="max",
@@ -374,6 +436,7 @@ def main() -> None:
         "eval_sampling": "uniform",
         "random_instance_dropout": 0.08,
     }
+    dl_cfg_2 = tune_dl_cfg_for_gpu(dl_cfg_2, active_gpu_count=active_gpu_count, model_kind="advanced")
     result_2 = run_single_model(
         model_name="demo_gastro_proto_moe_former",
         model=model_2,
@@ -381,7 +444,7 @@ def main() -> None:
         split_data=gastro_split,
         task_name="gastro_multilabel",
         image_size=args.image_size,
-        num_workers=args.num_workers,
+        num_workers=effective_workers,
         run_dir=session_dir / "02_demo_gastro_proto_moe_former",
         seed=args.seed,
         dl_cfg=dl_cfg_2,
@@ -411,7 +474,7 @@ def main() -> None:
         lr=2e-4,
         weight_decay=1e-4,
         warmup_ratio=0.1,
-        grad_accum_steps=2,
+        grad_accum_steps=tune_grad_accum_steps(2, active_gpu_count),
         amp=True,
         monitor_metric="auc",
         monitor_mode="max",
@@ -433,6 +496,7 @@ def main() -> None:
         "eval_sampling": "uniform",
         "random_instance_dropout": 0.03,
     }
+    dl_cfg_3 = tune_dl_cfg_for_gpu(dl_cfg_3, active_gpu_count=active_gpu_count, model_kind="baseline")
     result_3 = run_single_model(
         model_name="demo_colo_mil_baseline",
         model=model_3,
@@ -440,7 +504,7 @@ def main() -> None:
         split_data=colo_split,
         task_name="colo_binary",
         image_size=args.image_size,
-        num_workers=args.num_workers,
+        num_workers=effective_workers,
         run_dir=session_dir / "03_demo_colo_mil_baseline",
         seed=args.seed,
         dl_cfg=dl_cfg_3,
@@ -472,7 +536,7 @@ def main() -> None:
         lr=1.5e-4,
         weight_decay=1e-4,
         warmup_ratio=0.1,
-        grad_accum_steps=4,
+        grad_accum_steps=tune_grad_accum_steps(4, active_gpu_count),
         amp=True,
         monitor_metric="auc",
         monitor_mode="max",
@@ -499,6 +563,7 @@ def main() -> None:
         "eval_sampling": "uniform",
         "random_instance_dropout": 0.08,
     }
+    dl_cfg_4 = tune_dl_cfg_for_gpu(dl_cfg_4, active_gpu_count=active_gpu_count, model_kind="advanced")
     result_4 = run_single_model(
         model_name="demo_colo_count_aware_debias_mil",
         model=model_4,
@@ -506,7 +571,7 @@ def main() -> None:
         split_data=colo_split,
         task_name="colo_binary",
         image_size=args.image_size,
-        num_workers=args.num_workers,
+        num_workers=effective_workers,
         run_dir=session_dir / "04_demo_colo_count_aware_debias_mil",
         seed=args.seed,
         dl_cfg=dl_cfg_4,

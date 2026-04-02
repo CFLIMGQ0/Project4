@@ -170,9 +170,9 @@ class DemoGastroProtoMoEFormer(nn.Module):
 
         aux_losses: dict[str, torch.Tensor] = {}
         if labels is not None:
-            aux_losses["proto"] = prototype_pull_push_loss(bag_proto_score, labels)
-            aux_losses["consistency"] = consistency_loss(torch.sigmoid(attn_logits), torch.sigmoid(proto_logits))
-            aux_losses["expert_balance"] = expert_balance_loss(expert_w)
+            aux_losses["proto"] = prototype_pull_push_loss(bag_proto_score, labels).reshape(1)
+            aux_losses["consistency"] = consistency_loss(torch.sigmoid(attn_logits), torch.sigmoid(proto_logits)).reshape(1)
+            aux_losses["expert_balance"] = expert_balance_loss(expert_w).reshape(1)
 
         return {
             "logits": logits,
