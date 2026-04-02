@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=3, help="每个模型训练轮数")
     parser.add_argument("--patience", type=int, default=2, help="早停耐心轮数")
     parser.add_argument("--image-size", type=int, default=224, help="输入图像尺寸")
-    parser.add_argument("--num-workers", type=int, default=8, help="DataLoader 进程数")
+    parser.add_argument("--num-workers", type=int, default=2, help="DataLoader 进程数（默认 2，降低 OOM 风险）")
     parser.add_argument("--max-exams-per-task", type=int, default=0, help="每个任务最多样本数，0 表示不限制")
     parser.add_argument("--no-pretrained", action="store_true", help="禁用 ImageNet 预训练")
     parser.add_argument("--disable-multi-gpu", action="store_true", help="禁用 DataParallel")
@@ -297,8 +297,8 @@ def main() -> None:
         resume_path=None,
     )
     dl_cfg_1 = {
-        "train_batch_size": 2,
-        "eval_batch_size": 2,
+        "train_batch_size": 1,
+        "eval_batch_size": 1,
         "train_max_instances": 32,
         "val_max_instances": 48,
         "test_max_instances": 48,
@@ -423,8 +423,8 @@ def main() -> None:
         resume_path=None,
     )
     dl_cfg_3 = {
-        "train_batch_size": 2,
-        "eval_batch_size": 2,
+        "train_batch_size": 1,
+        "eval_batch_size": 1,
         "train_max_instances": 32,
         "val_max_instances": 48,
         "test_max_instances": 48,
