@@ -241,6 +241,48 @@ def maybe_limit_records(records: list[dict[str, Any]], max_num: int, seed: int) 
     return [records[int(i)] for i in keep]
 
 
+def build_compatible_split(
+    records: list[dict[str, Any]],
+    seed: int,
+    ratios: tuple[float, float, float] = (0.6, 0.2, 0.2),
+) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    """优先使用常规比例切分；当样本极少时回退到可训练切分。"""
+    if len(records) == 0:
+        return {"train": [], "val": [], "test": []}, "empty"
+
+    regular_split = split_records(records, seed=seed, ratios=ratios)
+    if all(len(regular_split[k]) > 0 for k in ("train", "val", "test")):
+        return regular_split, "ratio_split"
+
+    rng = random.Random(seed)
+    shuffled = list(records)
+    rng.shuffle(shuffled)
+
+    n = len(shuffled)
+    if n >= 3:
+        # 至少保证每个 split 有 1 个样本。
+        fallback_split = {
+            "train": shuffled[:-2],
+            "val": [shuffled[-2]],
+            "test": [shuffled[-1]],
+        }
+    elif n == 2:
+        # 样本过少时允许 test 复用 train，保证流程可跑通。
+        fallback_split = {
+            "train": [shuffled[0]],
+            "val": [shuffled[1]],
+            "test": [shuffled[0]],
+        }
+    else:
+        fallback_split = {
+            "train": [shuffled[0]],
+            "val": [shuffled[0]],
+            "test": [shuffled[0]],
+        }
+
+    return fallback_split, "small_sample_fallback"
+
+
 def compute_multilabel_pos_weight(train_records: list[dict[str, Any]]) -> list[float]:
     y = np.array([r["labels"] for r in train_records], dtype=np.float32)
     pos = y.sum(axis=0)
@@ -474,13 +516,18 @@ def main() -> None:
     gastro_records = maybe_limit_records(gastro_records, args.max_exams_per_task, args.seed)
     colo_records = maybe_limit_records(colo_records, args.max_exams_per_task, args.seed)
 
-    if len(gastro_records) < 10:
-        raise RuntimeError("胃镜可用样本过少，无法训练")
-    if len(colo_records) < 10:
-        raise RuntimeError("肠镜可用样本过少，无法训练")
+    if len(gastro_records) == 0:
+        raise RuntimeError("胃镜可用样本为 0，无法训练")
+    if len(colo_records) == 0:
+        raise RuntimeError("肠镜可用样本为 0，无法训练")
 
-    gastro_split = split_records(gastro_records, seed=args.seed, ratios=(0.6, 0.2, 0.2))
-    colo_split = split_records(colo_records, seed=args.seed, ratios=(0.6, 0.2, 0.2))
+    gastro_split, gastro_split_mode = build_compatible_split(gastro_records, seed=args.seed, ratios=(0.6, 0.2, 0.2))
+    colo_split, colo_split_mode = build_compatible_split(colo_records, seed=args.seed + 1, ratios=(0.6, 0.2, 0.2))
+
+    if gastro_split_mode != "ratio_split":
+        print(f"[提示] 胃镜样本较少，启用小样本兼容切分: mode={gastro_split_mode}")
+    if colo_split_mode != "ratio_split":
+        print(f"[提示] 肠镜样本较少，启用小样本兼容切分: mode={colo_split_mode}")
 
     print(f"胃镜样本数: train={len(gastro_split['train'])}, val={len(gastro_split['val'])}, test={len(gastro_split['test'])}")
     print(f"肠镜样本数: train={len(colo_split['train'])}, val={len(colo_split['val'])}, test={len(colo_split['test'])}")
@@ -497,6 +544,8 @@ def main() -> None:
         "session_dir": str(session_dir),
         "gastro_split": {k: len(v) for k, v in gastro_split.items()},
         "colo_split": {k: len(v) for k, v in colo_split.items()},
+        "gastro_split_mode": gastro_split_mode,
+        "colo_split_mode": colo_split_mode,
         "models": {},
     }
 

@@ -267,6 +267,8 @@ class DemoTrainer:
         return -float("inf") if self.cfg.monitor_mode == "max" else float("inf")
 
     def _is_improved(self, val: float) -> bool:
+        if self.best_epoch < 0:
+            return True
         if self.cfg.monitor_mode == "max":
             return val > self.best_metric
         return val < self.best_metric
@@ -450,6 +452,12 @@ class DemoTrainer:
             self.scaler.update()
             self.optimizer.zero_grad(set_to_none=True)
             self.scheduler.step()
+
+        if total_batches == 0:
+            if save_evidence:
+                out_path = self.evidence_dir / f"{split}_evidence.jsonl"
+                out_path.write_text("", encoding="utf-8")
+            return float("nan"), {self.cfg.monitor_metric: float("nan")}
 
         avg_loss = total_loss / max(1, total_batches)
 
