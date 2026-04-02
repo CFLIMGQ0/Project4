@@ -161,13 +161,13 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - `namePatient` → 姓名
 - `operation` → 操作过程
 - `operationValue` → 操作名称
+- `operationRemark` → 操作过程备注（其值仅当操作过程不顺利时才有可能非空）
 - `sex` → 性别
 - `suggest` → 注意事项
 - `watch` → 内镜所见
 - `watchResult` → 诊断
 - `specimen` → 活检部位
 - `hp` → HP(幽门螺旋杆菌)
-- `operationRemark` → 操作过程备注（其值仅当操作过程不顺利时才有可能非空）
 - `score` → 波士顿评分
 
 #### 7.2.2 非重要有效键
