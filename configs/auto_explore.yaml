@@ -1,0 +1,94 @@
+goal: 优先筛出后期仍能稳定收敛、不过拟合不明显的训练参数组合
+
+# 自动探索后端
+search_method: optuna_tpe
+
+# trial预算
+num_trials: 24
+trial_max_epochs: 24
+trial_patience: 10
+trial_run_test: false  # trial阶段是否运行测试集评估
+
+# 单次训练内部checkpoint选择依据
+selection_alias: best_val_loss
+result_source: best_checkpoints
+
+# trial排序目标
+objective:
+  name: stable_tail_val_loss
+  tail_epochs: 5
+  tail_std_weight: 0.5
+  gap_penalty_weight: 2.0
+  rebound_penalty_weight: 1.0
+  unstable_penalty: 0.1
+
+# 训练后期稳定性判定阈值
+stability_filter:
+  enabled: true
+  min_epochs_trained: 10
+  max_final_gap: 0.02
+  max_val_loss_rebound_ratio: 0.15
+
+# Optuna采样与剪枝
+optuna:
+  sampler: tpe
+  n_startup_trials: 8
+  multivariate: false
+  group: false
+  pruner:
+    name: median
+    n_startup_trials: 8
+    n_warmup_steps: 8
+    interval_steps: 1
+
+remark:
+  focus: 结果摘要侧重点
+  include_model_evaluations: true
+  include_search_space: true
+  include_stability_filter: true
+
+search_space:
+  lr:
+    enabled: true  # 是否启用该参数搜索
+    type: log_float  # 采样类型
+    min: 0.00003  # 搜索下界
+    max: 0.0003  # 搜索上界
+    round: 6  # 采样结果保留位数
+  weight_decay:
+    enabled: true  # 是否启用该参数搜索
+    type: log_float  # 采样类型
+    min: 0.0001  # 搜索下界
+    max: 0.02  # 搜索上界
+    round: 6  # 采样结果保留位数
+  warmup_ratio:
+    enabled: true  # 是否启用该参数搜索
+    type: float  # 采样类型
+    min: 0.05  # 搜索下界
+    max: 0.25  # 搜索上界
+    round: 3  # 采样结果保留位数
+  random_instance_dropout:
+    enabled: false  # 是否启用该参数搜索
+    type: float  # 采样类型
+    min: 0.03
+    max: 0.2
+    round: 3
+  loss_name:
+    enabled: false  # 是否启用该参数搜索
+    type: choice  # 采样类型
+    values: [asymmetric, focal, bce]
+  batch_size:
+    enabled: false  # 是否启用该参数搜索
+    type: choice  # 采样类型
+    values: [2, 3, 4]
+  grad_accum_steps:
+    enabled: false  # 是否启用该参数搜索
+    type: choice  # 采样类型
+    values: [1, 2, 4]
+  train_max_instances:
+    enabled: false  # 是否启用该参数搜索
+    type: choice  # 采样类型
+    values: [24, 32, 40]
+  train_max_batch_instances:
+    enabled: false  # 是否启用该参数搜索
+    type: choice  # 采样类型
+    values: [64, 96, 128]

@@ -101,6 +101,126 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 路径配置文件；
 - 数据结构与清洗阶段说明文档。
 
+## 训练输出目录约定（新增）
+
+`train.py` 当前的训练输出统一落在：
+
+`paths.output_dir / train_run_dir_name`
+
+下面再按任务拆分：
+
+- `gastro_multilabel_task/`
+- `colonoscopy_binary_task/`
+
+### 常规训练
+
+常规训练时，运行目录直接就是训练目录，不再额外套一层模型子目录。
+
+目录命名规则：
+
+- 胃镜：`gastro_<运行次数>`
+- 肠镜：`colonoscopy_<运行次数>`
+
+例如：
+
+- `train_runs/gastro_multilabel_task/gastro_1/`
+- `train_runs/colonoscopy_binary_task/colonoscopy_2/`
+
+每个训练目录下会生成以下核心文件：
+
+- `config.yaml`：记录该训练目录对应的模型参数、训练参数、切分统计等；
+- `log.csv`：按 `epoch + split(train/val)` 记录损失、学习率以及各类训练/验证指标；
+- `loss_curve.png`：每个 epoch 验证结束后刷新；
+- `last_confusion_matrix.png`：每个 epoch 验证结束后刷新；
+- `checkpoints/last.ckpt`：当前最后一个 epoch 模型；
+- `checkpoints/best_macro_f1.ckpt`：验证集 `Macro F1` 最佳模型；
+- `checkpoints/best_micro_f1.ckpt`：验证集 `Micro F1` 最佳模型；
+- `checkpoints/best_val_loss.ckpt`：验证集 `loss` 最低模型；
+- `best_macro_f1_val_confusion_matrix.png`：`best_macro_f1` 对应的验证混淆矩阵；
+- `best_micro_f1_val_confusion_matrix.png`：`best_micro_f1` 对应的验证混淆矩阵；
+- `best_val_loss_val_confusion_matrix.png`：`best_val_loss` 对应的验证混淆矩阵；
+- `test_macro_f1/`：保存 `best_macro_f1.ckpt` 的测试 ROC、PR、`best_macro_f1_test_confusion_matrix.png` 与测试指标；
+- `test_micro_f1/`：保存 `best_micro_f1.ckpt` 的测试 ROC、PR、`best_micro_f1_test_confusion_matrix.png` 与测试指标；
+- `test_val_loss/`：保存 `best_val_loss.ckpt` 的测试 ROC、PR、`best_val_loss_test_confusion_matrix.png` 与测试指标；
+- `test_result.csv`：对三个最佳模型分别测试后的结果汇总；
+- `test_report.csv`：与 `test_result.csv` 同内容的兼容副本。
+
+测试完成后，终端会输出三个最佳模型各自的测试结果摘要；`test_result.csv` 与 `test_report.csv` 会记录对应测试指标。当前测试指标包含：
+
+- `test_loss`
+- `Label-wise ACC`
+- `Per-class Recall`
+- `Per-class Precision`
+- `Per-class Specificity`
+- `Per-class ROC-AUC`
+- `Per-class PR-AUC`
+- `Macro Recall`
+- `Macro Precision`
+- `Macro Specificity`
+- `Macro F1`
+- `Macro ROC-AUC`
+- `Macro PR-AUC`
+- `Micro Recall`
+- `Micro Precision`
+- `Micro F1`
+- `Hamming Loss`
+- `Kappa`
+
+其中按类别展开的指标会在 CSV 中按列展开保存，命名形式类似：
+
+- `label_wise_acc_<类别名>`
+- `recall_<类别名>`
+- `precision_<类别名>`
+- `specificity_<类别名>`
+- `roc_auc_<类别名>`
+- `pr_auc_<类别名>`
+
+### 自动探索
+
+自动探索时，运行目录下会包含多个训练目录。
+
+目录命名规则：
+
+- 胃镜：`gastro_<运行次数>_para_auto`
+- 肠镜：`colonoscopy_<运行次数>_para_auto`
+
+自动探索运行目录根部会额外生成：
+
+- `notes.json`：机器可读的结构化摘要；
+- `remark.txt`：给人看的简短总结。
+
+每个自动探索运行目录下包含多个：
+
+- `train_001/`
+- `train_002/`
+- `train_003/`
+
+每个 `train_xxx/` 目录直接就是训练产物，不再生成 `01_gastro_label_graph_mil` 这类模型子目录，也不再在训练目录内生成 `remark.txt`。
+
+`log.csv` 当前会尽量展开常用标量指标列，便于后续直接做统计和绘图，重点包括：
+
+- Label-wise ACC
+- Per-class Recall
+- Per-class Precision
+- Per-class Specificity
+- Per-class ROC-AUC
+- Per-class PR-AUC
+- Macro Recall
+- Macro Precision
+- Macro Specificity
+- Macro F1
+- Macro ROC-AUC
+- Macro PR-AUC
+- Micro F1
+- Hamming Loss
+- Kappa
+
+说明：
+
+- 胃镜三标签任务的混淆矩阵会以“一个文件内多个标签子图”的方式保存；
+- 肠镜二分类任务的混淆矩阵会保存为标准 2x2 图；
+- 终端输出已改为按 epoch 紧凑展示，不再输出长横线分隔。
+
 ## reportTitle / watchResult 相关脚本（新增）
 
 以下命令默认在 `/home/Lim/Project4/src` 下执行：
@@ -132,21 +252,35 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ## 清洗脚本执行顺序与效果
 
-针对目录级清洗，当前统一按以下顺序执行脚本：
+当前目录级清洗统一改为执行总脚本：
 
-1. `python scripts/delete_broken_files.py`
-2. `python scripts/delete_empty_dicts.py`
-3. `python scripts/delete_broken_dicts.py`
-4. `python scripts/delete_empty_patients.py`
+```bash
+python scripts/delete_broken_data.py
+```
 
-各脚本执行效果说明如下：
+该脚本会在运行前先统计以下四项：
 
-- `delete_broken_files.py`：遍历数据集内的 PDF 与图片文件，检查文件头、文件尾、关键结构（如 PDF 的 `startxref`、PNG 的 `IEND`、JPEG 的 `EOI` 等）是否完整，识别潜在损坏文件。
-- `delete_empty_dicts.py`：检查每个检查目录下的 `img/` 与 `pdf/` 子目录是否存在并包含目标类型文件；对不合规子目录可执行删除。
-- `delete_broken_dicts.py`：识别仅含 `img` 或仅含 `pdf` 的不完整检查目录，并按确认结果删除对应检查目录。
-- `delete_empty_patients.py`：扫描并删除已经不包含任何检查目录的空患者目录，避免无效患者目录残留。
+- 患者数量；
+- 检查目录数量；
+- 图片数量；
+- 报告数量。
 
-这样可以先处理文件级异常，再处理子目录级异常，再处理检查目录级异常，最后处理患者目录级异常，减少清洗过程中的重复判断。
+随后按以下五步顺序执行，并且每一步都会先计算“待删除目录或文件数量”；若数量大于 0，则先询问是否执行；若数量为 0，则直接输出说明并进入下一步：
+
+1. 删除损坏文件：
+   会遍历数据集内的 PDF 与图片文件，检查文件头、文件尾、关键结构（如 PDF 的 `startxref`、PNG 的 `IEND`、JPEG 的 `EOI` 等）是否完整，并输出 `broken_files.csv`。
+2. 删除空 `img/pdf` 子目录：
+   会检查每个检查目录下的 `img/` 与 `pdf/` 子目录是否存在且包含对应类型文件，并删除实际存在且为空或异常的子目录。
+3. 删除不完整检查目录：
+   会识别仅含 `img` 或仅含 `pdf` 的检查目录，并按确认结果删除对应检查目录。
+4. 手动删除指定目录：
+   当前会纳入经过人工检查确认需要手动处理的目录，删除原因是“检查为图片数量不全且损坏”。该步会逐个询问是否删除具体目录。
+5. 删除空患者目录：
+   会扫描并删除已经不包含任何检查目录的空患者目录。
+
+全部步骤结束后，脚本会再次统计患者数量、检查目录数量、图片数量与报告数量，用于对比清洗前后的变化。
+
+此外，`delete_broken_data.py` 会在数据集根路径 `paths.dataset_base_root` 下额外生成 `delete_broken_data.json`，其中仅记录 `patient_count`、`exam_count`、`image_count`、`report_count` 这 4 个统计值，用作后续唯一性确认缓存的版本判断依据。
 
 ## 检查目录唯一性确认脚本说明（新增）
 
@@ -193,6 +327,14 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 每轮完成后都会生成该轮的 `valid_dicts_pdf_roundX.csv` / `valid_dicts_report_roundX.csv` / `combine_reports_roundX.jsonl`；
 - 第四轮完成后，脚本会更新兼容输出：`valid_dicts_pdf.csv`（过程目录）与 `valid_dicts_report.csv`（数据集根目录）。
 
+缓存版本校验补充说明：
+
+- `combine_reports.py` 运行时会先读取 `paths.dataset_base_root/delete_broken_data.json`；
+- 同时会检查 `paths.output_dir/paths.process_cache_dir_name/delete_broken_data.json` 是否存在；
+- 若过程目录中的统计文件缺失、损坏，或其中 4 个统计值与当前数据集统计值不一致，则视为数据集已更新，当前过程缓存全部失效；
+- 一旦失效，`paths.output_dir/paths.process_cache_dir_name` 下原有过程文件会整体清空，并从第一轮开始重新运行；
+- 全部轮次完成后，会把当前的 `delete_broken_data.json` 同步写入过程目录，作为下次判断缓存是否可复用的基准。
+
 新增输出指标说明（`valid_dicts_pdf_roundX.csv`）：
 
 - `suggest_num`：若 `suggest` 无冲突则为 `1`；若存在冲突则记录冲突总数量 `n`（按该键在目录内出现的非空值总次数统计）；
@@ -209,3 +351,108 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 - 如执行 `clean_values.py`，`valid_dicts_report.csv` 中的 `operationValue` 会再统一规范为 `操作1|操作2|...`，且去除末尾操作编码括号，仅保留操作名称本身。
 
 建议在 `configs/path.yaml` 中通过 `paths.valid_dicts_pdf_csv` 与 `paths.valid_dicts_report_csv` 显式配置两者路径，并优先使用绝对路径；同时保留 `paths.project_root`，便于统一识别项目根目录。
+
+## 训练配置说明
+
+当前训练入口为：
+
+```bash
+python train.py --train-config configs/train.yaml --model-config configs/model.yaml
+```
+
+配置文件职责拆分如下：
+
+- `configs/train.yaml`：记录训练参数、数据切分参数、采样参数、batch 参数和启用模型列表。
+- `configs/model.yaml`：只记录自定义模型 `gastro_label_graph_mil` 的结构参数。
+
+说明：
+
+- baseline 的结构参数不写入配置文件，直接使用代码默认值。
+- baseline 与自定义模型的训练流程默认都先读取 `configs/train.yaml` 中的全局训练参数。
+
+`configs/train.yaml` 当前关键字段说明：
+
+- `enabled_models`：当前要运行的模型列表。
+- `batch_size`：默认训练 batch size。
+- `eval_batch_size`：默认验证/测试 batch size。
+- `train_max_instances`：训练阶段每个 bag 最多取多少张图。
+- `eval_max_instances`：验证/测试阶段每个 bag 最多取多少张图。
+- `train_max_batch_instances`：训练阶段单个 batch 的实例总数上限。
+- `eval_max_batch_instances`：验证/测试阶段单个 batch 的实例总数上限。
+- `image_cache_mode`：图像缓存模式，当前支持 `none`、`memory`、`disk`、`memory_and_disk`。
+- `image_cache_dir`：图像缓存根目录；当前配置为 `/home/Lim/Project4/datasets/task_data`，训练时会按任务自动拆成 `cache_gastro_multilabel_image/` 与 `colonoscopy_binary_image_cache/`。
+- `image_cache_warmup`：是否在训练前先预构建当前任务实际会用到的图像缓存。
+- `memory_cache_size`：每个 DataLoader worker 的内存图像缓存条数，仅在 `memory` 或 `memory_and_disk` 模式下生效。
+- `random_instance_dropout`：训练阶段实例随机丢弃比例。
+- `optimizer_name`：优化器类型，当前支持 `adamw`、`adam`、`sgd`。
+- `lr`：默认学习率。
+- `weight_decay`：默认权重衰减。
+- `warmup_ratio`：学习率预热比例。
+- `grad_accum_steps`：默认梯度累积步数。
+- `amp`：是否启用混合精度训练。
+- `topk_evidence`：预留字段，当前这版训练输出不再额外保存证据文件。
+- `loss_name`：默认损失函数名称。
+- `monitor_metric` / `monitor_mode`：训练过程主监控指标及方向，可用于把早停目标切到 `val_loss`。
+- `auto_explore`：是否在执行 `python train.py` 时直接进入自动探索模式。
+
+当前训练图像缓存约定：
+
+- 图像缓存默认不做全库预处理，只会预构建当前训练任务 `train/val/test` 实际涉及的图像。
+- 若当前运行的是胃镜模型（如 `gastro_label_graph_mil`、`gastro_baseline`），则只会写入和读取 `cache_gastro_multilabel_image/`。
+- 若当前运行的是肠镜模型（如 `colonoscopy_baseline`），则只会写入和读取 `colonoscopy_binary_image_cache/`。
+- 若后续切换任务再次训练，会继续复用对应任务目录下已存在的缓存文件，不会误加载另一类任务的缓存目录。
+
+## 自动探索说明（新增）
+
+若 `configs/train.yaml` 中：
+
+```yaml
+auto_explore: true
+```
+
+则执行：
+
+```bash
+python train.py --train-config configs/train.yaml --model-config configs/model.yaml --auto-explore-config configs/auto_explore.yaml
+```
+
+时，不再只跑单次训练，而是会额外读取 `configs/auto_explore.yaml`，自动进行多组 trial 的随机搜索。
+
+自动探索的当前实现规则如下：
+
+- 搜索空间写在 `configs/auto_explore.yaml`；
+- 只有 `enabled: true` 的参数会被采样；
+- 每个 trial 会复用同一套数据切分，便于公平比较；
+- 每个 trial 默认只训练到 `trial_max_epochs`，并使用 `trial_patience` 提前停止；
+- `configs/auto_explore.yaml` 中的 `stability_filter` 会基于 `final_val_loss`、`final_train_loss` 与 `best_val_loss` 自动标记“稳定收敛候选”；
+- 自动探索阶段仍然根据验证集最优 checkpoint 选参，但每个训练目录训练结束后会立即跑三次测试；
+- 每个训练目录会分别对 `best_macro_f1`、`best_micro_f1`、`best_val_loss` 做测试；
+- 每次测试的指标与图像结果都写入对应的 `test_*` 目录；
+- 每个 trial 结束后会持续刷新 `notes.json` 与 `remark.txt`，便于夜间长时间运行。
+
+自动探索输出目录示例：
+
+```text
+paths.output_dir / train_run_dir_name / gastro_multilabel_task / gastro_1_para_auto
+```
+
+目录下会额外生成：
+
+- `notes.json`：所有训练目录的结构化摘要；
+- `remark.txt`：当前自动探索运行目录的人工摘要；
+- `train_001/`、`train_002/` ...：每个训练目录的独立输出；
+- 每个 `train_xxx/` 下直接保留 `config.yaml`、`log.csv`、checkpoint、`best_*` 测试目录等训练产物。
+
+收敛优先阶段建议：
+
+- 把 `monitor_metric` 设为 `val_loss`，`monitor_mode` 设为 `min`；
+- 自动探索先优先搜索 `lr`、`weight_decay`、`warmup_ratio`、`random_instance_dropout`、`loss_name`；
+- 先固定 `batch_size`、`grad_accum_steps`、`train_max_instances`，避免把“资源问题”混进“收敛问题”里；
+- 先看 `notes.json` 里的 `stable_trials` 和 `best_stable_trial`，再从这些稳定候选里挑后续正式训练参数。
+
+建议：
+
+- 具体当前探索内容与 `remark` 规则见 `EXPLORE.md`；
+- 第一轮先关注稳定收敛候选，再从稳定候选里挑分数更好的配置；
+- 显存稳定后，再考虑打开 `batch_size`、`grad_accum_steps`、`train_max_instances`；
+- 自动探索结束后，再用最优参数关闭 `auto_explore`，做一次完整正式训练与测试。

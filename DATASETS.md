@@ -102,21 +102,35 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
 
 ## 5. 清洗脚本执行顺序与执行效果
 
-为保证目录结构清洗的一致性，建议固定按以下顺序执行：
+为保证目录结构清洗的一致性，当前建议固定执行总脚本：
 
-1. `python scripts/delete_broken_files.py`
-2. `python scripts/delete_empty_dicts.py`
-3. `python scripts/delete_broken_dicts.py`
-4. `python scripts/delete_empty_patients.py`
+```bash
+python scripts/delete_broken_data.py
+```
 
-执行效果说明：
+该脚本会在运行前先统计：
 
-- 第一步（`delete_broken_files.py`）：在文件级扫描 PDF 与图片完整性，优先定位损坏文件，避免后续目录判断被坏文件干扰。
-- 第二步（`delete_empty_dicts.py`）：在检查目录内核查 `img/`、`pdf/` 子目录是否真正包含对应类型文件，清理空目录或类型不匹配目录。
-- 第三步（`delete_broken_dicts.py`）：在检查目录级识别“仅有 img 或仅有 pdf”的结构缺损目录，并进行删除，保证检查目录结构完整性。
-- 第四步（`delete_empty_patients.py`）：在患者目录级删除已经清洗为空的患者目录，保持患者列表干净。
+- 患者数量；
+- 检查目录数量；
+- 图片数量；
+- 报告数量。
 
-该顺序对应“先文件、后子目录、再检查目录、最后患者目录”的逐层收敛流程，可降低误删风险并提升清洗可复现性。
+随后按以下五步顺序执行。每一步都会先扫描待删除项并输出数量；若存在待删除项，则先询问是否执行；若不存在待删除项，则直接进入下一步：
+
+1. 删除损坏文件：
+   在文件级扫描 PDF 与图片完整性，优先定位损坏文件，并输出 `broken_files.csv`。
+2. 删除空 `img/pdf` 子目录：
+   在检查目录内核查 `img/`、`pdf/` 子目录是否真正包含对应类型文件，清理实际存在且为空或异常的子目录。
+3. 删除不完整检查目录：
+   在检查目录级识别“仅有 img 或仅有 pdf”的结构缺损目录，并按确认结果删除。
+4. 手动删除指定目录：
+   当前会纳入经过人工检查确认需要手动处理的目录，原因为“检查为图片数量不全且损坏”。该步会逐个询问是否删除具体目录。
+5. 删除空患者目录：
+   在患者目录级删除已经清洗为空的患者目录。
+
+该顺序对应“先文件、后子目录、再检查目录、再手动确认目录、最后患者目录”的逐层收敛流程。脚本结束后会再次统计患者数量、检查目录数量、图片数量与报告数量，用于对比清洗前后的变化。
+
+此外，`delete_broken_data.py` 会在数据集根路径 `paths.dataset_base_root` 下生成 `delete_broken_data.json`，其中仅记录 `patient_count`、`exam_count`、`image_count`、`report_count` 这 4 个统计值，用于后续唯一性确认缓存的版本校验。
 
 ## 6. PDF 文件概念说明
 
@@ -227,6 +241,14 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
   - `valid_dicts_pdf.csv`（写入 `paths.output_dir/paths.process_cache_dir_name`，等同第四轮汇总）
   - `valid_dicts_report.csv`（写入 `paths.dataset_base_root`，等同第四轮报告）
 
+缓存版本校验补充说明：
+
+- `combine_reports.py` 运行前会先读取 `paths.dataset_base_root/delete_broken_data.json`；
+- 同时会检查 `paths.output_dir/paths.process_cache_dir_name/delete_broken_data.json`；
+- 若过程目录中的统计文件缺失、损坏，或其中 4 个统计值与当前数据集统计值不一致，则说明数据集已更新，原有过程缓存不再可信；
+- 此时 `paths.output_dir/paths.process_cache_dir_name` 下原有过程文件会整体清空，并从第一轮开始重新运行；
+- 当前轮次全部完成后，脚本会把新的 `delete_broken_data.json` 同步写入过程目录，作为下次判断缓存是否可复用的基准。
+
 第一类唯一性确认（冗余 PDF 信息补全与目录级唯一化）：
 
 - 先在同一检查目录内识别冗余 PDF，并对可互补字段执行信息补全，形成更完整的候选报告；
@@ -301,7 +323,7 @@ paths.dataset_root/              # 实际数据目录（脚本默认读取）
    - 国际部胃镜检查（含色素内镜）报告（报告 1，图像 31）
 
 3. **手术胃镜**
-   - 胃镜手术(住院)报告（报告 842，图像 38602）
+   - 胃镜手术(住院)报告（报告 841，图像 38601）
    - 胃镜下切除手术报告（报告 124，图像 5100）
    - 胃镜下其他手术报告（报告 7，图像 246）
    - 急诊胃镜报告（报告 2，图像 49）

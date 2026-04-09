@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ ROUND4_CACHE_FILE_NAME = 'combine_reports_round4.jsonl'
 PROCESS_CACHE_DIR_NAME = 'cache_combine_reports'
 LEGACY_VALID_DICTS_SUMMARY_FILE_NAME = 'valid_dicts_pdf.csv'
 LEGACY_VALID_DICTS_REPORT_FILE_NAME = 'valid_dicts_report.csv'
+DELETE_BROKEN_DATA_JSON_FILE_NAME = 'delete_broken_data.json'
+DELETE_BROKEN_DATA_REQUIRED_KEYS = ('patient_count', 'exam_count', 'image_count', 'report_count')
 HP_PRIORITY = ['阳性', '阴性', '待确认', '未检']
 CHOICE_FIELD_DISPLAY_MAPPINGS: dict[str, dict[str, str]] = {
     'badness': {
@@ -975,6 +978,97 @@ def print_summary(
         print('- valid_dicts_pdf.csv 第二列规则：有效=1，无效=0')
 
 
+def parse_stats_int(value: Any, key_name: str, stats_path: Path) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f'{stats_path} 中的 {key_name} 不能为布尔值')
+    if isinstance(value, int):
+        parsed_value = value
+    elif isinstance(value, float) and value.is_integer():
+        parsed_value = int(value)
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed_value = int(value.strip())
+    else:
+        raise ValueError(f'{stats_path} 中的 {key_name} 不是有效整数')
+
+    if parsed_value < 0:
+        raise ValueError(f'{stats_path} 中的 {key_name} 不能为负数')
+    return parsed_value
+
+
+def load_delete_broken_data_stats(stats_path: Path) -> dict[str, int]:
+    if not stats_path.exists():
+        raise FileNotFoundError(f'统计文件不存在：{stats_path}')
+
+    try:
+        payload = json.loads(stats_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f'统计文件 JSON 格式错误：{stats_path}') from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(f'统计文件内容必须为对象：{stats_path}')
+
+    stats: dict[str, int] = {}
+    for key_name in DELETE_BROKEN_DATA_REQUIRED_KEYS:
+        stats[key_name] = parse_stats_int(payload.get(key_name), key_name, stats_path)
+    return stats
+
+
+def save_delete_broken_data_stats(stats_path: Path, stats: dict[str, int]) -> None:
+    payload = {key_name: int(stats[key_name]) for key_name in DELETE_BROKEN_DATA_REQUIRED_KEYS}
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    stats_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
+def process_output_dir_has_cache(process_output_dir: Path) -> bool:
+    return process_output_dir.exists() and any(process_output_dir.iterdir())
+
+
+def clear_process_cache_dir(process_output_dir: Path) -> None:
+    if process_output_dir.exists():
+        shutil.rmtree(process_output_dir)
+
+
+def prepare_process_cache_against_dataset_stats(
+    dataset_stats_path: Path,
+    cached_stats_path: Path,
+    process_output_dir: Path,
+) -> dict[str, int] | None:
+    try:
+        current_stats = load_delete_broken_data_stats(dataset_stats_path)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f'无法读取当前数据集统计文件：{exc}')
+        print('请先运行 python scripts/delete_broken_data.py，生成最新的 delete_broken_data.json。')
+        return None
+
+    cache_has_outputs = process_output_dir_has_cache(process_output_dir)
+
+    if not cached_stats_path.exists():
+        if cache_has_outputs:
+            clear_process_cache_dir(process_output_dir)
+            print('检测到过程缓存目录已有结果，但缺少 delete_broken_data.json，无法确认数据版本。')
+            print(f'已清空过程缓存目录并准备重新运行全部轮次：{process_output_dir}')
+        else:
+            print('未检测到历史 delete_broken_data.json，本次将全量生成过程缓存。')
+        return current_stats
+
+    try:
+        cached_stats = load_delete_broken_data_stats(cached_stats_path)
+    except (FileNotFoundError, ValueError) as exc:
+        clear_process_cache_dir(process_output_dir)
+        print(f'过程缓存中的 delete_broken_data.json 无法读取：{exc}')
+        print(f'已清空过程缓存目录并准备重新运行全部轮次：{process_output_dir}')
+        return current_stats
+
+    if cached_stats != current_stats:
+        clear_process_cache_dir(process_output_dir)
+        print('检测到 delete_broken_data.json 统计值已变化，之前的过程缓存全部失效。')
+        print(f'已清空过程缓存目录并准备重新运行全部轮次：{process_output_dir}')
+        return current_stats
+
+    print('delete_broken_data.json 统计值未变化，可继续复用现有过程缓存。')
+    return current_stats
+
+
 def main() -> None:
     args = parse_args()
     path_config = build_path_config(
@@ -1006,6 +1100,16 @@ def main() -> None:
     round4_cache_path = process_output_dir / ROUND4_CACHE_FILE_NAME
     legacy_report_path = path_config.dataset_base_root / LEGACY_VALID_DICTS_REPORT_FILE_NAME
     legacy_summary_path = process_output_dir / LEGACY_VALID_DICTS_SUMMARY_FILE_NAME
+    dataset_stats_path = path_config.dataset_base_root / DELETE_BROKEN_DATA_JSON_FILE_NAME
+    cached_dataset_stats_path = process_output_dir / DELETE_BROKEN_DATA_JSON_FILE_NAME
+
+    current_dataset_stats = prepare_process_cache_against_dataset_stats(
+        dataset_stats_path=dataset_stats_path,
+        cached_stats_path=cached_dataset_stats_path,
+        process_output_dir=process_output_dir,
+    )
+    if current_dataset_stats is None:
+        return
 
     round1_ready = round1_cache_path.exists() and round1_summary_path.exists() and round1_report_path.exists()
     if round1_ready:
@@ -1141,7 +1245,9 @@ def main() -> None:
 
     write_valid_dicts_pdf(legacy_summary_path, round4_results)
     write_valid_dicts_report(legacy_report_path, round4_results)
+    save_delete_broken_data_stats(cached_dataset_stats_path, current_dataset_stats)
     print(f'第四轮完成，已更新兼容输出文件：{legacy_summary_path}、{legacy_report_path}')
+    print(f'已同步当前数据集统计文件到过程缓存目录：{cached_dataset_stats_path}')
 
     unresolved_round4_keys = sorted(
         {

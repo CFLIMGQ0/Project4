@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -14,8 +13,8 @@ IMAGE_STD = (0.229, 0.224, 0.225)
 
 
 def _configure_pretrained_weights_dir() -> Path:
-    """将 torch / torchvision 预训练权重统一缓存到项目根目录的 pre_weights 目录。"""
-    weights_dir = Path(__file__).resolve().parents[2] / "pre_weights"
+    """将 torchvision 预训练权重统一缓存到项目根目录。"""
+    weights_dir = Path(__file__).resolve().parents[3] / "pre_weights"
     weights_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TORCH_HOME"] = str(weights_dir)
     torch.hub.set_dir(str(weights_dir))
@@ -42,8 +41,7 @@ class _ResNetFeatureExtractor(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        return x
+        return torch.flatten(x, 1)
 
 
 class _ConvNeXtFeatureExtractor(nn.Module):
@@ -51,15 +49,13 @@ class _ConvNeXtFeatureExtractor(nn.Module):
         super().__init__()
         self.features = model.features
         self.avgpool = model.avgpool
-        # ConvNeXt 分类头第 0 层是 LayerNorm，保留用于获取稳定特征。
         self.norm = model.classifier[0]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
         x = self.norm(x)
-        return x
+        return torch.flatten(x, 1)
 
 
 class _EfficientNetFeatureExtractor(nn.Module):
@@ -71,8 +67,7 @@ class _EfficientNetFeatureExtractor(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        return x
+        return torch.flatten(x, 1)
 
 
 def _safe_load_model(builder, weights, fallback_builder):
@@ -86,8 +81,8 @@ def _freeze_modules(modules: list[nn.Module], freeze_stages: int) -> None:
     if freeze_stages <= 0:
         return
     for module in modules[:freeze_stages]:
-        for p in module.parameters():
-            p.requires_grad = False
+        for parameter in module.parameters():
+            parameter.requires_grad = False
 
 
 def build_backbone(
@@ -97,7 +92,7 @@ def build_backbone(
     freeze_stages: int = 0,
     projector_dropout: float = 0.1,
 ) -> tuple[nn.Module, int]:
-    """构建图像编码器并统一输出维度。"""
+    """构建图像编码器并输出统一维度特征。"""
     name = backbone_name.lower()
 
     if name == "resnet50":
