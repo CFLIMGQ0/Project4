@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import json
 import math
 import os
@@ -74,14 +75,19 @@ def _format_metric(value: Any) -> str:
     return f"{numeric:.4f}"
 
 
-def _format_epoch_tag(value: Any) -> str:
+def _format_epoch_value(value: Any) -> str:
     try:
         epoch = int(value)
     except Exception:
-        return "(e---)"
+        return "epoch---"
     if epoch <= 0:
-        return "(e---)"
-    return f"(e{epoch:03d})"
+        return "epoch---"
+    return f"epoch{epoch:03d}"
+
+
+def _format_metric_field(name: str, value: Any, *, highlight: bool = False) -> str:
+    suffix = "*" if highlight else ""
+    return f"{name}{suffix}={_format_metric(value)}"
 
 
 def _extract_scalar_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -98,6 +104,12 @@ class CSVLogger:
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         self.fieldnames = ["epoch", "split", "loss", "lr", "monitor_name", "monitor_value"]
         self.rows: list[dict[str, Any]] = []
+        if self.csv_path.is_file():
+            with self.csv_path.open("r", encoding="utf-8", newline="") as file:
+                reader = csv.DictReader(file)
+                if reader.fieldnames:
+                    self.fieldnames = list(reader.fieldnames)
+                self.rows = [dict(row) for row in reader]
 
     def write(
         self,
@@ -165,7 +177,7 @@ class Trainer:
         self.logger = CSVLogger(self.run_dir / "log.csv")
         self.loss_curve_path = self.run_dir / "loss_curve.png"
         self.last_confusion_matrix_path = self.run_dir / "last_confusion_matrix.png"
-        self.loss_history: list[dict[str, float]] = []
+        self.loss_history = self._restore_loss_history()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
@@ -234,6 +246,7 @@ class Trainer:
 
         if self.cfg.resume_path:
             self._load_checkpoint(Path(self.cfg.resume_path), strict=False, load_training_state=True)
+        self._forward_accepts_labels = "labels" in inspect.signature(self.raw_model.forward).parameters
 
     @property
     def raw_model(self) -> nn.Module:
@@ -260,6 +273,39 @@ class Trainer:
             )
         raise ValueError(f"未知 optimizer_name: {self.cfg.optimizer_name}")
 
+    def _restore_loss_history(self) -> list[dict[str, float]]:
+        if not self.logger.rows:
+            return []
+
+        epoch_state: dict[int, dict[str, float]] = {}
+        for row in self.logger.rows:
+            try:
+                epoch = int(row.get("epoch", 0))
+            except Exception:
+                continue
+            if epoch <= 0:
+                continue
+            state = epoch_state.setdefault(epoch, {"epoch": epoch})
+            split = str(row.get("split", "")).strip()
+            if split == "train":
+                state["train_loss"] = _to_float(row.get("loss", float("nan")))
+            elif split == "val":
+                state["val_loss"] = _to_float(row.get("loss", float("nan")))
+
+        restored: list[dict[str, float]] = []
+        for epoch in sorted(epoch_state):
+            state = epoch_state[epoch]
+            if "train_loss" not in state or "val_loss" not in state:
+                continue
+            restored.append(
+                {
+                    "epoch": int(state["epoch"]),
+                    "train_loss": float(state["train_loss"]),
+                    "val_loss": float(state["val_loss"]),
+                }
+            )
+        return restored
+
     def _current_lr(self) -> float:
         return float(self.optimizer.param_groups[0]["lr"])
 
@@ -274,6 +320,15 @@ class Trainer:
             "img_nums": batch["img_nums"],
             "metas": batch["metas"],
         }
+
+    def _forward_model(self, batch: dict[str, Any]) -> dict[str, Any]:
+        kwargs = {
+            "images": batch["images"],
+            "mask": batch["mask"],
+        }
+        if self._forward_accepts_labels:
+            kwargs["labels"] = batch["labels"]
+        return self.model(**kwargs)
 
     def _primary_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         loss = self.criterion(logits, labels.float())
@@ -387,15 +442,18 @@ class Trainer:
             title=f"Validation Confusion Matrix - Epoch {epoch}",
         )
 
-    def _update_best_checkpoints(self, epoch: int, val_loss: float, val_metrics: dict[str, Any]) -> None:
+    def _update_best_checkpoints(self, epoch: int, val_loss: float, val_metrics: dict[str, Any]) -> set[str]:
+        improved_aliases: set[str] = set()
         for alias, tracker in self.best_trackers.items():
             metric_name = str(tracker["metric_name"])
             current_value = val_loss if metric_name == "val_loss" else _to_float(val_metrics.get(metric_name, float("nan")))
             if tracker["best_epoch"] < 0 or self._is_improved(current_value, float(tracker["best_value"]), str(tracker["mode"])):
                 tracker["best_value"] = current_value
                 tracker["best_epoch"] = epoch
+                improved_aliases.add(alias)
                 self._save_checkpoint(Path(tracker["ckpt_path"]), epoch, current_value)
                 self._save_best_artifacts(alias, epoch, val_metrics)
+        return improved_aliases
 
     def _log_epoch(
         self,
@@ -446,31 +504,41 @@ class Trainer:
         train_metrics: dict[str, Any],
         val_loss: float,
         val_metrics: dict[str, Any],
+        improved_aliases: set[str],
     ) -> None:
         print(f"Epoch {epoch:03d}/{self.cfg.max_epochs:03d} | lr={lr:.6e}")
         print(
             "  train "
-            f"loss={_format_metric(train_loss)} "
-            f"macro_f1={_format_metric(train_metrics.get('macro_f1'))} "
-            f"micro_f1={_format_metric(train_metrics.get('micro_f1'))}"
+            f"{_format_metric_field('loss', train_loss)} "
+            f"{_format_metric_field('macro_f1', train_metrics.get('macro_f1'))} "
+            f"{_format_metric_field('micro_f1', train_metrics.get('micro_f1'))}"
         )
+        val_fields = [
+            _format_metric_field("loss", val_loss, highlight="best_val_loss" in improved_aliases),
+            _format_metric_field("macro_f1", val_metrics.get("macro_f1"), highlight="best_macro_f1" in improved_aliases),
+            _format_metric_field("micro_f1", val_metrics.get("micro_f1"), highlight="best_micro_f1" in improved_aliases),
+        ]
         print(
             "  val   "
-            f"loss={_format_metric(val_loss)} "
-            f"macro_f1={_format_metric(val_metrics.get('macro_f1'))} "
-            f"micro_f1={_format_metric(val_metrics.get('micro_f1'))}"
+            + " ".join(val_fields)
         )
+        best_fields = [
+            _format_metric_field("loss", self.best_trackers["best_val_loss"]["best_value"]),
+            _format_metric_field("macro_f1", self.best_trackers["best_macro_f1"]["best_value"]),
+            _format_metric_field("micro_f1", self.best_trackers["best_micro_f1"]["best_value"]),
+        ]
         print(
             "  best  "
-            f"loss={_format_metric(self.best_trackers['best_val_loss']['best_value'])} "
-            f"macro_f1={_format_metric(self.best_trackers['best_macro_f1']['best_value'])} "
-            f"micro_f1={_format_metric(self.best_trackers['best_micro_f1']['best_value'])}"
+            + " ".join(best_fields)
         )
+        epoch_fields = [
+            _format_epoch_value(self.best_trackers["best_val_loss"]["best_epoch"]).ljust(len(best_fields[0])),
+            _format_epoch_value(self.best_trackers["best_macro_f1"]["best_epoch"]).ljust(len(best_fields[1])),
+            _format_epoch_value(self.best_trackers["best_micro_f1"]["best_epoch"]).ljust(len(best_fields[2])),
+        ]
         print(
             "        "
-            f"loss{_format_epoch_tag(self.best_trackers['best_val_loss']['best_epoch'])} "
-            f"macro_f1{_format_epoch_tag(self.best_trackers['best_macro_f1']['best_epoch'])} "
-            f"micro_f1{_format_epoch_tag(self.best_trackers['best_micro_f1']['best_epoch'])}"
+            + " ".join(epoch_fields)
         )
 
     def _topk_paths_multilabel(
@@ -538,7 +606,7 @@ class Trainer:
 
             with torch.set_grad_enabled(train_mode):
                 with autocast(enabled=self.cfg.amp and self.device.type == "cuda"):
-                    outputs = self.model(images=batch["images"], mask=batch["mask"])
+                    outputs = self._forward_model(batch)
                     logits = outputs["logits"]
                     loss_main = self._primary_loss(logits=logits, labels=batch["labels"])
                     loss_aux = self._aux_loss(outputs)
@@ -756,7 +824,7 @@ class Trainer:
             else:
                 no_improve += 1
 
-            self._update_best_checkpoints(epoch, val_loss, val_metrics)
+            improved_aliases = self._update_best_checkpoints(epoch, val_loss, val_metrics)
             self._save_checkpoint(self.last_path, epoch, val_monitor)
             self._print_epoch_summary(
                 epoch=epoch,
@@ -765,6 +833,7 @@ class Trainer:
                 train_metrics=train_metrics,
                 val_loss=val_loss,
                 val_metrics=val_metrics,
+                improved_aliases=improved_aliases,
             )
 
             if self.on_validation_epoch_end is not None:

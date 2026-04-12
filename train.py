@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import shutil
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -19,9 +20,19 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from baseline.colonocopy_baseline import ColonoscopyMILBaseline
-from baseline.gastro_baseline import GastroMILBaseline
+from ablation_exp import ABLATION_EXPERIMENT_NAMES, build_all_ablation_experiments
+from baselines.colon_baseline import ColonoscopyMILBaseline
+from baselines.gastro_baseline import (
+    GASTRO_BASELINE_CLASS_REGISTRY,
+    GASTRO_BASELINE_MODEL_NAMES,
+    build_gastro_baseline,
+)
 from model import GastroLabelGraphMIL
+from sotas.gastro_sota import (
+    GASTRO_SOTA_CLASS_REGISTRY,
+    GASTRO_SOTA_MODEL_NAMES,
+    build_gastro_sota,
+)
 from training import (
     COLO_BINARY_CLASS_NAMES,
     GASTRO_LABEL_NAMES,
@@ -44,30 +55,47 @@ MODEL_SEQUENCE = (
     "gastro_label_graph_mil",
     "colonoscopy_baseline",
 )
+SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(MODEL_SEQUENCE + GASTRO_BASELINE_MODEL_NAMES))
+SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(SUPPORTED_MODEL_NAMES + GASTRO_SOTA_MODEL_NAMES))
 
 TRACKER_ALIAS_TO_META = {
     "best_macro_f1": {"metric_name": "macro_f1", "mode": "max"},
     "best_micro_f1": {"metric_name": "micro_f1", "mode": "max"},
     "best_val_loss": {"metric_name": "val_loss", "mode": "min"},
 }
+SERIES_TRACKER_ALIASES = tuple(TRACKER_ALIAS_TO_META.keys())
 
-MODEL_TASK_META = {
-    "gastro_baseline": {
-        "task_name": "gastro_multilabel",
-        "task_dir_name": "gastro_multilabel_task",
-        "run_prefix": "gastro",
-    },
-    "gastro_label_graph_mil": {
-        "task_name": "gastro_multilabel",
-        "task_dir_name": "gastro_multilabel_task",
-        "run_prefix": "gastro",
-    },
-    "colonoscopy_baseline": {
-        "task_name": "colonoscopy_binary",
-        "task_dir_name": "colonoscopy_binary_task",
-        "run_prefix": "colonoscopy",
-    },
+GASTRO_TASK_META = {
+    "task_name": "gastro_multilabel",
+    "task_dir_name": "gastro_multilabel_task",
+    "run_prefix": "gastro",
 }
+MODEL_TASK_META = {
+    model_name: dict(GASTRO_TASK_META)
+    for model_name in (
+        "gastro_baseline",
+        "gastro_label_graph_mil",
+        *GASTRO_BASELINE_MODEL_NAMES,
+        *GASTRO_SOTA_MODEL_NAMES,
+    )
+}
+MODEL_TASK_META["colonoscopy_baseline"] = {
+    "task_name": "colonoscopy_binary",
+    "task_dir_name": "colonoscopy_binary_task",
+    "run_prefix": "colonoscopy",
+}
+
+AUTO_BASELINE_ALLOWED_MODEL_NAMES = tuple(
+    name
+    for name in SUPPORTED_MODEL_NAMES
+    if name in GASTRO_BASELINE_CLASS_REGISTRY or name == "colonoscopy_baseline"
+)
+AUTO_SOTA_ALLOWED_MODEL_NAMES = tuple(
+    name
+    for name in SUPPORTED_MODEL_NAMES
+    if name in GASTRO_SOTA_CLASS_REGISTRY
+)
+AUTO_ABLATION_ALLOWED_MODEL_NAMES = ("gastro_label_graph_mil",)
 
 try:
     from tqdm import tqdm
@@ -82,6 +110,10 @@ except Exception:  # pragma: no cover
 
 class AutoExploreTrialFailed(RuntimeError):
     """自动探索单次 trial 失败，但不终止整个搜索流程。"""
+
+
+class AutoBaselineRunFailed(RuntimeError):
+    """自动 baseline 的单个模型训练失败，但不终止整个流程。"""
 
 
 def seed_everything(seed: int) -> None:
@@ -129,6 +161,31 @@ def resolve_model_task_meta(model_name: str) -> dict[str, str]:
 
 def resolve_required_tasks(model_names: list[str]) -> set[str]:
     return {resolve_model_task_meta(model_name)["task_name"] for model_name in model_names}
+
+
+def resolve_series_entry_model_name(entry: dict[str, Any]) -> str:
+    return str(entry.get("base_model_name", entry.get("name", ""))).strip()
+
+
+def normalize_auto_ablations_selection(raw_value: Any) -> tuple[str, ...]:
+    if raw_value is None:
+        return ()
+    if isinstance(raw_value, bool):
+        return ("all",) if raw_value else ()
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if not stripped or stripped.lower() in {"0", "false", "none", "off", "disable", "disabled", "no"}:
+            return ()
+        return tuple(item.strip() for item in stripped.split(",") if item.strip())
+    if isinstance(raw_value, (list, tuple)):
+        normalized = [str(item).strip() for item in raw_value if str(item).strip()]
+        return tuple(normalized)
+    if isinstance(raw_value, dict):
+        if not bool(raw_value.get("enabled", False)):
+            return ()
+        target = raw_value.get("target", raw_value.get("selection", "all"))
+        return normalize_auto_ablations_selection(target)
+    raise ValueError("auto_ablations 仅支持 false、true、字符串、列表或字典配置")
 
 
 def format_task_display_name(task_name: str) -> str:
@@ -217,6 +274,23 @@ def allocate_task_run_dir(
 
 def auto_train_dir_name(trial_index: int) -> str:
     return f"train_{trial_index:03d}"
+
+
+def next_auto_train_index(session_dir: Path) -> int:
+    pattern = re.compile(r"^train_(\d+)(?:_.+)?$")
+    max_index = 0
+    if session_dir.is_dir():
+        for child in session_dir.iterdir():
+            if not child.is_dir():
+                continue
+            match = pattern.match(child.name)
+            if match:
+                max_index = max(max_index, int(match.group(1)))
+    return max_index + 1
+
+
+def auto_baseline_run_dir_name(run_index: int, model_name: str) -> str:
+    return f"train_{run_index:03d}_{model_name}"
 
 
 def normalize_auto_explore_space(raw_space: Any, allowed_keys: set[str]) -> dict[str, dict[str, Any]]:
@@ -1021,6 +1095,24 @@ def parse_args() -> argparse.Namespace:
         default="configs/auto_explore.yaml",
         help="自动探索配置文件",
     )
+    parser.add_argument(
+        "--auto-baselines-config",
+        type=str,
+        default="configs/auto_baselines.yaml",
+        help="自动 baseline 配置文件",
+    )
+    parser.add_argument(
+        "--auto-sotas-config",
+        type=str,
+        default="configs/auto_sotas.yaml",
+        help="自动 SOTA 配置文件",
+    )
+    parser.add_argument(
+        "--auto-ablations-config",
+        type=str,
+        default="configs/auto_ablations.yaml",
+        help="自动消融实验配置文件",
+    )
     parser.add_argument("--models", type=str, default="", help="仅运行指定模型，使用逗号分隔")
     parser.add_argument("--seed", type=int, default=None, help="覆盖 train.yaml 中的 seed")
     parser.add_argument("--epochs", type=int, default=None, help="覆盖 train.yaml 中的 max_epochs")
@@ -1096,7 +1188,7 @@ def load_train_config(config_path: Path) -> dict[str, Any]:
         raise ValueError("enabled_models 必须是非空列表")
 
     enabled_models = [str(item).strip() for item in enabled_models_raw if str(item).strip()]
-    unknown_enabled = [name for name in enabled_models if name not in MODEL_SEQUENCE]
+    unknown_enabled = [name for name in enabled_models if name not in SUPPORTED_MODEL_NAMES]
     if unknown_enabled:
         raise ValueError(f"enabled_models 中存在未知模型名：{unknown_enabled}")
 
@@ -1145,6 +1237,20 @@ def load_train_config(config_path: Path) -> dict[str, Any]:
     else:
         auto_explore_enabled = bool(auto_explore_raw)
 
+    auto_baselines_raw = payload.get("auto_baselines", False)
+    if isinstance(auto_baselines_raw, dict):
+        auto_baselines_enabled = bool(auto_baselines_raw.get("enabled", False))
+    else:
+        auto_baselines_enabled = bool(auto_baselines_raw)
+
+    auto_sotas_raw = payload.get("auto_sotas", False)
+    if isinstance(auto_sotas_raw, dict):
+        auto_sotas_enabled = bool(auto_sotas_raw.get("enabled", False))
+    else:
+        auto_sotas_enabled = bool(auto_sotas_raw)
+
+    auto_ablations_selection = normalize_auto_ablations_selection(payload.get("auto_ablations", False))
+
     return {
         "gpu_ids": [int(item) for item in gpu_ids_raw],
         "num_workers": int(payload.get("num_workers", 6)),
@@ -1165,6 +1271,9 @@ def load_train_config(config_path: Path) -> dict[str, Any]:
         "enabled_models": enabled_models,
         "default_run": default_run,
         "auto_explore": auto_explore_enabled,
+        "auto_baselines": auto_baselines_enabled,
+        "auto_sotas": auto_sotas_enabled,
+        "auto_ablations": auto_ablations_selection,
     }
 
 
@@ -1236,6 +1345,348 @@ def load_auto_explore_config(config_path: Path, allowed_run_keys: set[str]) -> d
     if auto_explore_cfg["trial_max_epochs"] < 0 or auto_explore_cfg["trial_patience"] < 0:
         raise ValueError("auto_explore.trial_max_epochs 和 auto_explore.trial_patience 不能小于 0")
     return auto_explore_cfg
+
+
+def normalize_auto_model_entries(
+    raw_models: Any,
+    allowed_run_keys: set[str],
+    *,
+    allowed_model_names: tuple[str, ...],
+    config_prefix: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_models, list) or not raw_models:
+        raise ValueError(f"{config_prefix}.models 必须是非空列表")
+
+    normalized: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for index, item in enumerate(raw_models, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"{config_prefix}.models[{index}] 配置格式错误")
+
+        model_name = str(item.get("name", "")).strip()
+        if not model_name:
+            raise ValueError(f"{config_prefix}.models[{index}].name 不能为空")
+        if model_name not in allowed_model_names:
+            raise ValueError(f"{config_prefix}.models[{index}].name 不支持: {model_name}")
+        if model_name in seen_names:
+            raise ValueError(f"{config_prefix}.models 中存在重复模型: {model_name}")
+
+        model_params = item.get("model_params", {}) or {}
+        if not isinstance(model_params, dict):
+            raise ValueError(f"{config_prefix}.models[{index}].model_params 必须是字典")
+
+        run_overrides = item.get("run_overrides", {}) or {}
+        if not isinstance(run_overrides, dict):
+            raise ValueError(f"{config_prefix}.models[{index}].run_overrides 必须是字典")
+        unknown_run_overrides = [key for key in run_overrides.keys() if key not in allowed_run_keys]
+        if unknown_run_overrides:
+            raise ValueError(
+                f"{config_prefix}.models[{index}].run_overrides 存在未知参数: {unknown_run_overrides}"
+            )
+
+        task_meta = resolve_model_task_meta(model_name)
+        normalized.append(
+            {
+                "name": model_name,
+                "display_name": str(item.get("display_name", model_name)).strip() or model_name,
+                "enabled": bool(item.get("enabled", True)),
+                "model_params": model_params,
+                "run_overrides": run_overrides,
+                "task_name": task_meta["task_name"],
+                "task_dir_name": task_meta["task_dir_name"],
+            }
+        )
+        seen_names.add(model_name)
+
+    return normalized
+
+
+def load_auto_model_series_config(
+    config_path: Path,
+    allowed_run_keys: set[str],
+    *,
+    config_prefix: str,
+    allowed_model_names: tuple[str, ...],
+    default_output_dir_name: str,
+) -> dict[str, Any]:
+    if not config_path.is_file():
+        raise FileNotFoundError(f"未找到配置文件: {config_path}")
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{config_prefix} 配置文件格式错误")
+
+    selection_alias = str(payload.get("selection_alias", "best_macro_f1")).strip()
+    if selection_alias not in TRACKER_ALIAS_TO_META:
+        raise ValueError(
+            f"{config_prefix}.selection_alias 仅支持：{list(TRACKER_ALIAS_TO_META.keys())}"
+        )
+
+    result_source = str(payload.get("result_source", "test_results")).strip()
+    if result_source not in {"test_results", "best_checkpoints"}:
+        raise ValueError(f"{config_prefix}.result_source 仅支持 test_results 或 best_checkpoints")
+
+    remark_raw = payload.get("remark", {})
+    if remark_raw is None:
+        remark_raw = {}
+    if not isinstance(remark_raw, dict):
+        raise ValueError(f"{config_prefix}.remark 配置格式错误")
+
+    series_cfg = {
+        "config_path": str(config_path.resolve()),
+        "goal": str(payload.get("goal", "")).strip(),
+        "output_dir_name": str(payload.get("output_dir_name", default_output_dir_name)).strip() or default_output_dir_name,
+        "run_test": bool(payload.get("run_test", True)),
+        "selection_alias": selection_alias,
+        "selection_metric_name": TRACKER_ALIAS_TO_META[selection_alias]["metric_name"],
+        "selection_mode": TRACKER_ALIAS_TO_META[selection_alias]["mode"],
+        "result_source": result_source,
+        "stability_filter": normalize_stability_filter(
+            payload.get("stability_filter", {}),
+            prefix=f"{config_prefix}.stability_filter",
+        ),
+        "remark": {
+            "focus": str(remark_raw.get("focus", "")).strip(),
+            "include_model_evaluations": bool(remark_raw.get("include_model_evaluations", True)),
+            "include_stability_filter": bool(remark_raw.get("include_stability_filter", True)),
+        },
+        "models": normalize_auto_model_entries(
+            payload.get("models", []),
+            allowed_run_keys=allowed_run_keys,
+            allowed_model_names=allowed_model_names,
+            config_prefix=config_prefix,
+        ),
+    }
+    if not series_cfg["run_test"]:
+        raise ValueError(f"{config_prefix}.run_test 当前必须为 true，保证每个模型训练后立即测试")
+    if series_cfg["selection_metric_name"] == "val_loss" and result_source == "test_results":
+        raise ValueError(f"{config_prefix} 使用 test_results 排序时，selection_alias 不能为 best_val_loss")
+
+    enabled_models = [item for item in series_cfg["models"] if item["enabled"]]
+    if not enabled_models:
+        raise ValueError(f"{config_prefix}.models 至少需要启用一个模型")
+
+    task_names = {item["task_name"] for item in enabled_models}
+    if len(task_names) != 1:
+        raise ValueError(f"{config_prefix} 当前仅支持单任务批量运行，请将胃镜和肠镜分开配置")
+
+    series_cfg["task_name"] = enabled_models[0]["task_name"]
+    series_cfg["task_dir_name"] = enabled_models[0]["task_dir_name"]
+    return series_cfg
+
+
+def load_auto_baselines_config(config_path: Path, allowed_run_keys: set[str]) -> dict[str, Any]:
+    return load_auto_model_series_config(
+        config_path,
+        allowed_run_keys,
+        config_prefix="auto_baselines",
+        allowed_model_names=AUTO_BASELINE_ALLOWED_MODEL_NAMES,
+        default_output_dir_name="gastro_baselines",
+    )
+
+
+def load_auto_sotas_config(config_path: Path, allowed_run_keys: set[str]) -> dict[str, Any]:
+    return load_auto_model_series_config(
+        config_path,
+        allowed_run_keys,
+        config_prefix="auto_sotas",
+        allowed_model_names=AUTO_SOTA_ALLOWED_MODEL_NAMES,
+        default_output_dir_name="gastro_sotas",
+    )
+
+
+def normalize_auto_ablation_entries(
+    raw_models: Any,
+    allowed_run_keys: set[str],
+    *,
+    config_prefix: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_models, list) or not raw_models:
+        raise ValueError(f"{config_prefix}.models 必须是非空列表")
+
+    normalized: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for index, item in enumerate(raw_models, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"{config_prefix}.models[{index}] 配置格式错误")
+
+        entry_name = str(item.get("name", "")).strip()
+        if not entry_name:
+            raise ValueError(f"{config_prefix}.models[{index}].name 不能为空")
+        if entry_name in seen_names:
+            raise ValueError(f"{config_prefix}.models 中存在重复条目: {entry_name}")
+
+        base_model_name = str(item.get("base_model_name", "")).strip()
+        if not base_model_name:
+            raise ValueError(f"{config_prefix}.models[{index}].base_model_name 不能为空")
+        if base_model_name not in AUTO_ABLATION_ALLOWED_MODEL_NAMES:
+            raise ValueError(
+                f"{config_prefix}.models[{index}].base_model_name 不支持: {base_model_name}"
+            )
+
+        model_params = item.get("model_params", {}) or {}
+        if not isinstance(model_params, dict):
+            raise ValueError(f"{config_prefix}.models[{index}].model_params 必须是字典")
+
+        run_overrides = item.get("run_overrides", {}) or {}
+        if not isinstance(run_overrides, dict):
+            raise ValueError(f"{config_prefix}.models[{index}].run_overrides 必须是字典")
+        unknown_run_overrides = [key for key in run_overrides.keys() if key not in allowed_run_keys]
+        if unknown_run_overrides:
+            raise ValueError(
+                f"{config_prefix}.models[{index}].run_overrides 存在未知参数: {unknown_run_overrides}"
+            )
+
+        task_meta = resolve_model_task_meta(base_model_name)
+        normalized.append(
+            {
+                "name": entry_name,
+                "base_model_name": base_model_name,
+                "display_name": str(item.get("display_name", entry_name)).strip() or entry_name,
+                "enabled": bool(item.get("enabled", True)),
+                "model_params": model_params,
+                "run_overrides": run_overrides,
+                "task_name": task_meta["task_name"],
+                "task_dir_name": task_meta["task_dir_name"],
+            }
+        )
+        seen_names.add(entry_name)
+
+    return normalized
+
+
+def load_auto_ablations_config(config_path: Path, allowed_run_keys: set[str]) -> dict[str, Any]:
+    if not config_path.is_file():
+        raise FileNotFoundError(f"未找到配置文件: {config_path}")
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("auto_ablations 配置文件格式错误")
+
+    selection_alias = str(payload.get("selection_alias", "best_macro_f1")).strip()
+    if selection_alias not in TRACKER_ALIAS_TO_META:
+        raise ValueError(
+            f"auto_ablations.selection_alias 仅支持：{list(TRACKER_ALIAS_TO_META.keys())}"
+        )
+
+    result_source = str(payload.get("result_source", "test_results")).strip()
+    if result_source not in {"test_results", "best_checkpoints"}:
+        raise ValueError("auto_ablations.result_source 仅支持 test_results 或 best_checkpoints")
+
+    output_root_dir_name = str(payload.get("output_root_dir_name", "gastro_ablations")).strip() or "gastro_ablations"
+    common_goal = str(payload.get("goal", "")).strip()
+
+    remark_raw = payload.get("remark", {})
+    if remark_raw is None:
+        remark_raw = {}
+    if not isinstance(remark_raw, dict):
+        raise ValueError("auto_ablations.remark 配置格式错误")
+
+    registry = {item["name"]: item for item in build_all_ablation_experiments()}
+    raw_experiments = payload.get("experiments")
+    if raw_experiments is None:
+        raw_experiments = [{"name": name, "enabled": True} for name in ABLATION_EXPERIMENT_NAMES]
+    if not isinstance(raw_experiments, list) or not raw_experiments:
+        raise ValueError("auto_ablations.experiments 必须是非空列表")
+
+    normalized_experiments: list[dict[str, Any]] = []
+    seen_experiment_names: set[str] = set()
+    for index, item in enumerate(raw_experiments, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"auto_ablations.experiments[{index}] 配置格式错误")
+
+        experiment_name = str(item.get("name", "")).strip()
+        if not experiment_name:
+            raise ValueError(f"auto_ablations.experiments[{index}].name 不能为空")
+        if experiment_name not in registry:
+            raise ValueError(
+                f"auto_ablations.experiments[{index}].name 不支持: {experiment_name}"
+            )
+        if experiment_name in seen_experiment_names:
+            raise ValueError(f"auto_ablations.experiments 中存在重复实验: {experiment_name}")
+
+        experiment_payload = registry[experiment_name]
+        experiment_display_name = (
+            str(item.get("display_name", experiment_payload.get("display_name", experiment_name))).strip()
+            or experiment_name
+        )
+        experiment_goal = (
+            str(item.get("goal", experiment_payload.get("goal", common_goal))).strip()
+            or common_goal
+        )
+        experiment_output_dir_name = (
+            str(item.get("output_dir_name", experiment_payload.get("output_dir_name", experiment_name))).strip()
+            or experiment_name
+        )
+        models = normalize_auto_ablation_entries(
+            experiment_payload.get("models", []),
+            allowed_run_keys=allowed_run_keys,
+            config_prefix=f"auto_ablations.experiments[{index}]",
+        )
+        enabled_models = [entry for entry in models if entry["enabled"]]
+        if not enabled_models:
+            raise ValueError(f"auto_ablations.experiments[{index}] 至少需要启用一个条目")
+
+        task_names = {entry["task_name"] for entry in enabled_models}
+        if len(task_names) != 1:
+            raise ValueError(
+                f"auto_ablations.experiments[{index}] 当前仅支持单任务批量运行"
+            )
+
+        focus_text = str(
+            item.get(
+                "focus",
+                f"{str(remark_raw.get('focus', '')).strip()}（{experiment_display_name}）"
+                if str(remark_raw.get("focus", "")).strip()
+                else f"汇总 {experiment_display_name} 的测试结果与稳定性表现",
+            )
+        ).strip()
+
+        normalized_experiments.append(
+            {
+                "name": experiment_name,
+                "display_name": experiment_display_name,
+                "enabled": bool(item.get("enabled", True)),
+                "config_path": str(config_path.resolve()),
+                "goal": experiment_goal,
+                "output_dir_name": f"{output_root_dir_name}/{experiment_output_dir_name}",
+                "run_test": bool(payload.get("run_test", True)),
+                "selection_alias": selection_alias,
+                "selection_metric_name": TRACKER_ALIAS_TO_META[selection_alias]["metric_name"],
+                "selection_mode": TRACKER_ALIAS_TO_META[selection_alias]["mode"],
+                "result_source": result_source,
+                "stability_filter": normalize_stability_filter(
+                    payload.get("stability_filter", {}),
+                    prefix="auto_ablations.stability_filter",
+                ),
+                "remark": {
+                    "focus": focus_text,
+                    "include_model_evaluations": bool(remark_raw.get("include_model_evaluations", True)),
+                    "include_stability_filter": bool(remark_raw.get("include_stability_filter", True)),
+                },
+                "models": models,
+                "task_name": enabled_models[0]["task_name"],
+                "task_dir_name": enabled_models[0]["task_dir_name"],
+            }
+        )
+        seen_experiment_names.add(experiment_name)
+
+    enabled_experiments = [item for item in normalized_experiments if item["enabled"]]
+    if not enabled_experiments:
+        raise ValueError("auto_ablations.experiments 至少需要启用一个实验")
+
+    for experiment in enabled_experiments:
+        if not experiment["run_test"]:
+            raise ValueError("auto_ablations.run_test 当前必须为 true，保证每个训练完成后立即测试")
+        if experiment["selection_metric_name"] == "val_loss" and experiment["result_source"] == "test_results":
+            raise ValueError("auto_ablations 使用 test_results 排序时，selection_alias 不能为 best_val_loss")
+
+    return {
+        "config_path": str(config_path.resolve()),
+        "goal": common_goal,
+        "output_root_dir_name": output_root_dir_name,
+        "experiments": normalized_experiments,
+    }
 
 
 def load_model_config(config_path: Path) -> dict[str, dict[str, Any]]:
@@ -1569,14 +2020,74 @@ def selected_model_names(args_models: str, train_cfg: dict[str, Any]) -> list[st
     if args_models.strip():
         names = [item.strip() for item in args_models.split(",") if item.strip()]
     else:
-        names = [model_name for model_name in MODEL_SEQUENCE if model_name in train_cfg["enabled_models"]]
+        names = list(train_cfg["enabled_models"])
 
-    unknown = [name for name in names if name not in MODEL_SEQUENCE]
+    unknown = [name for name in names if name not in SUPPORTED_MODEL_NAMES]
     if unknown:
         raise ValueError(f"存在未知模型名：{unknown}")
     if not names:
         raise ValueError("没有可运行的模型，请检查 --models 或 train.yaml 中的 enabled_models 配置")
     return names
+
+
+def selected_auto_model_entries(
+    args_models: str,
+    series_cfg: dict[str, Any],
+    *,
+    config_prefix: str,
+) -> list[dict[str, Any]]:
+    enabled_entries = [item for item in series_cfg["models"] if item["enabled"]]
+    if not args_models.strip():
+        return enabled_entries
+
+    requested_names = [item.strip() for item in args_models.split(",") if item.strip()]
+    selected_entries = [item for item in enabled_entries if item["name"] in requested_names]
+    missing = [name for name in requested_names if name not in {item["name"] for item in enabled_entries}]
+    if missing:
+        raise ValueError(f"{config_prefix} 配置中不存在这些已启用模型：{missing}")
+    return selected_entries
+
+
+def selected_auto_baseline_model_entries(
+    args_models: str,
+    auto_baselines_cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return selected_auto_model_entries(
+        args_models,
+        auto_baselines_cfg,
+        config_prefix="auto_baselines",
+    )
+
+
+def selected_auto_sota_model_entries(
+    args_models: str,
+    auto_sotas_cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return selected_auto_model_entries(
+        args_models,
+        auto_sotas_cfg,
+        config_prefix="auto_sotas",
+    )
+
+
+def selected_auto_ablation_experiments(
+    selections: tuple[str, ...],
+    auto_ablations_cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    enabled_experiments = [item for item in auto_ablations_cfg["experiments"] if item["enabled"]]
+    if not selections:
+        return []
+
+    requested = [item.strip() for item in selections if item.strip()]
+    requested_lower = {item.lower() for item in requested}
+    if "all" in requested_lower:
+        return enabled_experiments
+
+    selected = [item for item in enabled_experiments if item["name"] in requested_lower]
+    missing = [name for name in requested if name.lower() not in {item["name"] for item in enabled_experiments}]
+    if missing:
+        raise ValueError(f"auto_ablations 配置中不存在这些已启用实验：{missing}")
+    return selected
 
 
 def resolve_run_cfg(train_cfg: dict[str, Any], model_name: str) -> dict[str, Any]:
@@ -1597,6 +2108,18 @@ def resolve_monitor_settings(
     return metric, mode
 
 
+def resolve_task_training_payload(
+    training_context: dict[str, Any],
+    model_name: str,
+) -> tuple[dict[str, list[dict[str, Any]]], list[float]]:
+    task_name = resolve_model_task_meta(model_name)["task_name"]
+    if task_name == "gastro_multilabel":
+        return training_context["gastro_split"], training_context["gastro_pos_weight"]
+    if task_name == "colonoscopy_binary":
+        return training_context["colon_split"], training_context["colon_pos_weight"]
+    raise ValueError(f"未知任务名: {task_name}")
+
+
 def build_model_bundle(
     model_name: str,
     run_cfg: dict[str, Any],
@@ -1607,21 +2130,27 @@ def build_model_bundle(
     pos_weight: list[float],
     use_multi_gpu: bool,
     run_test: bool,
+    resume_path: str | None = None,
 ) -> tuple[Any, TrainerConfig, str, list[str], list[str]]:
-    if model_name == "gastro_baseline":
+    if model_name in GASTRO_BASELINE_CLASS_REGISTRY:
         monitor_metric, monitor_mode = resolve_monitor_settings(
             run_cfg,
             default_metric="macro_auc",
             default_mode="max",
         )
-        model = GastroMILBaseline(
-            backbone_name="resnet50",
+        model = build_gastro_baseline(
+            model_name=model_name,
+            backbone_name=str(model_param_cfg.get("backbone_name", "resnet50")),
             pretrained=pretrained,
-            freeze_stages=1,
-            feature_dim=512,
-            attn_dim=256,
+            freeze_stages=int(model_param_cfg.get("freeze_stages", 1)),
+            feature_dim=int(model_param_cfg.get("feature_dim", 512)),
+            attn_dim=int(model_param_cfg.get("attn_dim", 256)),
+            hidden_dim=int(model_param_cfg.get("hidden_dim", 256)),
             num_labels=3,
-            dropout=0.2,
+            dropout=float(model_param_cfg.get("dropout", 0.2)),
+            topk=int(model_param_cfg.get("topk", 4)),
+            num_heads=int(model_param_cfg.get("num_heads", 8)),
+            num_layers=int(model_param_cfg.get("num_layers", 2)),
         )
         trainer_cfg = TrainerConfig(
             task_type="gastro_multilabel",
@@ -1640,7 +2169,56 @@ def build_model_bundle(
             pos_weight=pos_weight,
             aux_loss_weights={},
             use_multi_gpu=use_multi_gpu,
-            resume_path=None,
+            resume_path=resume_path,
+            run_test=run_test,
+        )
+        return model, trainer_cfg, "gastro_multilabel", GASTRO_LABEL_NAMES, []
+
+    if model_name in GASTRO_SOTA_CLASS_REGISTRY:
+        monitor_metric, monitor_mode = resolve_monitor_settings(
+            run_cfg,
+            default_metric="macro_auc",
+            default_mode="max",
+        )
+        model = build_gastro_sota(
+            model_name=model_name,
+            backbone_name=str(model_param_cfg.get("backbone_name", "convnext_tiny")),
+            pretrained=pretrained,
+            freeze_stages=int(model_param_cfg.get("freeze_stages", 1)),
+            feature_dim=int(model_param_cfg.get("feature_dim", 512)),
+            attn_dim=int(model_param_cfg.get("attn_dim", 256)),
+            hidden_dim=int(model_param_cfg.get("hidden_dim", 256)),
+            num_labels=3,
+            dropout=float(model_param_cfg.get("dropout", 0.2)),
+            num_heads=int(model_param_cfg.get("num_heads", 8)),
+            num_layers=int(model_param_cfg.get("num_layers", 2)),
+            instance_topk=int(model_param_cfg.get("instance_topk", 4)),
+            num_groups=int(model_param_cfg.get("num_groups", 4)),
+        )
+        aux_loss_weights = {
+            "attention_entropy": float(model_param_cfg.get("attention_entropy_weight", 0.05)),
+            "attention_diversity": float(model_param_cfg.get("attention_diversity_weight", 0.05)),
+            "instance_clustering": float(model_param_cfg.get("instance_clustering_weight", 0.2)),
+            "pseudo_bag": float(model_param_cfg.get("pseudo_bag_weight", 0.2)),
+        }
+        trainer_cfg = TrainerConfig(
+            task_type="gastro_multilabel",
+            max_epochs=max_epochs,
+            patience=patience,
+            lr=float(run_cfg.get("lr", 2e-4)),
+            optimizer_name=str(run_cfg.get("optimizer_name", "adamw")),
+            weight_decay=float(run_cfg.get("weight_decay", 1e-4)),
+            warmup_ratio=float(run_cfg.get("warmup_ratio", 0.1)),
+            grad_accum_steps=int(run_cfg.get("grad_accum_steps", 2)),
+            amp=bool(run_cfg.get("amp", True)),
+            monitor_metric=monitor_metric,
+            monitor_mode=monitor_mode,
+            topk_evidence=int(run_cfg.get("topk_evidence", 5)),
+            loss_name=str(run_cfg.get("loss_name", "asymmetric")),
+            pos_weight=pos_weight,
+            aux_loss_weights=aux_loss_weights,
+            use_multi_gpu=use_multi_gpu,
+            resume_path=resume_path,
             run_test=run_test,
         )
         return model, trainer_cfg, "gastro_multilabel", GASTRO_LABEL_NAMES, []
@@ -1677,7 +2255,7 @@ def build_model_bundle(
             pos_weight=pos_weight,
             aux_loss_weights={},
             use_multi_gpu=use_multi_gpu,
-            resume_path=None,
+            resume_path=resume_path,
             run_test=run_test,
         )
         return model, trainer_cfg, "gastro_multilabel", GASTRO_LABEL_NAMES, []
@@ -1713,7 +2291,7 @@ def build_model_bundle(
             pos_weight=pos_weight,
             aux_loss_weights={},
             use_multi_gpu=use_multi_gpu,
-            resume_path=None,
+            resume_path=resume_path,
             run_test=run_test,
         )
         return model, trainer_cfg, "colonoscopy_binary", [], COLO_BINARY_CLASS_NAMES
@@ -1839,19 +2417,18 @@ def run_model_job(
     active_gpu_count: int,
     run_test: bool,
     run_overrides: dict[str, Any] | None = None,
+    model_param_override: dict[str, Any] | None = None,
+    resume_path: str | None = None,
     on_validation_epoch_end: Callable[[int, float, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     run_cfg = resolve_run_cfg(train_cfg, model_name)
     if run_overrides:
         run_cfg.update(run_overrides)
     model_param_cfg = dict(model_cfg["models"].get(model_name, {}))
+    if model_param_override:
+        model_param_cfg.update(model_param_override)
 
-    if model_name in {"gastro_baseline", "gastro_label_graph_mil"}:
-        split_data = training_context["gastro_split"]
-        pos_weight = training_context["gastro_pos_weight"]
-    else:
-        split_data = training_context["colon_split"]
-        pos_weight = training_context["colon_pos_weight"]
+    split_data, pos_weight = resolve_task_training_payload(training_context, model_name)
 
     seed_everything(seed)
     model, trainer_cfg, task_name, label_names, class_names = build_model_bundle(
@@ -1864,6 +2441,7 @@ def run_model_job(
         pos_weight=pos_weight,
         use_multi_gpu=use_multi_gpu,
         run_test=run_test,
+        resume_path=resume_path,
     )
 
     return run_single_model(
@@ -2033,12 +2611,7 @@ def run_training_session(
             run_cfg.update(run_overrides)
         model_param_cfg = dict(model_cfg["models"].get(model_name, {}))
 
-        if model_name in {"gastro_baseline", "gastro_label_graph_mil"}:
-            split_data = training_context["gastro_split"]
-            pos_weight = training_context["gastro_pos_weight"]
-        else:
-            split_data = training_context["colon_split"]
-            pos_weight = training_context["colon_pos_weight"]
+        split_data, pos_weight = resolve_task_training_payload(training_context, model_name)
 
         model_seed = seed + model_index
         seed_everything(model_seed)
@@ -2089,6 +2662,527 @@ def run_training_session(
             )
 
     return all_results
+
+
+def allocate_auto_series_dir(
+    output_root: Path,
+    train_cfg: dict[str, Any],
+    auto_series_cfg: dict[str, Any],
+) -> Path:
+    task_dir = output_root / train_cfg["train_run_dir_name"] / auto_series_cfg["task_dir_name"]
+    task_dir.mkdir(parents=True, exist_ok=True)
+    session_dir = task_dir / auto_series_cfg["output_dir_name"]
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def auto_series_result_dir_name(alias: str) -> str:
+    return alias.replace("best_", "test_", 1)
+
+
+def build_auto_series_record(
+    entry: dict[str, Any],
+    run_dir: Path,
+) -> dict[str, Any]:
+    return {
+        "model_name": entry["name"],
+        "base_model_name": resolve_series_entry_model_name(entry),
+        "display_name": entry["display_name"],
+        "status": "success",
+        "train_dir": run_dir.name,
+        "train_dir_path": str(run_dir),
+        "selection_alias": "",
+        "selection_metric": "",
+        "selection_mode": "",
+        "score": float("nan"),
+        "best_epoch": -1,
+        "checkpoint_path": "",
+        "test_results": {},
+        "model_params": dict(entry.get("model_params", {})),
+        "run_overrides": dict(entry.get("run_overrides", {})),
+        "run_action": "",
+        "error_message": "",
+    }
+
+
+def enrich_auto_series_record(
+    record: dict[str, Any],
+    *,
+    result: dict[str, Any],
+    auto_series_cfg: dict[str, Any],
+) -> None:
+    all_results = {"models": {record["model_name"]: result}}
+    candidates = resolve_session_candidate(
+        all_results,
+        remark_metric_alias=auto_series_cfg["selection_alias"],
+        result_source=auto_series_cfg["result_source"],
+        fallback_metric_name=auto_series_cfg["selection_metric_name"],
+    )
+    candidate = select_best_candidate(candidates, mode=auto_series_cfg["selection_mode"])
+    if candidate is None:
+        raise RuntimeError(f"{record['model_name']} 未产出可比较结果")
+
+    log_analysis = analyze_training_log(
+        Path(record["train_dir_path"]) / "log.csv",
+        auto_series_cfg["stability_filter"],
+    )
+    record.update(log_analysis)
+    record["selection_alias"] = auto_series_cfg["selection_alias"]
+    record["selection_metric"] = auto_series_cfg["selection_metric_name"]
+    record["selection_mode"] = auto_series_cfg["selection_mode"]
+    record["score"] = candidate["score"]
+    record["best_epoch"] = candidate["best_epoch"]
+    record["checkpoint_path"] = candidate["checkpoint_path"]
+    record["test_results"] = result.get("test_results", {})
+    record["evaluation"] = summarize_model_evaluation(
+        log_analysis,
+        auto_series_cfg["stability_filter"],
+    )
+
+
+def write_auto_series_notes(
+    session_dir: Path,
+    model_records: list[dict[str, Any]],
+    all_results: dict[str, Any],
+    auto_series_cfg: dict[str, Any],
+) -> None:
+    evaluations = build_model_evaluations(
+        all_results,
+        remark_metric_alias=auto_series_cfg["selection_alias"],
+        remark_metric_name=auto_series_cfg["selection_metric_name"],
+        result_source=auto_series_cfg["result_source"],
+        stability_filter=auto_series_cfg["stability_filter"],
+    )
+    evaluation_map = {item["model_name"]: item for item in evaluations}
+    best_candidate = select_best_candidate(
+        evaluations,
+        mode=auto_series_cfg["selection_mode"],
+    ) if evaluations else None
+
+    notes_payload = {
+        "run_dir": str(session_dir),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "config_path": auto_series_cfg["config_path"],
+        "goal": auto_series_cfg.get("goal", ""),
+        "task_name": auto_series_cfg["task_name"],
+        "task_dir_name": auto_series_cfg["task_dir_name"],
+        "output_dir_name": auto_series_cfg["output_dir_name"],
+        "selection": {
+            "checkpoint_alias": auto_series_cfg["selection_alias"],
+            "metric_name": auto_series_cfg["selection_metric_name"],
+            "mode": auto_series_cfg["selection_mode"],
+            "result_source": auto_series_cfg["result_source"],
+        },
+        "counts": {
+            "configured_models": len(auto_series_cfg["models"]),
+            "enabled_models": len([item for item in auto_series_cfg["models"] if item["enabled"]]),
+            "completed_models": len(model_records),
+            "successful_models": len([item for item in model_records if item.get("status") == "success"]),
+            "failed_models": len([item for item in model_records if item.get("status") == "failed"]),
+            "interrupted_models": len([item for item in model_records if item.get("status") == "interrupted"]),
+        },
+        "best_model": best_candidate or {},
+        "model_records": [
+            {
+                **item,
+                "evaluation_detail": evaluation_map.get(item["model_name"], {}),
+            }
+            for item in model_records
+        ],
+    }
+    (session_dir / "notes.json").write_text(
+        json.dumps(to_builtin_type(notes_payload), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def normalize_auto_series_run_dirs(
+    session_dir: Path,
+    model_entries: list[dict[str, Any]],
+) -> None:
+    for run_index, entry in enumerate(model_entries, start=1):
+        expected_dir = session_dir / auto_baseline_run_dir_name(run_index, entry["name"])
+        if expected_dir.exists():
+            continue
+
+        candidates = sorted(
+            [
+                child
+                for child in session_dir.iterdir()
+                if child.is_dir() and child.name.endswith(f"_{entry['name']}")
+            ],
+            key=lambda item: item.name,
+        )
+        if len(candidates) == 1:
+            candidates[0].rename(expected_dir)
+
+
+def is_auto_series_run_complete(run_dir: Path) -> bool:
+    if not (run_dir / "test_result.csv").is_file():
+        return False
+    return all(
+        (run_dir / auto_series_result_dir_name(alias) / "metrics.json").is_file()
+        for alias in SERIES_TRACKER_ALIASES
+    )
+
+
+def auto_series_resume_checkpoint(run_dir: Path) -> str | None:
+    last_path = run_dir / "checkpoints" / "last.ckpt"
+    if last_path.is_file():
+        return str(last_path)
+    return None
+
+
+def reset_auto_series_run_dir(run_dir: Path) -> None:
+    if not run_dir.exists():
+        return
+    for child in run_dir.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def load_existing_auto_series_result(run_dir: Path, model_name: str) -> dict[str, Any]:
+    config_payload: dict[str, Any] = {}
+    config_path = run_dir / "config.yaml"
+    if config_path.is_file():
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            config_payload = loaded
+
+    test_results: dict[str, Any] = {}
+    best_checkpoints: dict[str, Any] = {}
+    for alias in SERIES_TRACKER_ALIASES:
+        metrics_path = run_dir / auto_series_result_dir_name(alias) / "metrics.json"
+        if not metrics_path.is_file():
+            continue
+        payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            continue
+        payload = dict(payload)
+        payload["checkpoint_path"] = str((run_dir / "checkpoints" / f"{alias}.ckpt").resolve())
+        payload["result_dir"] = str((run_dir / auto_series_result_dir_name(alias)).resolve())
+        test_results[alias] = payload
+        best_checkpoints[alias] = {
+            "metric_name": str(payload.get("selection_metric", TRACKER_ALIAS_TO_META[alias]["metric_name"])),
+            "mode": TRACKER_ALIAS_TO_META[alias]["mode"],
+            "best_value": safe_float(payload.get("selection_value", float("nan"))),
+            "best_epoch": int(payload.get("best_epoch", -1)),
+            "checkpoint_path": str(payload.get("checkpoint_path", "")),
+            "artifact_dir": str((run_dir / auto_series_result_dir_name(alias)).resolve()),
+        }
+
+    if not test_results:
+        raise FileNotFoundError(f"{run_dir} 缺少已完成测试结果")
+
+    trainer_cfg = config_payload.get("trainer", {}) if isinstance(config_payload.get("trainer"), dict) else {}
+    return {
+        "primary_monitor_metric": str(trainer_cfg.get("monitor_metric", "")),
+        "primary_monitor_mode": str(trainer_cfg.get("monitor_mode", "")),
+        "primary_best_epoch": -1,
+        "primary_best_value": float("nan"),
+        "best_checkpoints": best_checkpoints,
+        "test_results": test_results,
+        "model_name": model_name,
+        "train_dir": str(run_dir),
+        "train_dir_name": run_dir.name,
+    }
+
+
+def run_auto_model_series(
+    *,
+    series_label: str,
+    progress_desc: str,
+    train_cfg: dict[str, Any],
+    auto_series_cfg: dict[str, Any],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    model_entries: list[dict[str, Any]],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    if not model_entries:
+        raise ValueError(f"没有可运行的 {series_label} 模型")
+
+    session_dir = allocate_auto_series_dir(training_context["output_root"], train_cfg, auto_series_cfg)
+    normalize_auto_series_run_dirs(session_dir, model_entries)
+    all_results: dict[str, Any] = {
+        "session_dir": str(session_dir),
+        "models": {},
+        "settings": {
+            "seed": seed,
+            "max_epochs": max_epochs,
+            "patience": patience,
+            "image_size": image_size,
+            "num_workers": num_workers,
+            "run_test": bool(auto_series_cfg["run_test"]),
+            "output_dir_name": auto_series_cfg["output_dir_name"],
+        },
+    }
+    model_records: list[dict[str, Any]] = []
+
+    print(f"\n[自动 {series_label}] 已开启。")
+    print(f"[自动 {series_label}] 任务: {auto_series_cfg['task_name']}")
+    print(f"[自动 {series_label}] 输出目录: {session_dir}")
+    print(
+        f"[自动 {series_label}] 选择指标: "
+        f"{auto_series_cfg['selection_alias']} / {auto_series_cfg['selection_metric_name']} "
+        f"({auto_series_cfg['selection_mode']})"
+    )
+    if auto_series_cfg.get("goal"):
+        print(f"[自动 {series_label}] 目标: {auto_series_cfg['goal']}")
+    print(f"[自动 {series_label}] 模型数量: {len(model_entries)}")
+
+    def persist_state() -> None:
+        write_auto_series_notes(session_dir, model_records, all_results, auto_series_cfg)
+        write_run_remark(
+            session_dir,
+            all_results,
+            remark_metric_alias=auto_series_cfg["selection_alias"],
+            remark_metric_name=auto_series_cfg["selection_metric_name"],
+            result_source=auto_series_cfg["result_source"],
+            stability_filter=auto_series_cfg["stability_filter"],
+            remark_context=auto_series_cfg["remark"],
+        )
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    iterator = (
+        tqdm(model_entries, desc=progress_desc, dynamic_ncols=True)
+        if tqdm is not None
+        else model_entries
+    )
+    for run_index, entry in enumerate(iterator, start=1):
+        run_dir = session_dir / auto_baseline_run_dir_name(run_index, entry["name"])
+        run_dir.mkdir(parents=True, exist_ok=True)
+        base_model_name = resolve_series_entry_model_name(entry)
+
+        print(
+            f"\n[自动 {series_label}] "
+            f"{run_index}/{len(model_entries)} | model={entry['name']} | train_dir={run_dir.name}"
+        )
+        if base_model_name != entry["name"]:
+            print(f"[自动 {series_label}] base_model: {base_model_name}")
+        if entry["model_params"]:
+            print(f"[自动 {series_label}] model_params: {format_param_overrides(entry['model_params'])}")
+        if entry["run_overrides"]:
+            print(f"[自动 {series_label}] run_overrides: {format_param_overrides(entry['run_overrides'])}")
+
+        record = build_auto_series_record(entry, run_dir)
+        try:
+            if is_auto_series_run_complete(run_dir):
+                record["run_action"] = "skip_completed"
+                print(f"[自动 {series_label}] 已存在完整测试结果，跳过训练。")
+                result = load_existing_auto_series_result(run_dir, entry["name"])
+            else:
+                resume_path = auto_series_resume_checkpoint(run_dir)
+                if resume_path is not None:
+                    record["run_action"] = "resume"
+                    print(f"[自动 {series_label}] 检测到未完成训练，使用 last.ckpt 继续训练。")
+                else:
+                    if any(run_dir.iterdir()):
+                        print(f"[自动 {series_label}] 检测到不完整残留且无断点，将清理后重跑。")
+                        reset_auto_series_run_dir(run_dir)
+                        run_dir.mkdir(parents=True, exist_ok=True)
+                    record["run_action"] = "restart"
+                    resume_path = None
+
+                result = run_model_job(
+                    model_name=base_model_name,
+                    run_dir=run_dir,
+                    train_cfg=train_cfg,
+                    model_cfg=model_cfg,
+                    training_context=training_context,
+                    seed=seed + run_index,
+                    max_epochs=max_epochs,
+                    patience=patience,
+                    image_size=image_size,
+                    num_workers=num_workers,
+                    pretrained=pretrained,
+                    use_multi_gpu=use_multi_gpu,
+                    active_gpu_count=active_gpu_count,
+                    run_test=bool(auto_series_cfg["run_test"]),
+                    run_overrides=entry["run_overrides"],
+                    model_param_override=entry["model_params"],
+                    resume_path=resume_path,
+                )
+            all_results["models"][entry["name"]] = result
+            enrich_auto_series_record(
+                record,
+                result=result,
+                auto_series_cfg=auto_series_cfg,
+            )
+        except KeyboardInterrupt as exc:
+            record["status"] = "interrupted"
+            record["error_message"] = str(exc) or "用户中断"
+            log_analysis = analyze_training_log(
+                run_dir / "log.csv",
+                auto_series_cfg["stability_filter"],
+            )
+            record.update(log_analysis)
+            record["evaluation"] = summarize_model_evaluation(
+                log_analysis,
+                auto_series_cfg["stability_filter"],
+            )
+            print(f"[自动 {series_label}] {entry['name']} 被中断，可下次继续。")
+            raise
+        except Exception as exc:
+            record["status"] = "failed"
+            record["error_message"] = str(exc)
+            log_analysis = analyze_training_log(
+                run_dir / "log.csv",
+                auto_series_cfg["stability_filter"],
+            )
+            record.update(log_analysis)
+            record["evaluation"] = summarize_model_evaluation(
+                log_analysis,
+                auto_series_cfg["stability_filter"],
+            )
+            print(f"[自动 {series_label}] {entry['name']} 失败：{exc}")
+        finally:
+            model_records.append(record)
+            persist_state()
+            if hasattr(iterator, "set_postfix"):
+                best_evaluations = build_model_evaluations(
+                    all_results,
+                    remark_metric_alias=auto_series_cfg["selection_alias"],
+                    remark_metric_name=auto_series_cfg["selection_metric_name"],
+                    result_source=auto_series_cfg["result_source"],
+                    stability_filter=auto_series_cfg["stability_filter"],
+                )
+                current_best = select_best_candidate(
+                    best_evaluations,
+                    mode=auto_series_cfg["selection_mode"],
+                ) if best_evaluations else None
+                if current_best is not None:
+                    iterator.set_postfix(best=f"{float(current_best['score']):.4f}")
+
+    print(f"\n自动 {series_label} 完成。")
+    print(f"自动 {series_label} 备注：{session_dir / 'remark.txt'}")
+    print(f"自动 {series_label} 摘要：{session_dir / 'notes.json'}")
+
+
+def run_auto_baselines(
+    *,
+    train_cfg: dict[str, Any],
+    auto_baselines_cfg: dict[str, Any],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    model_entries: list[dict[str, Any]],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    run_auto_model_series(
+        series_label="Baselines",
+        progress_desc="auto-baselines",
+        train_cfg=train_cfg,
+        auto_series_cfg=auto_baselines_cfg,
+        model_cfg=model_cfg,
+        training_context=training_context,
+        model_entries=model_entries,
+        seed=seed,
+        max_epochs=max_epochs,
+        patience=patience,
+        image_size=image_size,
+        num_workers=num_workers,
+        pretrained=pretrained,
+        use_multi_gpu=use_multi_gpu,
+        active_gpu_count=active_gpu_count,
+    )
+
+
+def run_auto_sotas(
+    *,
+    train_cfg: dict[str, Any],
+    auto_sotas_cfg: dict[str, Any],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    model_entries: list[dict[str, Any]],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    run_auto_model_series(
+        series_label="SOTAs",
+        progress_desc="auto-sotas",
+        train_cfg=train_cfg,
+        auto_series_cfg=auto_sotas_cfg,
+        model_cfg=model_cfg,
+        training_context=training_context,
+        model_entries=model_entries,
+        seed=seed,
+        max_epochs=max_epochs,
+        patience=patience,
+        image_size=image_size,
+        num_workers=num_workers,
+        pretrained=pretrained,
+        use_multi_gpu=use_multi_gpu,
+        active_gpu_count=active_gpu_count,
+    )
+
+
+def run_auto_ablations(
+    *,
+    train_cfg: dict[str, Any],
+    auto_ablations_experiments: list[dict[str, Any]],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    if not auto_ablations_experiments:
+        raise ValueError("没有可运行的消融实验")
+
+    print("\n[自动 Ablations] 已开启。")
+    print(f"[自动 Ablations] 实验数量: {len(auto_ablations_experiments)}")
+
+    for experiment_index, experiment_cfg in enumerate(auto_ablations_experiments, start=1):
+        enabled_entries = [item for item in experiment_cfg["models"] if item["enabled"]]
+        print(
+            f"\n[自动 Ablations] {experiment_index}/{len(auto_ablations_experiments)} "
+            f"| experiment={experiment_cfg['name']} | {experiment_cfg['display_name']}"
+        )
+        run_auto_model_series(
+            series_label=f"Ablations/{experiment_cfg['display_name']}",
+            progress_desc=f"auto-ablation-{experiment_cfg['name']}",
+            train_cfg=train_cfg,
+            auto_series_cfg=experiment_cfg,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            model_entries=enabled_entries,
+            seed=seed + experiment_index * 10000,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
 
 
 def build_auto_explore_trial_record(
@@ -2459,6 +3553,14 @@ def main() -> None:
     path_cfg = load_path_config(Path(args.config))
     train_cfg = load_train_config(Path(args.train_config))
     model_cfg = load_model_config(Path(args.model_config))
+    allowed_run_keys = set(train_cfg["default_run"].keys()) - {"monitor_metric", "monitor_mode"}
+
+    if bool(train_cfg["auto_explore"]) and (
+        bool(train_cfg["auto_baselines"])
+        or bool(train_cfg["auto_sotas"])
+        or bool(train_cfg["auto_ablations"])
+    ):
+        raise ValueError("auto_explore 与 auto_baselines/auto_sotas/auto_ablations 不能同时开启，请二选一")
 
     seed = args.seed if args.seed is not None else train_cfg["seed"]
     max_epochs = args.epochs if args.epochs is not None else train_cfg["max_epochs"]
@@ -2482,11 +3584,89 @@ def main() -> None:
     active_gpu_count = visible_gpu_count if use_multi_gpu else (1 if visible_gpu_count > 0 else 0)
     pretrained = not args.no_pretrained
 
-    names_to_run = selected_model_names(args.models, train_cfg)
-    required_tasks = resolve_required_tasks(names_to_run)
+    auto_baselines_cfg: dict[str, Any] | None = None
+    auto_baseline_entries: list[dict[str, Any]] = []
+    auto_sotas_cfg: dict[str, Any] | None = None
+    auto_sota_entries: list[dict[str, Any]] = []
+    auto_ablations_cfg: dict[str, Any] | None = None
+    auto_ablation_experiments: list[dict[str, Any]] = []
+    requested_names = [item.strip() for item in args.models.split(",") if item.strip()]
+
+    if bool(train_cfg["auto_baselines"]):
+        auto_baselines_cfg = load_auto_baselines_config(
+            Path(args.auto_baselines_config),
+            allowed_run_keys=allowed_run_keys,
+        )
+        baseline_requested = [
+            name for name in requested_names
+            if name in {item["name"] for item in auto_baselines_cfg["models"]}
+        ]
+        auto_baseline_entries = selected_auto_baseline_model_entries(
+            ",".join(baseline_requested),
+            auto_baselines_cfg,
+        ) if baseline_requested or not requested_names else []
+
+    if bool(train_cfg["auto_sotas"]):
+        auto_sotas_cfg = load_auto_sotas_config(
+            Path(args.auto_sotas_config),
+            allowed_run_keys=allowed_run_keys,
+        )
+        sota_requested = [
+            name for name in requested_names
+            if name in {item["name"] for item in auto_sotas_cfg["models"]}
+        ]
+        auto_sota_entries = selected_auto_sota_model_entries(
+            ",".join(sota_requested),
+            auto_sotas_cfg,
+        ) if sota_requested or not requested_names else []
+
+    if bool(train_cfg["auto_ablations"]):
+        auto_ablations_cfg = load_auto_ablations_config(
+            Path(args.auto_ablations_config),
+            allowed_run_keys=allowed_run_keys,
+        )
+        auto_ablation_experiments = selected_auto_ablation_experiments(
+            train_cfg["auto_ablations"],
+            auto_ablations_cfg,
+        )
+
+    if auto_ablations_cfg is not None and requested_names:
+        raise ValueError("auto_ablations 模式当前不支持 --models，请通过 train.yaml 的 auto_ablations 选择实验")
+
+    if auto_baselines_cfg is not None or auto_sotas_cfg is not None or auto_ablations_cfg is not None:
+        selected_names = [item["name"] for item in auto_baseline_entries] + [item["name"] for item in auto_sota_entries]
+        selected_task_model_names = (
+            [resolve_series_entry_model_name(item) for item in auto_baseline_entries]
+            + [resolve_series_entry_model_name(item) for item in auto_sota_entries]
+            + [
+                resolve_series_entry_model_name(entry)
+                for experiment in auto_ablation_experiments
+                for entry in experiment["models"]
+                if entry["enabled"]
+            ]
+        )
+        selected_names.extend(
+            [
+                f"{experiment['name']}:{entry['name']}"
+                for experiment in auto_ablation_experiments
+                for entry in experiment["models"]
+                if entry["enabled"]
+            ]
+        )
+        if requested_names and auto_ablations_cfg is None:
+            unresolved = [name for name in requested_names if name not in set(selected_names)]
+            if unresolved:
+                raise ValueError(f"当前自动批量配置中不存在这些已启用模型：{unresolved}")
+        if not selected_names:
+            raise ValueError("自动批量模式下没有可运行的模型，请检查配置文件中的 enabled 字段")
+    else:
+        selected_names = selected_model_names(args.models, train_cfg)
+        selected_task_model_names = list(selected_names)
+
+    required_tasks = resolve_required_tasks(selected_task_model_names)
     print("=" * 72)
     print("训练配置")
-    print(f"模型={','.join(names_to_run)}")
+    print(f"模型={','.join(selected_names)}")
     print(f"epoch={max_epochs} patience={patience} seed={seed}")
     for line in build_training_config_summary_lines(
         train_cfg["default_run"],
@@ -2509,14 +3689,63 @@ def main() -> None:
             f"train/val/test={task_stats.get('train_size', 0)}/{task_stats.get('val_size', 0)}/{task_stats.get('test_size', 0)}"
         )
 
+    if auto_baselines_cfg is not None:
+        run_auto_baselines(
+            train_cfg=train_cfg,
+            auto_baselines_cfg=auto_baselines_cfg,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            model_entries=auto_baseline_entries,
+            seed=seed,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
+    if auto_sotas_cfg is not None:
+        run_auto_sotas(
+            train_cfg=train_cfg,
+            auto_sotas_cfg=auto_sotas_cfg,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            model_entries=auto_sota_entries,
+            seed=seed + 10000,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
+    if auto_ablations_cfg is not None:
+        run_auto_ablations(
+            train_cfg=train_cfg,
+            auto_ablations_experiments=auto_ablation_experiments,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            seed=seed + 20000,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
+    if auto_baselines_cfg is not None or auto_sotas_cfg is not None or auto_ablations_cfg is not None:
+        return
+
     auto_explore_cfg: dict[str, Any] | None = None
     if bool(train_cfg["auto_explore"]):
-        allowed_run_keys = set(train_cfg["default_run"].keys()) - {"monitor_metric", "monitor_mode"}
         auto_explore_cfg = load_auto_explore_config(
             Path(args.auto_explore_config),
             allowed_run_keys=allowed_run_keys,
         )
-        for model_offset, model_name in enumerate(names_to_run, start=1):
+        for model_offset, model_name in enumerate(selected_names, start=1):
             run_auto_explore(
                 train_cfg=train_cfg,
                 auto_explore_cfg=auto_explore_cfg,
@@ -2535,7 +3764,7 @@ def main() -> None:
         return
 
     run_dirs: list[Path] = []
-    for model_offset, model_name in enumerate(names_to_run, start=1):
+    for model_offset, model_name in enumerate(selected_names, start=1):
         run_dir, run_meta = allocate_task_run_dir(
             training_context["output_root"],
             train_cfg,

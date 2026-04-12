@@ -246,6 +246,7 @@ class MILBagDataset(Dataset):
         self.is_train = is_train
         self.random_instance_dropout = random_instance_dropout if is_train else 0.0
         self.transform = build_image_transform(image_size=image_size, is_train=is_train)
+        self.cache_image_size = int(image_size * 1.5)
         self.image_cache_mode = str(image_cache_mode).strip().lower() or "none"
         if self.image_cache_mode not in IMAGE_CACHE_MODES:
             raise ValueError(f"未知 image_cache_mode: {image_cache_mode}")
@@ -273,10 +274,10 @@ class MILBagDataset(Dataset):
         try:
             resolved_path = source_path.resolve(strict=True)
             stat_result = resolved_path.stat()
-            cache_signature = f"{resolved_path}|{stat_result.st_size}|{stat_result.st_mtime_ns}"
+            cache_signature = f"{resolved_path}|{stat_result.st_size}|{stat_result.st_mtime_ns}|{self.cache_image_size}"
         except FileNotFoundError:
             resolved_path = source_path.resolve()
-            cache_signature = str(resolved_path)
+            cache_signature = f"{resolved_path}|{self.cache_image_size}"
 
         digest = hashlib.sha1(cache_signature.encode("utf-8")).hexdigest()
         return self.image_cache_dir / digest[:2] / f"{digest}.npy"
@@ -284,6 +285,18 @@ class MILBagDataset(Dataset):
     def _load_source_image_array(self, image_path: str | Path) -> np.ndarray:
         with Image.open(image_path) as image:
             rgb_image = image.convert("RGB")
+            target = self.cache_image_size
+            if target > 0:
+                w, h = rgb_image.size
+                short_edge = min(w, h)
+                if short_edge > target:
+                    scale = target / short_edge
+                    rgb_image = rgb_image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+                w, h = rgb_image.size
+                if w > target or h > target:
+                    left = (w - target) // 2
+                    top = (h - target) // 2
+                    rgb_image = rgb_image.crop((left, top, left + target, top + target))
             return np.asarray(rgb_image, dtype=np.uint8)
 
     def _save_disk_cache(self, image_path: str | Path, image_array: np.ndarray) -> None:

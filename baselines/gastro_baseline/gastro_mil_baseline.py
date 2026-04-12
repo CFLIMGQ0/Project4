@@ -6,8 +6,8 @@ import torch.nn as nn
 from model.common import MultiLabelAttentionMIL, build_backbone
 
 
-class GastroMILBaseline(nn.Module):
-    """胃镜三标签多标签分类 baseline。"""
+class GastroAttentionMILBaseline(nn.Module):
+    """标签注意力聚合的胃镜 baseline。"""
 
     def __init__(
         self,
@@ -63,3 +63,6 @@ class GastroMILBaseline(nn.Module):
             "attention": attention,
             "instance_features": features,
         }
+
+
+GastroMILBaseline = GastroAttentionMILBaseline

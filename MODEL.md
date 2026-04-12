@@ -137,5 +137,5 @@ model/
 
 ## Baseline模型
 
-- `gastro_baseline`：位于 `baseline/gastro_baseline/`，作为胃镜三标签多标签分类的基础 MIL 对照模型。
-- `colonoscopy_baseline`：位于 `baseline/colonocopy_baseline/`，作为肠镜二分类的基础 MIL 对照模型。
+- `baselines/gastro_baseline/`：包含 5 个胃镜 baseline，分别为标签注意力 MIL、均值池化、最大响应实例、Transformer 上下文 MIL、Top-k 实例聚合。
+- `baselines/colon_baseline/`：肠镜二分类 baseline 目录，当前保留基础 MIL 对照模型。

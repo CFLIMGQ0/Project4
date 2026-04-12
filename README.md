@@ -395,12 +395,22 @@ python train.py --train-config configs/train.yaml --model-config configs/model.y
 - `monitor_metric` / `monitor_mode`：训练过程主监控指标及方向，可用于把早停目标切到 `val_loss`。
 - `auto_explore`：是否在执行 `python train.py` 时直接进入自动探索模式。
 
+当前提交里的 `configs/train.yaml` 采用“小样本探索 + 开启磁盘缓存”预设：
+
+- `max_exams_per_task: 500`，先用小样本快速验证收敛与过拟合趋势；
+- `train_max_instances / eval_max_instances: 16`，`train_max_batch_instances / eval_max_batch_instances: 192`，先压低单次 trial 的图像处理量；
+- `image_cache_mode: disk`，`image_cache_warmup: true`，首轮先预热当前任务实际会用到的图像缓存；
+- `random_instance_dropout: 0.05`，默认给训练阶段加入轻量实例丢弃正则。
+
 当前训练图像缓存约定：
 
 - 图像缓存默认不做全库预处理，只会预构建当前训练任务 `train/val/test` 实际涉及的图像。
 - 若当前运行的是胃镜模型（如 `gastro_label_graph_mil`、`gastro_baseline`），则只会写入和读取 `cache_gastro_multilabel_image/`。
 - 若当前运行的是肠镜模型（如 `colonoscopy_baseline`），则只会写入和读取 `colonoscopy_binary_image_cache/`。
 - 若后续切换任务再次训练，会继续复用对应任务目录下已存在的缓存文件，不会误加载另一类任务的缓存目录。
+- 当前磁盘缓存保存的不是原始大图，而是 `cache_image_size = int(image_size * 1.5)` 的 `uint8 RGB numpy`；当前 `image_size: 224` 时，实际缓存尺寸为 `336x336`。
+- 写缓存前会先把原图短边缩到不超过 `336`，再做中心裁剪并保存为 `.npy`，从而避免缓存 `1920x1080` 这类原始未压缩数组。
+- 按当前数据规模粗略估算，单张缓存约从 `6 MB` 降到 `339 KB`；全量缓存约 `72 GB`，`500` 个 exam 的小样本探索首轮预热约 `10.8 GB`。
 
 ## 自动探索说明（新增）
 
@@ -423,11 +433,11 @@ python train.py --train-config configs/train.yaml --model-config configs/model.y
 - 搜索空间写在 `configs/auto_explore.yaml`；
 - 只有 `enabled: true` 的参数会被采样；
 - 每个 trial 会复用同一套数据切分，便于公平比较；
-- 每个 trial 默认只训练到 `trial_max_epochs`，并使用 `trial_patience` 提前停止；
-- `configs/auto_explore.yaml` 中的 `stability_filter` 会基于 `final_val_loss`、`final_train_loss` 与 `best_val_loss` 自动标记“稳定收敛候选”；
-- 自动探索阶段仍然根据验证集最优 checkpoint 选参，但每个训练目录训练结束后会立即跑三次测试；
-- 每个训练目录会分别对 `best_macro_f1`、`best_micro_f1`、`best_val_loss` 做测试；
-- 每次测试的指标与图像结果都写入对应的 `test_*` 目录；
+- 当前配置为 `trial_max_epochs: 30`、`trial_patience: 10`，优先兼顾搜索速度与后期收敛观察；
+- 当前启用搜索的参数为 `lr`、`weight_decay`、`warmup_ratio`、`random_instance_dropout`；其中搜索范围分别为 `1e-5~3e-4`、`0.01~0.3`、`0.05~0.25`、`0.05~0.3`；
+- `configs/auto_explore.yaml` 中的 `stability_filter` 会基于 `final_val_loss`、`final_train_loss` 与 `best_val_loss` 自动标记“稳定收敛候选”，当前阈值为 `max_final_gap: 0.05`、`max_val_loss_rebound_ratio: 0.25`、`min_epochs_trained: 10`；
+- 自动探索阶段仍然根据验证集最优 checkpoint 选参，但当前配置 `trial_run_test: false`，默认不会在每个 trial 结束后立刻跑测试集；
+- 若后续把 `trial_run_test` 改为 `true`，则每个训练目录会分别对 `best_macro_f1`、`best_micro_f1`、`best_val_loss` 做测试，并把结果写入对应的 `test_*` 目录；
 - 每个 trial 结束后会持续刷新 `notes.json` 与 `remark.txt`，便于夜间长时间运行。
 
 自动探索输出目录示例：
@@ -441,12 +451,12 @@ paths.output_dir / train_run_dir_name / gastro_multilabel_task / gastro_1_para_a
 - `notes.json`：所有训练目录的结构化摘要；
 - `remark.txt`：当前自动探索运行目录的人工摘要；
 - `train_001/`、`train_002/` ...：每个训练目录的独立输出；
-- 每个 `train_xxx/` 下直接保留 `config.yaml`、`log.csv`、checkpoint、`best_*` 测试目录等训练产物。
+- 每个 `train_xxx/` 下直接保留 `config.yaml`、`log.csv`、checkpoint 与验证集产物；只有在 `trial_run_test: true` 时才会额外出现 `best_*` 测试目录。
 
 收敛优先阶段建议：
 
 - 把 `monitor_metric` 设为 `val_loss`，`monitor_mode` 设为 `min`；
-- 自动探索先优先搜索 `lr`、`weight_decay`、`warmup_ratio`、`random_instance_dropout`、`loss_name`；
+- 当前自动探索先优先搜索 `lr`、`weight_decay`、`warmup_ratio`、`random_instance_dropout`；`loss_name` 当前保持关闭；
 - 先固定 `batch_size`、`grad_accum_steps`、`train_max_instances`，避免把“资源问题”混进“收敛问题”里；
 - 先看 `notes.json` 里的 `stable_trials` 和 `best_stable_trial`，再从这些稳定候选里挑后续正式训练参数。
 
