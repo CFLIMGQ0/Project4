@@ -1,293 +1,377 @@
-\documentclass[Afour,sagev,times]{sagej}
+% sage_latex_guidelines.tex V1.20, 14 January 2017
+
+\documentclass[Afour,sageh,times]{sagej}
 
 \usepackage{moreverb,url}
-\usepackage{graphicx}
-\usepackage{amsmath}
-\usepackage{array}
+
 \usepackage[colorlinks,bookmarksopen,bookmarksnumbered,citecolor=red,urlcolor=red]{hyperref}
 
 \newcommand\BibTeX{{\rmfamily B\kern-.05em \textsc{i\kern-.025em b}\kern-.08em
 T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 
-\def\volumeyear{2026}
+\def\volumeyear{2016}
 
 \begin{document}
 
-\runninghead{Lin}
+\runninghead{Smith and Wittkopf}
 
-\title{Report-guided label graph multiple instance learning for multi-label classification of gastroscopy examinations: a retrospective single-center study}
+\title{A demonstration of the \LaTeXe\ class file for
+\itshape{SAGE Publications}}
 
-\author{Zijian Lin\affilnum{1}}
+\author{Alistair Smith\affilnum{1} and Hendrik Wittkopf\affilnum{2}}
 
-\affiliation{\affilnum{1}School of Informatics, Xiamen University, Xiamen, Fujian 361102, China}
+\affiliation{\affilnum{1}Sunrise Setting Ltd, UK\\
+\affilnum{2}SAGE Publications Ltd, UK}
 
-\corrauth{Zijian Lin, School of Informatics, Xiamen University, Xiamen, Fujian 361102, China. ORCID: 0009-0007-7260-4064.}
+\corrauth{Alistair Smith, Sunrise Setting Ltd
+Brixham Laboratory,
+Freshwater Quarry,
+Brixham, Devon,
+TQ5~8BA, UK.}
 
-\email{CFLIMGO@163.com}
+\email{alistair.smith@sunrise-setting.co.uk}
 
 \begin{abstract}
-\textbf{OBJECTIVE:} To develop and internally validate a weakly supervised deep learning model for multi-label classification of gastroscopy examinations using report-derived examination-level labels rather than manually annotated lesion boxes or image-level labels.
-
-\textbf{METHODS:} This retrospective single-center study used routine gastroscopy examinations organized at examination level as image bags. A report-processing pipeline identified 2898 candidate gastroscopy examinations and retained 2863 eligible examinations containing 171642 images. Three report-derived labels were defined from the diagnostic text field: esophageal submucosal tumor, esophageal mucosal lesion/tumor, and gastritis. Each examination was modeled as a bag of endoscopic images. The proposed model combined a ConvNeXt-Tiny instance encoder, label-wise gated attention pooling, and a label graph reasoner that propagated information among label embeddings before classification. Examinations were randomly split at a 6:2:2 ratio into training, validation, and test sets. Internal performance was compared with five baseline MIL models and five adapted state-of-the-art MIL models implemented in the same project pipeline.
-
-\textbf{RESULTS:} Of the 2863 included examinations, 1183 (41.3\%) contained more than one target label. On the internal test set, the primary checkpoint selected by validation macro F1 achieved a macro F1 of 0.8650, micro F1 of 0.8616, macro receiver operating characteristic area under the curve of 0.9187, macro precision-recall area under the curve of 0.9106, subset accuracy of 0.7021, and Cohen's kappa of 0.7206. Label-wise F1 scores were 0.8416 for esophageal submucosal tumor, 0.8339 for esophageal mucosal lesion/tumor, and 0.9194 for gastritis. The proposed model outperformed the best baseline model (macro F1 0.8558) and the best adapted state-of-the-art comparator (macro F1 0.8458). Ablation experiments showed that attention dimensions of 128--384 and bag sizes of 12--16 sampled images per examination yielded the most competitive results.
-
-\textbf{CONCLUSIONS:} A report-guided label graph MIL framework can effectively exploit multi-image gastroscopy examinations and naturally accommodates coexisting findings. The current evidence supports internal feasibility for examination-level triage and report-image consistency checking. External validation, patient-level split evaluation, and pathology-confirmed labels are still required before clinical deployment.
+This paper describes the use of the \LaTeXe\
+\textsf{\journalclass} class file for setting papers to be
+submitted to a \textit{SAGE Publications} journal.
+The template can be downloaded \href{http://www.uk.sagepub.com/repository/binaries/SAGE LaTeX template.zip}{here}.
 \end{abstract}
 
-\keywords{gastroscopy, endoscopy, multi-label classification, multiple instance learning, weak supervision, deep learning}
+\keywords{Class file, \LaTeXe, \textit{SAGE Publications}}
 
 \maketitle
 
 \section{Introduction}
-Artificial intelligence has become increasingly relevant in gastrointestinal endoscopy because a routine examination can generate dozens of images while the final clinical interpretation is commonly documented only at examination level.\cite{R1} Most clinically archived datasets therefore contain bag-level findings but lack lesion boxes or frame-level labels. This mismatch between available supervision and desired clinical tasks has limited the direct translation of deep learning systems into routine endoscopy workflows. Earlier upper gastrointestinal applications mainly focused on single-image tasks such as anatomical classification or gastric cancer detection.\cite{R2,R3} These studies established feasibility, but they did not directly address the common real-world setting in which one examination contains multiple images and multiple coexisting findings.
+Many authors submitting to research journals use \LaTeXe\ to
+prepare their papers. This paper describes the
+\textsf{\journalclass} class file which can be used to convert
+articles produced with other \LaTeXe\ class files into the correct
+form for submission to \textit{SAGE Publications}.
 
-Multiple instance learning (MIL) is well suited to such weakly supervised settings because it treats each examination as a bag of images and learns from bag-level labels.\cite{R4} Attention-based MIL has improved interpretability by assigning different importance weights to images within a bag.\cite{R4} In computational pathology, several MIL variants, including CLAM, DSMIL, TransMIL, and DTFD-MIL, have further improved performance by refining instance selection, contextual aggregation, or bag construction.\cite{R5,R6,R7,R8} However, these frameworks were mostly designed for single-label or mutually exclusive slide-level prediction. In gastroscopy, multiple clinically relevant findings can coexist in one examination, and independent one-versus-rest prediction may ignore this label correlation.
+The \textsf{\journalclass} class file preserves much of the
+standard \LaTeXe\ interface so that any document which was
+produced using the standard \LaTeXe\ \textsf{article} style can
+easily be converted to work with the \textsf{\journalclassshort}
+style. However, the width of text and typesize will vary from that
+of \textsf{article.cls}; therefore, \textit{line breaks will change}
+and it is likely that displayed mathematics and tabular material
+will need re-setting.
 
-Our current project was built around a routine gastroscopy cohort in which three report-derived findings were targeted simultaneously: esophageal submucosal tumor (SMT), esophageal mucosal lesion/tumor, and gastritis. Because these labels are not mutually exclusive, a model that explicitly reasons over label interactions may be more suitable than a model that predicts each label independently. We therefore developed a report-guided label graph MIL model that first aggregates image evidence separately for each label and then propagates information through a learnable label graph before classification.
+In the following sections we describe how to lay out your code to
+use \textsf{\journalclass} to reproduce much of the typographical look of
+the \textit{SAGE} journal that you wish to submit to. However, this paper is not a guide to
+using \LaTeXe\ and we would refer you to any of the many books
+available (see, for example, \cite{R1}, \cite{R2} and \cite{R3}).
 
-The aim of this study was to draft and internally validate an examination-level deep learning pipeline for multi-label gastroscopy classification using routine image bags and report-derived weak labels. We further compared the proposed model with baseline MIL methods, adapted MIL state-of-the-art comparators, and controlled ablation settings to understand its practical value within the current project.
-
-\section{Materials and methods}
-\subsection{Study design and reporting guideline}
-This study was designed as a retrospective single-center observational study and is reported in accordance with the Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement.\cite{R9} The project used de-identified routine endoscopic images and structured reports that had already undergone dataset cleaning and report consolidation within the local pipeline. The exact study period, institution name, ethics approval number, and consent statement should be inserted before journal submission because these items were not available in the current repository snapshot.
-
-\subsection{Dataset construction and eligibility}
-The dataset was organized at examination level. Each examination directory contained an image folder and the corresponding report information. Candidate records were retrieved from a cleaned report table and screened by normalized text in the report title and diagnostic conclusion fields. A record was considered a gastroscopy examination when upper gastrointestinal keywords were present and colonoscopy keywords were absent.
-
-The project defined three target labels from the diagnostic conclusion (\texttt{watchResult}) field using rule-based text matching after Unicode normalization, whitespace removal, and punctuation harmonization:
+\section{The three golden rules}
+Before we proceed, we would like to stress \textit{three golden
+rules} that need to be followed to enable the most efficient use
+of your code at the typesetting stage:
 \begin{enumerate}
-\item[(1)] \textit{Esophageal SMT}: matched phrases such as ``esophageal SMT,'' ``esophageal submucosal bulge,'' and related source-layer descriptions.
-\item[(2)] \textit{Esophageal mucosal lesion/tumor}: matched phrases such as ``esophageal mucosal lesion,'' ``esophageal tumor,'' ``esophageal occupation,'' and related uncertain neoplastic descriptions.
-\item[(3)] \textit{Gastritis}: matched chronic, erosive, superficial, atrophic, or bile reflux gastritis descriptions as well as Kimura--Takemoto style atrophy grades (C1--O3).
+\item[(i)] keep your own macros to an absolute minimum;
+
+\item[(ii)] as \TeX\ is designed to make sensible spacing
+decisions by itself, do \textit{not} use explicit horizontal or
+vertical spacing commands, except in a few accepted (mostly
+mathematical) situations, such as \verb"\," before a
+differential~d, or \verb"\quad" to separate an equation from its
+qualifier;
+
+\item[(iii)] follow the journal reference style.
 \end{enumerate}
 
-Records were excluded when the diagnostic field was empty, when only uncertain wording was present without any target label, or when no target label was matched. Multi-label examinations were retained rather than discarded. Among 2898 candidate gastroscopy examinations, 2863 were eligible for modeling, containing 171642 images in total, with a mean of 60.0 images per examination. Label frequencies were 1375 for esophageal SMT, 1489 for esophageal mucosal lesion/tumor, and 1199 for gastritis. A total of 1680 examinations had a single target label, 1166 had two labels, and 17 had all three labels, indicating that 41.3\% of included examinations exhibited multi-label coexistence.
+\section{Getting started} The \textsf{\journalclassshort} class file should run
+on any standard \LaTeXe\ installation. If any of the fonts, style
+files or packages it requires are missing from your installation,
+they can be found on the \textit{\TeX\ Collection} DVDs or downloaded from
+CTAN.
 
-The final random split was performed at examination level with a ratio of 6:2:2, yielding 1717 training examinations, 572 validation examinations, and 574 test examinations. Because the split was examination-based rather than patient-based, repeated examinations from the same patient may have entered different subsets; this point is addressed in the Discussion as an important limitation.
+\begin{figure*}
+\setlength{\fboxsep}{0pt}%
+\setlength{\fboxrule}{0pt}%
+\begin{center}
+\begin{boxedverbatim}
+\documentclass[<options>]{sagej}
+
+\begin{document}
+
+\runninghead{<Author surnames>}
+
+\title{<Initial capital only>}
+
+\author{<An Author\affilnum{1},
+Someone Else\affilnum{2} and
+Perhaps Another\affilnum{1}>}
+
+\affiliation{<\affilnum{1}First and third authors' affiliation\\
+\affilnum{2}Second author affiliation>}
+
+\corrauth{<Corresponding author's name and full postal address>}
+
+\email{<Corresponding author's email address>}
+
+\begin{abstract}
+<Text>
+\end{abstract}
+
+\keywords{<List keywords>}
+
+\maketitle
+
+\section{Introduction}
+.
+.
+.
+\end{boxedverbatim}
+\end{center}
+\caption{Example header text.\label{F1}}
+\end{figure*}
+
+\section{The article header information}
+The heading for any file using \textsf{\journalclass} is shown in
+Figure~\ref{F1}. You must select options for the trim/text area and
+the reference style of the journal you are submitting to.
+The choice of \verb+options+ are listed in Table~\ref{T1}.
 
 \begin{table}[h]
 \small\sf\centering
-\caption{Dataset characteristics for the gastroscopy multi-label task.\label{T1}}
-\begin{tabular}{p{0.62\columnwidth}p{0.23\columnwidth}}
+\caption{The choice of options.\label{T1}}
+\begin{tabular}{lll}
 \toprule
-Characteristic & Value \\
+Option&Trim and font size&Columns\\
 \midrule
-Candidate gastroscopy examinations & 2898 \\
-Included examinations & 2863 \\
-Total images & 171642 \\
-Mean images per examination & 60.0 \\
-Training/validation/test examinations & 1717/572/574 \\
-Single-label examinations & 1680 (58.7\%) \\
-Double-label examinations & 1166 (40.7\%) \\
-Triple-label examinations & 17 (0.6\%) \\
-Esophageal SMT positive examinations & 1375 (48.0\%) \\
-Esophageal mucosal lesion/tumor positive examinations & 1489 (52.0\%) \\
-Gastritis positive examinations & 1199 (41.9\%) \\
+\texttt{shortAfour}& 210 $\times$ 280 mm, 10pt& Double column\\
+\texttt{Afour} &210 $\times$ 297 mm, 10pt& Double column\\
+\texttt{MCfour} &189 $\times$ 246 mm, 10pt& Double column\\
+\texttt{PCfour} &170 $\times$ 242 mm, 10pt& Double column\\
+\texttt{Royal} &156 $\times$ 234 mm, 10pt& Single column\\
+\texttt{Crown} &7.25 $\times$ 9.5 in, 10pt&Single column\\
+\texttt{Review} & 156 $\times$ 234 mm, 12pt & Single column\\
+\bottomrule
+\end{tabular}\\[10pt]
+\begin{tabular}{ll}
+\toprule
+Option&Reference style\\
+\midrule
+\texttt{sageh}&SAGE Harvard style (author-year)\\
+\texttt{sagev}&SAGE Vancouver style (superscript numbers)\\
+\texttt{sageapa}&APA style (author-year)\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Model development}
-The proposed architecture, termed \textit{label graph MIL}, was designed for examination-level multi-label prediction. For an examination bag $X=\{I_n\}_{n=1}^{N}$, each image $I_n$ was first encoded into a feature vector $h_n \in \mathbb{R}^{d}$ by a shared instance encoder:
-\begin{equation}
-h_n = f_{\theta}(I_n).
-\end{equation}
-In the current implementation, $f_{\theta}$ used a pretrained ConvNeXt-Tiny backbone with one early stage frozen and a two-layer projection head to a 512-dimensional feature space.\cite{R10}
+For example, if your journal is short A4 sized, uses Times fonts and has Harvard style references then you would need\\
+{\small\verb+\documentclass[ShortAfour,times,sageh]{sagej}+}
 
-To allow different labels to attend to different image evidence, we applied label-wise gated attention pooling:
-\begin{equation}
-a_{\ell n} = \mathrm{softmax}_n\left(w_{\ell}^{\top}\bigl[\tanh(Vh_n)\odot\sigma(Uh_n)\bigr]\right),
-\end{equation}
-\begin{equation}
-z_{\ell}=\sum_{n=1}^{N} a_{\ell n}h_n,
-\end{equation}
-where $\ell$ indexes the target labels, $a_{\ell n}$ is the normalized attention weight of image $n$ for label $\ell$, and $z_{\ell}$ is the label-specific examination embedding. This formulation extends attention-based MIL from a single bag summary to multiple label-specific bag summaries.\cite{R4}
+Most \textit{SAGE} journals are published using Times fonts but if for any reason you have a problem using Times you can
+easily resort to Computer Modern fonts by removing the
+\verb"times" option.
 
-We then introduced a learnable label graph reasoner. Let $E \in \mathbb{R}^{L \times d}$ denote $L$ learnable label tokens. A label affinity matrix was computed as
-\begin{equation}
-A = \mathrm{softmax}\left(\frac{EE^{\top}}{\sqrt{d}}\right).
-\end{equation}
-Given the stacked label embeddings $Z=[z_1,\ldots,z_L]$, one propagation step was performed:
-\begin{equation}
-\hat{Z}=AZ,
-\end{equation}
-followed by residual refinement:
-\begin{equation}
-Z' = Z + \phi([Z;\hat{Z}]),
-\end{equation}
-where $\phi(\cdot)$ is a multilayer perceptron. Finally, each refined label embedding was passed to an independent linear classifier to produce one logit per label. The rationale was that coexisting findings within one gastroscopy examination might share contextual information, and explicit label-level interaction could improve classification when weak supervision is used.
+\subsection{`Review' option}
+Some journals (for example, \emph{Journal of the Society for Clinical Trials}) require that
+papers are set single column and with a larger font size to help with the review process.
+If this is a requirement for the journal that you are submitting to, just add the \verb+Review+ option to the \verb+\documenclass[]{sagej}+ line.
 
-\subsection{Training and evaluation}
-Training images underwent random resized cropping, horizontal flipping, color jitter, and Gaussian blur. Evaluation images were resized and center cropped. During training, at most 16 images were sampled from each examination bag and a random instance dropout ratio of 0.25 was applied. During validation and testing, the same maximum of 16 images per bag was used with deterministic sampling.
+\subsection{Remarks}
+\begin{enumerate}
+\item[(i)] In \verb"\runninghead" use `\textit{et~al.}' if there
+are three or more authors.
 
-The model was trained for 30 epochs with AdamW, learning rate $2\times10^{-5}$, weight decay 0.02, warmup ratio 0.2, batch size 12, mixed precision, and asymmetric loss for multi-label imbalance handling. The main architecture parameters were feature dimension 512, attention dimension 256, and dropout 0.2. The training pipeline stored checkpoints selected by validation macro F1, micro F1, and validation loss. Because macro F1 better reflects balanced multi-label performance under class imbalance, the checkpoint selected by validation macro F1 was treated as the primary result in the current manuscript.
+\item[(ii)] For multiple author papers please note the use of \verb"\affilnum" to
+link names and affiliations. The corresponding author details need to be included using the
+\verb+\corrauth+ and \verb+\email+ commands.
 
-Evaluation included label-wise accuracy, recall, precision, specificity, F1, receiver operating characteristic area under the curve (ROC-AUC), and precision-recall area under the curve (PR-AUC). Overall metrics included macro recall, macro precision, macro F1, macro ROC-AUC, macro PR-AUC, micro F1, subset accuracy, Hamming loss, and Cohen's kappa.
+\item[(iii)] For submitting a double-spaced manuscript, add
+\verb"doublespace" as an option to the documentclass line.
 
-\subsection{Comparator models and ablation settings}
-The project contained two comparator groups trained under the same split and general schedule: five baseline MIL models and five adapted state-of-the-art MIL models. Baselines comprised attention MIL, mean pooling, max pooling, transformer-context MIL, and top-$k$ MIL. Adapted state-of-the-art models comprised CLAM-SB, CLAM-MB, DSMIL, TransMIL, and DTFD-MIL.\cite{R5,R6,R7,R8} In the current repository implementation, these comparator models used ResNet-50 backbones, whereas the proposed model used ConvNeXt-Tiny. This difference is reported transparently and should be revisited in a stricter matched-backbone study.
+\item[(iv)] The abstract should be capable of standing by itself,
+in the absence of the body of the article and of the bibliography.
+Therefore, it must not contain any reference citations.
 
-Two ablation studies were also available in the project outputs: attention dimension ablation (64, 128, 256, 384, and 512) and bag size ablation with maximum sampled images per examination set to 8, 12, 16, 20, and 24.
+\item[(v)] Keywords are separated by commas.
 
-\section{Results}
-\subsection{Primary internal performance}
-Table~\ref{T2} summarizes the internal test performance of the proposed model across the three stored checkpoint selection criteria. The primary checkpoint selected by validation macro F1 achieved the best balance across metrics, with macro F1 0.8650, micro F1 0.8616, macro ROC-AUC 0.9187, macro PR-AUC 0.9106, subset accuracy 0.7021, Hamming loss 0.1400, and kappa 0.7206. The checkpoint selected by validation loss yielded a lower test loss but substantially weaker macro and micro F1, suggesting that early validation loss minimization did not correspond to the best clinically oriented classification balance.
+\item[(vi)] If you are submitting to a \textit{SAGE} journal that requires numbered sections (for example, IJRR), please add the command
+  \verb+\setcounter{secnumdepth}{3}+ just above the \verb+\begin{document}+ line.
 
-\begin{table*}[h]
+\end{enumerate}
+
+
+\section{The body of the article}
+
+\subsection{Mathematics} \textsf{\journalclass} makes the full
+functionality of \AmS\/\TeX\ available. We encourage the use of
+the \verb"align", \verb"gather" and \verb"multline" environments
+for displayed mathematics. \textsf{amsthm} is used for setting
+theorem-like and proof environments. The usual \verb"\newtheorem"
+command needs to be used to set up the environments for your
+particular document.
+
+\subsection{Figures and tables} \textsf{\journalclass} includes the
+\textsf{graphicx} package for handling figures.
+
+Figures are called in as follows:
+\begin{verbatim}
+\begin{figure}
+\centering
+\includegraphics{<figure name>}
+\caption{<Figure caption>}
+\end{figure}
+\end{verbatim}
+
+For further details on how to size figures, etc., with the
+\textsf{graphicx} package see, for example, \cite{R1}
+or \cite{R3}.
+
+The standard coding for a table is shown in Figure~\ref{F2}.
+
+\begin{figure}
+\setlength{\fboxsep}{0pt}%
+\setlength{\fboxrule}{0pt}%
+\begin{center}
+\begin{boxedverbatim}
+\begin{table}
 \small\sf\centering
-\caption{Overall internal test performance of the proposed model under different checkpoint selection criteria.\label{T2}}
-\begin{tabular}{lcccccccc}
+\caption{<Table caption.>}
+\begin{tabular}{<table alignment>}
 \toprule
-Checkpoint & Test loss & Macro F1 & Micro F1 & Macro ROC-AUC & Macro PR-AUC & Subset accuracy & Hamming loss & Kappa \\
+<column headings>\\
 \midrule
-Best macro F1 & 0.1597 & \textbf{0.8650} & \textbf{0.8616} & 0.9187 & 0.9106 & \textbf{0.7021} & \textbf{0.1400} & \textbf{0.7206} \\
-Best micro F1 & 0.1597 & \textbf{0.8650} & \textbf{0.8616} & 0.9187 & 0.9106 & \textbf{0.7021} & \textbf{0.1400} & \textbf{0.7206} \\
-Best validation loss & \textbf{0.0677} & 0.8296 & 0.8221 & \textbf{0.9254} & \textbf{0.9191} & 0.4895 & 0.1998 & 0.6041 \\
+<table entries
+(separated by & as usual)>\\
+<table entries>\\
+.
+.
+.\\
 \bottomrule
 \end{tabular}
-\end{table*}
+\end{table}
+\end{boxedverbatim}
+\end{center}
+\caption{Example table layout.\label{F2}}
+\end{figure}
 
-Label-wise performance for the primary checkpoint is shown in Table~\ref{T3}. Gastritis was the most accurately predicted label, with F1 0.9194, ROC-AUC 0.9602, and PR-AUC 0.9502. The two esophageal labels were more challenging, but both still achieved F1 above 0.83 and ROC-AUC above 0.89.
+\subsection{Cross-referencing}
+The use of the \LaTeX\ cross-reference system
+for figures, tables, equations, etc., is encouraged
+(using \verb"\ref{<name>}" and \verb"\label{<name>}").
 
-\begin{table*}[t]
-\footnotesize\sf\centering
-\caption{Label-wise internal test performance of the primary checkpoint selected by validation macro F1.\label{T3}}
-\begin{tabular}{p{0.34\textwidth}ccccc}
-\toprule
-Label & Recall & Precision & F1 & ROC-AUC & PR-AUC \\
-\midrule
-Esophageal SMT & 0.9239 & 0.7727 & 0.8416 & 0.8932 & 0.8553 \\
-Esophageal mucosal lesion/tumor & 0.8700 & 0.8006 & 0.8339 & 0.9028 & 0.9263 \\
-Gastritis & 0.9105 & 0.9286 & 0.9194 & 0.9602 & 0.9502 \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\subsection{End of paper special sections}
+Depending on the requirements of the journal that you are submitting to,
+there are macros defined to typeset various special sections.
 
-\subsection{Comparison with baseline and adapted state-of-the-art MIL models}
-Table~\ref{T4} compares the proposed model with the baseline and adapted state-of-the-art models already available in the project. The proposed model achieved the highest macro F1 and micro F1 among all tested methods. Relative to the best baseline model (attention MIL), the absolute gain in macro F1 was 0.0092. Relative to the best adapted state-of-the-art comparator (TransMIL), the absolute gain in macro F1 was 0.0191.
+The commands available are:
+\begin{verbatim}
+\begin{acks}
+To typeset an
+  "Acknowledgements" section.
+\end{acks}
+\end{verbatim}
 
-\begin{table*}[h]
-\small\sf\centering
-\caption{Comparison with baseline and adapted state-of-the-art MIL models on the internal test set. Comparator backbones followed the current project implementations.\label{T4}}
-\begin{tabular}{llccc}
-\toprule
-Group & Model & Backbone & Macro F1 & Micro F1 \\
-\midrule
-Proposed & Label graph MIL & ConvNeXt-Tiny & \textbf{0.8650} & \textbf{0.8616} \\
-\midrule
-Baseline & Attention MIL & ResNet-50 & 0.8558 & 0.8524 \\
-Baseline & Mean pooling & ResNet-50 & 0.8509 & 0.8474 \\
-Baseline & Transformer-context MIL & ResNet-50 & 0.8514 & 0.8472 \\
-Baseline & Top-$k$ MIL & ResNet-50 & 0.8427 & 0.8387 \\
-Baseline & Max pooling & ResNet-50 & 0.7482 & 0.7391 \\
-\midrule
-Adapted SOTA & TransMIL & ResNet-50 & 0.8458 & 0.8405 \\
-Adapted SOTA & DSMIL & ResNet-50 & 0.8341 & 0.8287 \\
-Adapted SOTA & DTFD-MIL & ResNet-50 & 0.8289 & 0.8256 \\
-Adapted SOTA & CLAM-MB & ResNet-50 & 0.8267 & 0.8227 \\
-Adapted SOTA & CLAM-SB & ResNet-50 & 0.8180 & 0.8113 \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\begin{verbatim}
+\begin{biog}
+To typeset an
+  "Author biography" section.
+\end{biog}
+\end{verbatim}
 
-\subsection{Ablation findings}
-The ablation studies are summarized in Table~\ref{T5}. For attention dimension, performance was strongest around 128--256 and changed only modestly across 64--512, suggesting that the label graph block was not overly sensitive to this parameter within a reasonable range. For maximum sampled images per examination, 12--16 images yielded the best macro F1 among the controlled ablation runs, whereas larger bag sizes did not further improve performance. These findings suggest that a moderate bag size may be sufficient to capture representative evidence while controlling optimization difficulty.
+\begin{verbatim}
+\begin{biogs}
+To typeset an
+  "Author Biographies" section.
+\end{biogs}
+\end{verbatim}
 
-\begin{table*}[h]
-\small\sf\centering
-\caption{Ablation experiments within the current project outputs. These were separate controlled runs, so absolute scores differ slightly from the final selected run reported in Tables~\ref{T2}--\ref{T4}.\label{T5}}
-\begin{tabular}{llcc}
-\toprule
-Category & Setting & Macro F1 & Micro F1 \\
-\midrule
-Attention dimension & 64 & 0.8564 & 0.8523 \\
-Attention dimension & 128 & 0.8607 & 0.8570 \\
-Attention dimension & 256 & \textbf{0.8610} & \textbf{0.8580} \\
-Attention dimension & 384 & 0.8598 & 0.8567 \\
-Attention dimension & 512 & 0.8594 & 0.8565 \\
-\midrule
-Max sampled images per bag & 8 & 0.8577 & 0.8552 \\
-Max sampled images per bag & 12 & \textbf{0.8596} & \textbf{0.8565} \\
-Max sampled images per bag & 16 & 0.8573 & 0.8530 \\
-Max sampled images per bag & 20 & 0.8564 & 0.8537 \\
-Max sampled images per bag & 24 & 0.8560 & 0.8523 \\
-\bottomrule
-\end{tabular}
-\end{table*}
+%\newpage
 
-\section{Discussion}
-This project-level retrospective study suggests that examination-level weak supervision can support clinically meaningful multi-label classification in gastroscopy. The proposed label graph MIL framework achieved the best internal macro F1 among all implemented comparators and was particularly effective in a cohort with frequent multi-label coexistence. Because 41.3\% of examinations had more than one target label, explicit modeling of inter-label relationships was not merely a theoretical refinement but matched the structure of the data.
-
-The architecture design also matches practical clinical workflow. Endoscopists typically interpret a complete examination rather than isolated still images, and routine archives often provide only report-level conclusions. By converting each examination into a bag and using label-wise attention, the model can identify different image evidence for different findings without requiring lesion boxes. The additional label graph reasoner allows the model to share contextual information across labels before final prediction, which is a plausible mechanism when gastritis and esophageal abnormalities coexist within the same examination.
-
-The comparison experiments provide encouraging, although still preliminary, evidence. The proposed model exceeded both baseline MIL models and adapted computational pathology MIL methods in the current project. However, the results should not be overinterpreted as definitive evidence of methodological superiority because the current comparator implementations used ResNet-50 backbones while the proposed model used ConvNeXt-Tiny. The comparison is useful for internal project ranking, but a stricter matched-backbone benchmark is still needed.
-
-Several limitations should be acknowledged. First, this was a single-center retrospective study with internal validation only. Second, labels were derived from routine report text rather than pathology-confirmed gold standards for every case, so the task is best described as report-guided examination classification. Third, the current split was examination-level rather than patient-level, which may overestimate generalization if patients contributed multiple examinations. Fourth, we relied on one main random split and descriptive comparison rather than repeated resampling with confidence intervals or hypothesis testing. Fifth, many exploratory runs in the project showed validation rebound and train/validation loss divergence, indicating that generalization remains a challenge despite the favorable primary test results.
-
-Despite these limitations, the present draft provides a realistic basis for a publishable manuscript. Clinically, the most immediate applications may be examination-level triage, quality control, and report-image consistency checking rather than autonomous diagnosis. Future work should add exact institutional metadata, perform patient-level and external validation, standardize comparator backbones, incorporate temporal or anatomical ordering information, and evaluate pathology-linked endpoints where available.
-
-\section{Conclusions}
-Within the current project, a report-guided label graph MIL model achieved strong internal performance for multi-label gastroscopy examination classification and outperformed the available baseline and adapted state-of-the-art comparators. The study supports the feasibility of using routine multi-image endoscopy archives with report-derived weak labels to build examination-level decision-support models. Before clinical translation or formal submission, the manuscript should be completed with institution-specific ethics information and strengthened by patient-level and external validation.
-
-\section*{Author contributions}
-Zijian Lin conceived the study, implemented the data processing and model development pipeline, performed experiments, analyzed the results, and drafted the manuscript. Co-author contributions should be added here if additional authors are included before submission.
-
-\section*{Statements and declarations}
-\subsection*{Ethical considerations}
-This draft was prepared from a project repository snapshot that did not contain finalized ethics information. Before submission, please replace this paragraph with the full name of the approving ethics committee or institutional review board, the approval number, the approval date, and the statement on whether ethical approval was waived or granted for this retrospective analysis.
-
-\subsection*{Consent to participate}
-Please insert the appropriate statement before submission. For a retrospective de-identified dataset, this will usually state whether informed consent was waived by the ethics committee or whether consent had been obtained as part of institutional policy.
-
-\subsection*{Consent for publication}
-Not applicable because no directly identifiable personal details are reported in this draft manuscript.
-
+\begin{verbatim}
 \begin{dci}
-The author(s) declared no potential conflicts of interest with respect to the research, authorship, and/or publication of this article. Replace this sentence only if a formal conflict of interest statement is required by your institution or sponsor.
+To typeset a "Declaration of
+  conflicting interests" section.
 \end{dci}
+\end{verbatim}
 
+\begin{verbatim}
 \begin{funding}
-Funding information was not available in the current repository snapshot. Before submission, replace this paragraph with the exact funding agency names and grant numbers, or state that the study received no specific grant from any funding agency in the public, commercial, or not-for-profit sectors.
+To typeset a "Funding" section.
 \end{funding}
+\end{verbatim}
 
-\subsection*{Data availability}
-The gastroscopy images and clinical report data used in this project are not publicly available because they may contain sensitive clinical information and are subject to institutional governance. De-identified derived data tables and code may be made available from the corresponding author on reasonable request, subject to ethics and data access approval.
+\begin{verbatim}
+\begin{sm}
+To typeset a
+  "Supplemental material" section.
+\end{sm}
+\end{verbatim}
+
+\subsection{Endnotes}
+Most \textit{SAGE} journals use endnotes rather than footnotes, so any notes should be coded as \verb+\endnote{<Text>}+.
+Place the command \verb+\theendnotes+ just above the Reference section to typeset the endnotes.
+
+To avoid any confusion for papers that use Vancouver style references,  footnotes/endnotes should be edited into the text.
+
+\subsection{References}
+Please note that the files \textsf{SageH.bst} and \textsf{SageV.bst} are included with the class file
+for those authors using \BibTeX.
+The files work in a completely standard way, and you just need to uncomment one of the lines in the below example depending on what style you require:
+\begin{verbatim}
+%%Harvard (name/date)
+%\bibliographystyle{SageH}
+%%Vancouver (numbered)
+%\bibliographystyle{SageV}
+\bibliography{<YourBibfile.bib>}
+\end{verbatim}
+and remember to add the relevant option to the \verb+\documentclass[]{sagej}+ line as listed in Table~\ref{T1}. 
+
+%\section{Support for \textsf{\journalclass}}
+%We offer on-line support to participating authors. Please contact
+%us via e-mail at \dots
+%
+%We would welcome any feedback, positive or otherwise, on your
+%experiences of using \textsf{\journalclass}.
+
+\section{Copyright statement}
+Please  be  aware that the use of  this \LaTeXe\ class file is
+governed by the following conditions.
+
+\subsection{Copyright}
+Copyright \copyright\ \volumeyear\ SAGE Publications Ltd,
+1 Oliver's Yard, 55 City Road, London, EC1Y~1SP, UK. All
+rights reserved.
+
+\subsection{Rules of use}
+This class file is made available for use by authors who wish to
+prepare an article for publication in a \textit{SAGE Publications} journal.
+The user may not exploit any
+part of the class file commercially.
+
+This class file is provided on an \textit{as is}  basis, without
+warranties of any kind, either express or implied, including but
+not limited to warranties of title, or implied  warranties of
+merchantablility or fitness for a particular purpose. There will
+be no duty on the author[s] of the software or SAGE Publications Ltd
+to correct any errors or defects in the software. Any
+statutory  rights you may have remain unaffected by your
+acceptance of these rules of use.
 
 \begin{acks}
-Acknowledgements are currently not applicable. If non-author contributors, language editing support, or institutional technical assistance should be acknowledged, add them here before submission.
+This class file was developed by Sunrise Setting Ltd,
+Brixham, Devon, UK.\\
+Website: \url{http://www.sunrise-setting.co.uk}
 \end{acks}
 
 \begin{thebibliography}{99}
-\bibitem{R1}
-Min JK, Kwak MS and Cha JM. Overview of deep learning in gastrointestinal endoscopy. \textit{Gut Liver} 2019; 13: 388--393.
+\bibitem[Kopka and Daly(2003)]{R1}
+Kopka~H and Daly~PW (2003) \textit{A Guide to \LaTeX}, 4th~edn.
+Addison-Wesley.
 
-\bibitem{R2}
-Takiyama H, Ozawa T, Ishihara S, et al. Automatic anatomical classification of esophagogastroduodenoscopy images using deep convolutional neural networks. \textit{Sci Rep} 2018; 8: 7497.
+\bibitem[Lamport(1994)]{R2}
+Lamport~L (1994) \textit{\LaTeX: a Document Preparation System},
+2nd~edn. Addison-Wesley.
 
-\bibitem{R3}
-Hirasawa T, Aoyama K, Tanimoto T, et al. Application of artificial intelligence using a convolutional neural network for detecting gastric cancer in endoscopic images. \textit{Gastric Cancer} 2018; 21: 653--660.
-
-\bibitem{R4}
-Ilse M, Tomczak JM and Welling M. Attention-based deep multiple instance learning. In: \textit{Proceedings of the 35th International Conference on Machine Learning}. Stockholm, Sweden, 10--15 July 2018, pp.~2127--2136.
-
-\bibitem{R5}
-Lu MY, Williamson DFK, Chen TY, et al. Data-efficient and weakly supervised computational pathology on whole-slide images. \textit{Nat Biomed Eng} 2021; 5: 555--570.
-
-\bibitem{R6}
-Li B, Li Y and Eliceiri KW. Dual-stream multiple instance learning network for whole slide image classification with self-supervised contrastive learning. In: \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}. Nashville, TN, USA, 20--25 June 2021, pp.~14318--14328.
-
-\bibitem{R7}
-Shao Z, Bian H, Chen Y, et al. TransMIL: Transformer based correlated multiple instance learning for whole slide image classification. In: \textit{Advances in Neural Information Processing Systems 34}. Virtual conference, 6--14 December 2021, pp.~2136--2147.
-
-\bibitem{R8}
-Zhang H, Meng Y, Zhao Y, et al. DTFD-MIL: Double-tier feature distillation multiple instance learning for histopathology whole slide image classification. In: \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}. New Orleans, LA, USA, 18--24 June 2022, pp.~18802--18812.
-
-\bibitem{R9}
-von Elm E, Altman DG, Egger M, et al. The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement: guidelines for reporting observational studies. \textit{PLoS Med} 2007; 4: e296.
-
-\bibitem{R10}
-Liu Z, Mao H, Wu CY, et al. A ConvNet for the 2020s. In: \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition}. New Orleans, LA, USA, 18--24 June 2022, pp.~11976--11986.
+\bibitem[Mittelbach and Goossens(2004)]{R3}
+Mittelbach~F and Goossens~M (2004) \textit{The \LaTeX\ Companion},
+2nd~edn. Addison-Wesley.
 
 \end{thebibliography}
 

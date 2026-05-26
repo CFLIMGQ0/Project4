@@ -1,1 +1,0 @@
-from baselines.colon_baseline.colonoscopy_mil_baseline import ColonoscopyMILBaseline

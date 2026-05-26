@@ -1,0 +1,165 @@
+# 基础参数
+task_name: task2
+gpu_ids: [0, 1, 2]
+num_workers: 2
+seed: 2026
+image_size: 224
+max_epochs: 30
+patience: 30
+
+# 数据参数
+max_exams_per_task: 0
+min_instances: 1
+group_by_patient: true
+split_ratio: [0.6, 0.2, 0.2]
+train_sampling_strategy: random
+eval_sampling_strategy: uniform
+task_selection_dir_name: task_data
+train_run_dir_name: train_runs
+experiment_dir_name: exp_8
+single_run_dir_name: train_007_exp8_mm_ablation_title_operation
+run_dir_prefix: run
+structured_min_category_count: 20
+
+# 类别平衡：仅对训练集做检查级虚拟重采样，验证/测试集保持原始分布。
+# 目标是把每个标签内部的少数极性（通常是阳性）曝光数尽量补到该标签原始多数极性数量。
+class_balance:
+  enabled: true
+  apply_to: train_only
+  mode: multilabel_minority_oversample
+  target_strategy: per_label_majority
+  max_repeat_per_bag: 30
+  max_added_records: 10000
+  allow_overshoot_ratio: 0.05
+  top_candidate_pool: 32
+  candidate_sample_size: 256
+  prefer_multi_tail_positive: true
+  label_names:
+    - label_esophageal_smt
+    - label_esophageal_mucosal_or_tumor
+    - label_gastritis
+  tail_labels: []
+  report_filename: class_balance_report.json
+
+# 运行模型：默认使用 exp_8 中表现最好的 train_007 配置
+# 即 exp8_structured_late_gate_mil + reportTitle + operationValue。
+enabled_models:
+  - exp8_structured_late_gate_mil
+
+# 默认训练参数：对齐 train_007_exp8_mm_ablation_title_operation
+batch_size: 1
+eval_batch_size: 1
+train_max_instances: 64
+eval_max_instances: 64
+train_max_batch_instances: 128
+eval_max_batch_instances: 128
+pin_memory: true
+persistent_workers: false
+loader_prefetch_factor: 1
+image_cache_mode: disk
+image_cache_scope: shared
+image_cache_dir: /home/Lim/Project4/datasets/image_cache
+image_cache_warmup: false
+memory_cache_size: 0
+random_instance_dropout: 0.0
+optimizer_name: adamw
+lr: 0.00002
+weight_decay: 0.02
+warmup_ratio: 0.2
+grad_accum_steps: 4
+amp: true
+topk_evidence: 5
+loss_name: asymmetric
+monitor_metric: val_loss
+monitor_mode: min
+
+# 自动模式
+auto_explore: false
+auto_baselines: false
+auto_sotas: false
+auto_ablations: false
+auto_exp_1: false
+auto_exp_2: false
+auto_exp_3: false
+auto_exp_4: false
+auto_exp_5: false
+auto_exp_6: false
+auto_exp_7: false
+auto_exp_8_mm_ablation: false
+auto_exp_5_roi:
+  enabled: true
+  model_id: facebook/sam2.1-hiera-large
+  checkpoint_name: sam2.1_hiera_large.pt
+  checkpoint_url: https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+  model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml
+  auto_install_package: true
+  force_rebuild: false
+  max_images: 0
+  num_shards: 3
+  shard_gpus: [0, 1, 2]
+  top_k_per_image: 2
+  crop_margin_ratio: 0.08
+  save_mask_png: true
+  pred_iou_thresh: 0.88
+  stability_score_thresh: 0.92
+  min_area_ratio: 0.003
+  max_area_ratio: 0.45
+  min_bbox_side_ratio: 0.035
+  nms_iou_thresh: 0.8
+  points_per_side: 32
+  crop_n_layers: 0
+  crop_n_points_downscale_factor: 2
+  min_mask_region_area: 100
+  output_dir_name: roi/task2/sam2_1_hiera_large
+auto_exp_6_roi:
+  enabled: true
+  model_id: facebook/sam2.1-hiera-large
+  checkpoint_name: sam2.1_hiera_large.pt
+  checkpoint_url: https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+  model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml
+  auto_install_package: true
+  force_rebuild: false
+  max_images: 0
+  num_shards: 3
+  shard_gpus: [0, 1, 2]
+  top_k_per_image: 2
+  crop_margin_ratio: 0.08
+  save_mask_png: true
+  pred_iou_thresh: 0.88
+  stability_score_thresh: 0.92
+  min_area_ratio: 0.003
+  max_area_ratio: 0.45
+  min_bbox_side_ratio: 0.035
+  nms_iou_thresh: 0.8
+  points_per_side: 32
+  crop_n_layers: 0
+  crop_n_points_downscale_factor: 2
+  min_mask_region_area: 100
+  output_dir_name: roi/task2/sam2_1_hiera_large
+auto_exp_7_roi:
+  enabled: true
+  model_id: facebook/sam2.1-hiera-large
+  checkpoint_name: sam2.1_hiera_large.pt
+  checkpoint_url: https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+  model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml
+  auto_install_package: true
+  force_rebuild: false
+  max_images: 0
+  num_shards: 3
+  shard_gpus: [0, 1, 2]
+  top_k_per_image: 2
+  crop_margin_ratio: 0.08
+  save_mask_png: true
+  pred_iou_thresh: 0.88
+  stability_score_thresh: 0.92
+  min_area_ratio: 0.003
+  max_area_ratio: 0.45
+  min_bbox_side_ratio: 0.035
+  nms_iou_thresh: 0.8
+  points_per_side: 32
+  crop_n_layers: 0
+  crop_n_points_downscale_factor: 2
+  min_mask_region_area: 100
+  output_dir_name: roi/task2/sam2_1_hiera_large
+auto_exp_2_skip_models:
+  - eqlv2_mil

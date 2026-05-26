@@ -1,32 +1,46 @@
 from __future__ import annotations
 
-from .attn_dim_ablation import EXPERIMENT_NAME as ATTN_DIM_ABLATION_NAME
-from .attn_dim_ablation import build_experiment as build_attn_dim_ablation
-from .bag_size_ablation import EXPERIMENT_NAME as BAG_SIZE_ABLATION_NAME
-from .bag_size_ablation import build_experiment as build_bag_size_ablation
+from tasks import DEFAULT_GASTRO_TASK_NAME, get_task_spec
 
-ABLATION_EXPERIMENT_REGISTRY = {
-    BAG_SIZE_ABLATION_NAME: build_bag_size_ablation,
-    ATTN_DIM_ABLATION_NAME: build_attn_dim_ablation,
+from .task1 import TASK1_ABLATION_EXPERIMENT_REGISTRY
+from .task2 import TASK2_ABLATION_EXPERIMENT_REGISTRY
+
+TASK_ABLATION_EXPERIMENT_REGISTRY = {
+    "task1": TASK1_ABLATION_EXPERIMENT_REGISTRY,
+    "task2": TASK2_ABLATION_EXPERIMENT_REGISTRY,
 }
 
-ABLATION_EXPERIMENT_NAMES = tuple(ABLATION_EXPERIMENT_REGISTRY.keys())
+
+def get_ablation_experiment_registry(task_name: str = DEFAULT_GASTRO_TASK_NAME) -> dict[str, object]:
+    spec = get_task_spec(task_name)
+    return TASK_ABLATION_EXPERIMENT_REGISTRY.get(spec.name, {})
 
 
-def build_ablation_experiment(experiment_name: str) -> dict:
-    if experiment_name not in ABLATION_EXPERIMENT_REGISTRY:
-        raise ValueError(f"未知消融实验名: {experiment_name}")
-    return ABLATION_EXPERIMENT_REGISTRY[experiment_name]()
+def list_ablation_experiment_names(task_name: str = DEFAULT_GASTRO_TASK_NAME) -> tuple[str, ...]:
+    return tuple(get_ablation_experiment_registry(task_name).keys())
 
 
-def build_all_ablation_experiments() -> list[dict]:
-    return [build_ablation_experiment(name) for name in ABLATION_EXPERIMENT_NAMES]
+ABLATION_EXPERIMENT_NAMES = list_ablation_experiment_names(DEFAULT_GASTRO_TASK_NAME)
+ABLATION_EXPERIMENT_REGISTRY = get_ablation_experiment_registry(DEFAULT_GASTRO_TASK_NAME)
+
+
+def build_ablation_experiment(experiment_name: str, task_name: str = DEFAULT_GASTRO_TASK_NAME) -> dict:
+    registry = get_ablation_experiment_registry(task_name)
+    if experiment_name not in registry:
+        raise ValueError(f"任务 {get_task_spec(task_name).name} 不支持消融实验: {experiment_name}")
+    return registry[experiment_name]()
+
+
+def build_all_ablation_experiments(task_name: str = DEFAULT_GASTRO_TASK_NAME) -> list[dict]:
+    return [build_ablation_experiment(name, task_name=task_name) for name in list_ablation_experiment_names(task_name)]
 
 
 __all__ = [
+    "TASK_ABLATION_EXPERIMENT_REGISTRY",
     "ABLATION_EXPERIMENT_REGISTRY",
     "ABLATION_EXPERIMENT_NAMES",
+    "get_ablation_experiment_registry",
+    "list_ablation_experiment_names",
     "build_ablation_experiment",
     "build_all_ablation_experiments",
 ]
-

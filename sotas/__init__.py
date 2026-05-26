@@ -1,4 +1,4 @@
-from .gastro_sota import (
+from .task1 import (
     GASTRO_SOTA_CLASS_REGISTRY,
     GASTRO_SOTA_MODEL_NAMES,
     GastroCLAMMBSOTA,

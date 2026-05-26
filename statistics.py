@@ -167,7 +167,7 @@ def build_path_config(config_path: Path, report_csv_override: Path | None) -> Pa
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='统计胃镜/肠镜 badness、hp 与 operationValue 类型次数')
-    parser.add_argument('--config', type=Path, default=Path('configs/path.yaml'), help='路径配置文件，默认 configs/path.yaml')
+    parser.add_argument('--config', type=Path, default=Path('configs/task1/path.yaml'), help='路径配置文件，默认 configs/task1/path.yaml')
     parser.add_argument('--report-csv', type=Path, default=None, help='可选：覆盖 valid_dicts_report_csv')
     return parser.parse_args()
 

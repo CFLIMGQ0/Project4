@@ -11,7 +11,7 @@ from shutil import get_terminal_size
 from unicodedata import combining, east_asian_width
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
+CONFIG_PATH = PROJECT_ROOT / 'configs' / 'task1' / 'path.yaml'
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -133,7 +133,7 @@ def build_progress(total: int, desc: str):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='仅统计报告中的 reportTitle 内容')
-    parser.add_argument('--config', type=Path, default=CONFIG_PATH, help='路径配置文件，默认 configs/path.yaml')
+    parser.add_argument('--config', type=Path, default=CONFIG_PATH, help='路径配置文件，默认 configs/task1/path.yaml')
     parser.add_argument(
         '--report-csv',
         type=Path,

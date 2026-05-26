@@ -1,0 +1,88 @@
+goal: 优先筛出 TASK2 上后期仍能稳定收敛、不过拟合不明显的训练参数组合
+
+search_method: optuna_tpe
+
+num_trials: 24
+trial_max_epochs: 30
+trial_patience: 10
+trial_run_test: false
+
+selection_alias: best_val_loss
+result_source: best_checkpoints
+
+objective:
+  name: stable_tail_val_loss
+  tail_epochs: 5
+  tail_std_weight: 0.5
+  gap_penalty_weight: 2.0
+  rebound_penalty_weight: 1.0
+  unstable_penalty: 0.1
+
+stability_filter:
+  enabled: true
+  min_epochs_trained: 10
+  max_final_gap: 0.05
+  max_val_loss_rebound_ratio: 0.25
+
+optuna:
+  sampler: tpe
+  n_startup_trials: 8
+  multivariate: false
+  group: false
+  pruner:
+    name: median
+    n_startup_trials: 8
+    n_warmup_steps: 5
+    interval_steps: 1
+
+remark:
+  focus: 结果摘要侧重点
+  include_model_evaluations: true
+  include_search_space: true
+  include_stability_filter: true
+
+search_space:
+  lr:
+    enabled: true
+    type: log_float
+    min: 0.00001
+    max: 0.0003
+    round: 6
+  weight_decay:
+    enabled: true
+    type: log_float
+    min: 0.01
+    max: 0.3
+    round: 6
+  warmup_ratio:
+    enabled: true
+    type: float
+    min: 0.05
+    max: 0.25
+    round: 3
+  random_instance_dropout:
+    enabled: true
+    type: float
+    min: 0.05
+    max: 0.3
+    round: 3
+  loss_name:
+    enabled: false
+    type: choice
+    values: [asymmetric, focal, bce]
+  batch_size:
+    enabled: false
+    type: choice
+    values: [8, 12, 16]
+  grad_accum_steps:
+    enabled: false
+    type: choice
+    values: [1, 2, 4]
+  train_max_instances:
+    enabled: false
+    type: choice
+    values: [12, 16, 20, 24]
+  train_max_batch_instances:
+    enabled: false
+    type: choice
+    values: [144, 192, 240, 288]

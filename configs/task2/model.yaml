@@ -1,0 +1,300 @@
+models:
+  gastro_attention_mil_baseline:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+
+  gastro_label_graph_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+
+  rg_hmil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    num_regions: 6
+    condition_dim: 128
+    dropout: 0.2
+    use_text_guidance: true
+    use_region_grouping: true
+    use_conditional_graph: true
+    use_hierarchy: true
+    region_cls_weight: 0.5
+    relevance_weight: 0.5
+
+  ot_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    num_sinkhorn_iters: 10
+    ot_epsilon: 0.1
+
+  ib_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    bottleneck_dim: 128
+    beta: 0.001
+
+  hyp_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    curvature: 1.0
+
+  sd_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    ortho_weight: 0.01
+
+  edl_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    edl_kl_weight: 0.1
+    edl_annealing_steps: 500
+
+  db_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    class_freq: [0.48, 0.52, 0.42]
+
+  aslt_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    class_prior: [0.48, 0.52, 0.42]
+    logit_adj_tau: 1.0
+
+  laca_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    num_query_layers: 2
+    num_heads: 4
+
+  cl_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    total_epochs: 30
+    label_difficulty: [0.10, 0.15, 0.05]
+
+  csml_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+
+  entmax_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+
+  cvar_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    tail_fraction: 0.25
+
+  rpca_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    rank_dim: 64
+    sparsity_weight: 0.01
+    low_rank_weight: 0.001
+
+  fdr_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    fdr_target: 0.35
+    fdr_weight: 0.2
+    tail_beta: 0.75
+    head_label_indices: [0, 1, 2]
+
+  anchor_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    head_label_indices: [0, 1, 2]
+    tail_topk: 4
+    num_regions: 6
+    region_aux_weight: 0.2
+    relevance_aux_weight: 0.1
+    head_anchor_weight: 0.25
+    tail_branch_weight: 0.15
+
+  cturs_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    class_prior: [0.48, 0.52, 0.42]
+    logit_adj_tau: 1.0
+    consistency_weight: 0.1
+
+  eqlv2_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    eql_gamma: 0.7
+    eql_momentum: 0.9
+
+  ldam_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    class_prior: [0.48, 0.52, 0.42]
+    max_margin: 0.5
+    drw_start_epoch: 10
+
+  logitnorm_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    norm_temperature: 1.5
+
+  ral_mil:
+    backbone_name: resnet50
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    class_prior: [0.48, 0.52, 0.42]
+    loss_gamma_pos: 1.0
+    loss_gamma_neg: 4.0
+    loss_clip: 0.05
+    poly_epsilon: 1.0
+    hill_weight: 0.05
+    hill_margin: 0.2
+
+  multi_sample_lg_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_views: 4
+    view_keep_ratio: 0.75
+
+  full_feature_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    encoder_chunk_size: 16
+    use_quality_gate: true
+
+  hier_full_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    encoder_chunk_size: 16
+    subbag_size: 8
+    use_quality_gate: true
+
+  hier_full_lg_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    encoder_chunk_size: 16
+    subbag_size: 8
+    use_label_graph: true
+    use_quality_gate: true
+
+  long_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+
+  exp8_structured_late_gate_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    structured_field_embed_dim: 64
+    structured_dropout: 0.2
+    modality_dropout: 0.15
+    structured_gate_l1_weight: 0.001
+    structured_fields:
+      - reportTitle
+      - operationValue
+
+  mamba_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_layers: 2
+    mamba_expand: 2
+    mamba_kernel_size: 5
+    use_label_graph: true

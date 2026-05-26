@@ -1,0 +1,57 @@
+# 基础参数
+task_name: task1
+gpu_ids: [0, 1, 2]
+num_workers: 8
+seed: 42
+image_size: 224
+max_epochs: 30
+patience: 30
+
+# 数据参数
+max_exams_per_task: 0
+min_instances: 1
+split_ratio: [0.6, 0.2, 0.2]
+train_sampling_strategy: random
+eval_sampling_strategy: uniform
+task_selection_dir_name: task_data
+train_run_dir_name: train_runs
+run_dir_prefix: run
+
+# 运行模型
+enabled_models:
+  - gastro_label_graph_mil
+
+# 默认训练参数
+batch_size: 12
+eval_batch_size: 12
+train_max_instances: 16
+eval_max_instances: 16
+train_max_batch_instances: 192
+eval_max_batch_instances: 192
+pin_memory: true
+persistent_workers: true
+loader_prefetch_factor: 2
+image_cache_mode: disk
+image_cache_scope: shared
+image_cache_dir: /home/Lim/Project4/datasets/image_cache
+image_cache_warmup: true
+memory_cache_size: 0
+random_instance_dropout: 0.25
+optimizer_name: adamw
+lr: 0.00002
+weight_decay: 0.02
+warmup_ratio: 0.2
+grad_accum_steps: 1
+amp: true
+topk_evidence: 5
+loss_name: asymmetric
+monitor_metric: val_loss
+monitor_mode: min
+
+# 自动模式
+auto_explore: false
+auto_baselines: false
+auto_sotas: false
+auto_ablations: false
+auto_distinct: false
+auto_5fold: true

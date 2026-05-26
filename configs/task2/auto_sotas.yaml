@@ -1,0 +1,81 @@
+goal: 固定 train.yaml 的训练超参数，自动运行 TASK2 的 5 个胃镜 SOTA 模型作为增强对照实验
+
+output_dir_name: sotas
+run_test: true
+selection_alias: best_macro_f1
+result_source: test_results
+
+stability_filter:
+  enabled: true
+  min_epochs_trained: 10
+  max_final_gap: 0.05
+  max_val_loss_rebound_ratio: 0.25
+
+remark:
+  focus: 汇总 TASK2 的 5 个胃镜 SOTA 模型测试结果与稳定性表现
+  include_model_evaluations: true
+  include_stability_filter: true
+
+models:
+  - name: gastro_clam_sb_sota
+    enabled: true
+    display_name: CLAM-SB 胃镜适配版
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      hidden_dim: 256
+      instance_topk: 4
+      dropout: 0.2
+      attention_entropy_weight: 0.05
+      instance_clustering_weight: 0.2
+
+  - name: gastro_clam_mb_sota
+    enabled: true
+    display_name: CLAM-MB 胃镜适配版
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      attn_dim: 256
+      hidden_dim: 256
+      instance_topk: 4
+      dropout: 0.2
+      attention_entropy_weight: 0.05
+      attention_diversity_weight: 0.05
+      instance_clustering_weight: 0.2
+
+  - name: gastro_dsmil_sota
+    enabled: true
+    display_name: DSMIL 胃镜适配版
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      hidden_dim: 256
+      dropout: 0.2
+
+  - name: gastro_transmil_sota
+    enabled: true
+    display_name: TransMIL 胃镜适配版
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      hidden_dim: 256
+      num_heads: 8
+      num_layers: 2
+      dropout: 0.2
+
+  - name: gastro_dtfd_mil_sota
+    enabled: true
+    display_name: DTFD-MIL 胃镜适配版
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      attn_dim: 256
+      hidden_dim: 256
+      num_groups: 4
+      dropout: 0.2
+      pseudo_bag_weight: 0.2

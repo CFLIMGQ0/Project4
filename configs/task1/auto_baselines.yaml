@@ -1,0 +1,77 @@
+goal: 固定 train.yaml 的训练超参数，自动运行 5 个胃镜 baseline 作为对照实验
+
+# 输出目录
+output_dir_name: baselines
+
+# 每个 baseline 训练结束后立即运行测试
+run_test: true
+
+# 结果排序依据
+selection_alias: best_macro_f1
+result_source: test_results
+
+# 训练稳定性评价阈值
+stability_filter:
+  enabled: true
+  min_epochs_trained: 10
+  max_final_gap: 0.05
+  max_val_loss_rebound_ratio: 0.25
+
+remark:
+  focus: 汇总 TASK1 的 5 个胃镜 baseline 测试结果与稳定性表现
+  include_model_evaluations: true
+  include_stability_filter: true
+
+models:
+  - name: gastro_attention_mil_baseline
+    enabled: true
+    display_name: 标签注意力 MIL baseline
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      attn_dim: 256
+      dropout: 0.2
+
+  - name: gastro_mean_pool_baseline
+    enabled: true
+    display_name: 均值池化 baseline
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      hidden_dim: 512
+      dropout: 0.2
+
+  - name: gastro_max_pool_baseline
+    enabled: true
+    display_name: 最大响应实例 baseline
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      hidden_dim: 256
+      dropout: 0.2
+
+  - name: gastro_transformer_mil_baseline
+    enabled: true
+    display_name: Transformer 上下文 MIL baseline
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      attn_dim: 256
+      num_heads: 8
+      num_layers: 2
+      dropout: 0.2
+
+  - name: gastro_topk_mil_baseline
+    enabled: true
+    display_name: Top-k 实例聚合 baseline
+    model_params:
+      backbone_name: resnet50
+      freeze_stages: 1
+      feature_dim: 512
+      hidden_dim: 256
+      topk: 4
+      dropout: 0.2

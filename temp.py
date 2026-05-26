@@ -20,9 +20,9 @@ except Exception:  # pragma: no cover
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_PATH_CONFIG = PROJECT_ROOT / "configs" / "path.yaml"
-DEFAULT_TRAIN_CONFIG = PROJECT_ROOT / "configs" / "train.yaml"
-DEFAULT_MODEL_CONFIG = PROJECT_ROOT / "configs" / "model.yaml"
+DEFAULT_PATH_CONFIG = PROJECT_ROOT / "configs" / "task1" / "path.yaml"
+DEFAULT_TRAIN_CONFIG = PROJECT_ROOT / "configs" / "task1" / "train.yaml"
+DEFAULT_MODEL_CONFIG = PROJECT_ROOT / "configs" / "task1" / "model.yaml"
 CHECKPOINT_ALIASES = ("best_macro_f1", "best_micro_f1", "best_val_loss")
 
 

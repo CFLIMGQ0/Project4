@@ -116,9 +116,16 @@ def compute_multilabel_metrics(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     label_names: list[str],
-    threshold: float = 0.5,
+    threshold: float | list[float] | np.ndarray = 0.5,
 ) -> dict[str, Any]:
-    y_pred = (y_prob >= threshold).astype(np.int64)
+    if np.isscalar(threshold):
+        threshold_array = np.full((y_prob.shape[1],), float(threshold), dtype=np.float32)
+    else:
+        threshold_array = np.asarray(threshold, dtype=np.float32).reshape(-1)
+        if threshold_array.shape[0] != y_prob.shape[1]:
+            raise ValueError("多标签阈值数量必须与标签数量一致")
+
+    y_pred = (y_prob >= threshold_array.reshape(1, -1)).astype(np.int64)
 
     acc_list: list[float] = []
     recall_list: list[float] = []
@@ -154,6 +161,7 @@ def compute_multilabel_metrics(
         metrics[f"f1_{label_name}"] = label_metrics["f1"]
         metrics[f"roc_auc_{label_name}"] = label_metrics["roc_auc"]
         metrics[f"pr_auc_{label_name}"] = label_metrics["pr_auc"]
+        metrics[f"threshold_{label_name}"] = float(threshold_array[index])
 
         confusion_by_label[label_name] = label_metrics["confusion"]
         roc_curve_by_label[label_name] = label_metrics["roc_curve"]
@@ -177,6 +185,7 @@ def compute_multilabel_metrics(
     metrics["subset_accuracy"] = float(np.mean(np.all(y_pred == y_true, axis=1)))
     metrics["hamming_loss"] = float(hamming_loss(y_true, y_pred))
     metrics["kappa"] = _safe_kappa(flat_true, flat_pred)
+    metrics["threshold_mean"] = float(np.mean(threshold_array))
     metrics["confusion_matrix_by_label"] = confusion_by_label
     metrics["roc_curve_by_label"] = roc_curve_by_label
     metrics["pr_curve_by_label"] = pr_curve_by_label

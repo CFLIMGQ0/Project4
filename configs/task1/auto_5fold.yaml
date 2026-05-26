@@ -1,0 +1,126 @@
+# TASK1 表2/表3/表4 五折交叉验证实验
+
+output_dir_name: exp_task1_5fold
+folds: 5
+seed: 20260526
+selection_alias: best_macro_f1
+run_test: true
+skip_completed: true
+force_rerun: false
+inherit_run_from_source: true
+
+metrics:
+  overall:
+    - macro_recall
+    - macro_precision
+    - macro_f1
+    - macro_roc_auc
+    - macro_pr_auc
+    - subset_accuracy
+    - hamming_loss
+    - kappa
+  label_wise:
+    - recall
+    - precision
+    - f1
+    - roc_auc
+    - pr_auc
+
+table2:
+  title: Table 2 five-fold analysis
+  reference: Label graph MIL
+  models:
+    - name: label_graph_mil
+      shared_key: proposed_label_graph
+      display_name: Label graph MIL
+      group: Proposed
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/gastro_multilabel_task/gastro_6
+    - name: attention_mil
+      display_name: Attention MIL
+      group: Baseline
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_002_final_attention_mil
+    - name: mean_pooling
+      display_name: Mean pooling
+      group: Baseline
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_003_final_mean_pooling
+    - name: transformer_context_mil
+      display_name: Transformer-context MIL
+      group: Baseline
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_004_final_transformer_context_mil
+    - name: topk_mil
+      display_name: Top-k MIL
+      group: Baseline
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_005_final_topk_mil
+    - name: max_pooling
+      display_name: Max pooling
+      group: Baseline
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_006_final_max_pooling
+    - name: transmil
+      display_name: TransMIL
+      group: Adapted SOTA
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_007_final_transmil
+    - name: dsmil
+      display_name: DSMIL
+      group: Adapted SOTA
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_008_final_dsmil
+    - name: dtfd_mil
+      display_name: DTFD-MIL
+      group: Adapted SOTA
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_009_final_dtfd_mil
+    - name: clam_mb
+      display_name: CLAM-MB
+      group: Adapted SOTA
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_010_final_clam_mb
+    - name: clam_sb
+      display_name: CLAM-SB
+      group: Adapted SOTA
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_011_final_clam_sb
+
+table3:
+  title: Table 3 five-fold label-wise analysis
+  model:
+    shared_key: proposed_label_graph
+    display_name: Label graph MIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/gastro_multilabel_task/gastro_6
+
+table4:
+  title: Table 4 five-fold analysis
+  reference: Full Label Graph
+  modules:
+    - name: full_label_graph
+      shared_key: proposed_label_graph
+      display_name: Full Label Graph
+      category: Proposed
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/gastro_multilabel_task/gastro_6
+    - name: wo_label_graph_reasoner
+      display_name: w/o Label Graph Reasoner
+      category: Removal
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_002_exp_task1_ablation1_wo_label_graph
+    - name: label_self_attention_reasoner
+      display_name: Label Self-Attention Reasoner
+      category: Attention/sequence
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_003_exp_task1_ablation1_label_self_attention
+    - name: label_transformer_reasoner
+      display_name: Label Transformer Reasoner
+      category: Attention/sequence
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_006_exp_task1_ablation1_label_transformer
+    - name: dynamic_label_gat_reasoner
+      display_name: Dynamic Label GAT Reasoner
+      category: Graph variants
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_005_exp_task1_ablation1_dynamic_gat
+    - name: cosine_dynamic_graph_reasoner
+      display_name: Cosine Dynamic Graph Reasoner
+      category: Graph variants
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_008_exp_task1_ablation1_cosine_graph
+    - name: static_cooccurrence_gcn_reasoner
+      display_name: Static Co-occurrence GCN Reasoner
+      category: Graph variants
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_004_exp_task1_ablation1_static_gcn
+    - name: low_rank_label_graph_reasoner
+      display_name: Low-Rank Label Graph Reasoner
+      category: Graph variants
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_007_exp_task1_ablation1_low_rank_graph
+    - name: label_mlp_mixer_reasoner
+      display_name: Label MLP-Mixer Reasoner
+      category: Feature mixer
+      source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/stage1_modules_train_max_instances16/train_009_exp_task1_ablation1_label_mlp_mixer

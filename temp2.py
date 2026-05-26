@@ -1,161 +1,113 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import csv
 from pathlib import Path
-from typing import Any
 
-try:
-    import yaml  # type: ignore
-except ImportError:
-    yaml = None
+import matplotlib.pyplot as plt
+import numpy as np
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = PROJECT_ROOT / 'configs' / 'path.yaml'
-DEFAULT_TARGET_NAME = 'ZS19332084'
+DEFAULT_DATALIST = Path("/home/Lim/Project4/datasets/task_data/task1/gastro_multilabel_task_datalist.csv")
+DEFAULT_OUTPUT = Path("/home/Lim/Project4/src/figs/label_cooccurrence_matrix.png")
+
+LABELS = [
+    ("Esophageal SMT", "label_esophageal_smt"),
+    ("Esophageal mucosal lesion", "label_esophageal_mucosal_or_tumor"),
+    ("Gastritis", "label_gastritis"),
+]
+
+
+def load_labels(csv_path: Path) -> np.ndarray:
+    rows: list[list[int]] = []
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        missing = [column for _, column in LABELS if column not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"Missing label columns in {csv_path}: {missing}")
+        for row in reader:
+            rows.append([int(float(row[column])) for _, column in LABELS])
+    if not rows:
+        raise ValueError(f"No rows found in {csv_path}")
+    return np.asarray(rows, dtype=np.int64)
+
+
+def compute_cooccurrence(label_array: np.ndarray) -> np.ndarray:
+    return label_array.T @ label_array
+
+
+def save_matrix_csv(matrix: np.ndarray, output_path: Path) -> None:
+    csv_path = output_path.with_suffix(".csv")
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["label"] + [name for name, _ in LABELS])
+        for label_name, row in zip([name for name, _ in LABELS], matrix.tolist()):
+            writer.writerow([label_name] + row)
+
+
+def plot_cooccurrence(matrix: np.ndarray, total: int, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    display_labels = ["Esophageal\nSMT", "Esophageal mucosal\nlesion", "Gastritis"]
+    fig, ax = plt.subplots(figsize=(7.6, 6.2), dpi=300)
+    image = ax.imshow(matrix, cmap="Greens", vmin=0, vmax=int(matrix.max()))
+
+    ax.set_title("Label Co-occurrence Matrix", fontsize=17, fontweight="bold", pad=16)
+    ax.set_xticks(np.arange(len(display_labels)))
+    ax.set_yticks(np.arange(len(display_labels)))
+    ax.set_xticklabels(display_labels, fontsize=11)
+    ax.set_yticklabels(display_labels, fontsize=11)
+    ax.set_xlabel("Label", fontsize=12, labelpad=10)
+    ax.set_ylabel("Label", fontsize=12, labelpad=10)
+
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            count = int(matrix[i, j])
+            percent = 100.0 * count / total
+            descriptor = "Positive" if i == j else "Co-positive"
+            color = "white" if count > matrix.max() * 0.55 else "black"
+            ax.text(
+                j,
+                i,
+                f"{count}\n({percent:.1f}%)\n{descriptor}",
+                ha="center",
+                va="center",
+                fontsize=10,
+                fontweight="bold",
+                color=color,
+            )
+
+    ax.set_xticks(np.arange(-0.5, matrix.shape[1], 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, matrix.shape[0], 1), minor=True)
+    ax.grid(which="minor", color="white", linestyle="-", linewidth=2.0)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    ax.tick_params(axis="both", length=0)
+
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    colorbar.set_label("Number of examinations", fontsize=11)
+    colorbar.ax.tick_params(labelsize=10)
+
+    fig.tight_layout()
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    save_matrix_csv(matrix, output_path)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='在数据集中查找指定目录名的位置')
-    parser.add_argument('--config', type=Path, default=CONFIG_PATH, help='路径配置文件，默认使用 configs/path.yaml')
-    parser.add_argument('--dataset-root', type=Path, default=None, help='可选：覆盖配置中的 dataset_root')
-    parser.add_argument('--target-name', type=str, default=DEFAULT_TARGET_NAME, help='要查找的目录名')
+    parser = argparse.ArgumentParser(description="Generate label co-occurrence matrix figure.")
+    parser.add_argument("--datalist", type=Path, default=DEFAULT_DATALIST, help="Datalist CSV path.")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output PNG path.")
     return parser.parse_args()
-
-
-def load_yaml_config(config_path: Path) -> dict[str, Any]:
-    if not config_path.exists():
-        raise FileNotFoundError(f'路径配置文件不存在：{config_path}')
-
-    if yaml is not None:
-        payload = yaml.safe_load(config_path.read_text(encoding='utf-8'))
-        if not isinstance(payload, dict):
-            raise ValueError(f'路径配置文件格式错误：{config_path}')
-        return payload
-
-    lines = config_path.read_text(encoding='utf-8').splitlines()
-    payload: dict[str, Any] = {}
-    current_section: str | None = None
-    for raw_line in lines:
-        if not raw_line.strip() or raw_line.lstrip().startswith('#'):
-            continue
-
-        indent = len(raw_line) - len(raw_line.lstrip(' '))
-        line = raw_line.strip()
-        if line.endswith(':'):
-            current_section = line[:-1]
-            payload[current_section] = {}
-            continue
-
-        key, sep, value = line.partition(':')
-        if not sep:
-            raise ValueError(f'无法解析路径配置行：{raw_line}')
-
-        cleaned_value = value.strip().strip('"').strip("'")
-        if indent == 0:
-            payload[key.strip()] = cleaned_value
-            current_section = None
-            continue
-
-        if current_section is None:
-            raise ValueError(f'发现未归属分组的缩进行：{raw_line}')
-        payload[current_section][key.strip()] = cleaned_value
-    return payload
-
-
-def resolve_dataset_root(config_path: Path, dataset_root: Path | None) -> Path:
-    if dataset_root is not None:
-        return dataset_root.expanduser().resolve()
-
-    payload = load_yaml_config(config_path.expanduser())
-    paths_payload = payload.get('paths')
-    if not isinstance(paths_payload, dict):
-        raise ValueError('path.yaml 必须包含 paths 分组')
-
-    raw_path = paths_payload.get('dataset_root')
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise ValueError('path.yaml 中缺少有效的 paths.dataset_root')
-
-    resolved_path = Path(raw_path).expanduser()
-    if resolved_path.is_absolute():
-        return resolved_path.resolve()
-
-    config_dir = config_path.expanduser().resolve().parent
-    return (config_dir.parent / resolved_path).resolve()
-
-
-def render_progress(current: int, total: int, width: int = 40) -> str:
-    if total <= 0:
-        return '[{}] 100.0% (0/0)'.format('#' * width)
-    filled = int(width * current / total)
-    bar = '#' * filled + '-' * (width - filled)
-    percent = current / total * 100
-    return f'[{bar}] {percent:5.1f}% ({current}/{total})'
-
-
-def write_progress(current: int, total: int) -> None:
-    message = '\r搜索进度：' + render_progress(current, total)
-    end = '\n' if current >= total else ''
-    sys.stdout.write(message + end)
-    sys.stdout.flush()
-
-
-def update_progress(current: int, total: int, last_percent: int) -> int:
-    percent = 100 if total <= 0 else int(current * 100 / total)
-    if percent != last_percent or current in {0, total}:
-        write_progress(current, total)
-        return percent
-    return last_percent
-
-
-def find_target_dirs(dataset_root: Path, target_name: str) -> list[Path]:
-    direct_match = dataset_root / target_name
-    if direct_match.is_dir():
-        print(f'已在数据集一级目录中找到目标目录：{direct_match}')
-        return [direct_match]
-
-    patient_dirs = sorted(path for path in dataset_root.iterdir() if path.is_dir())
-    print(f'一级目录未命中，开始递归搜索，共需检查 {len(patient_dirs)} 个一级目录。')
-    last_percent = update_progress(0, len(patient_dirs), -1)
-
-    matched_dirs: list[Path] = []
-    for index, patient_dir in enumerate(patient_dirs, start=1):
-        if patient_dir.name == target_name:
-            matched_dirs.append(patient_dir)
-
-        for subdir in patient_dir.rglob('*'):
-            if subdir.is_dir() and subdir.name == target_name:
-                matched_dirs.append(subdir)
-
-        last_percent = update_progress(index, len(patient_dirs), last_percent)
-
-    return matched_dirs
 
 
 def main() -> None:
     args = parse_args()
-    dataset_root = resolve_dataset_root(args.config, args.dataset_root)
-
-    if not dataset_root.exists():
-        print(f'数据集目录不存在：{dataset_root}')
-        return
-    if not dataset_root.is_dir():
-        print(f'数据集路径不是目录：{dataset_root}')
-        return
-
-    print(f'数据集目录：{dataset_root}')
-    print(f'目标目录名：{args.target_name}')
-
-    matched_dirs = find_target_dirs(dataset_root, args.target_name)
-    if not matched_dirs:
-        print('未找到目标目录。')
-        return
-
-    print(f'共找到 {len(matched_dirs)} 个匹配目录：')
-    for index, matched_dir in enumerate(matched_dirs, start=1):
-        print(f'{index}. {matched_dir}')
+    label_array = load_labels(args.datalist)
+    matrix = compute_cooccurrence(label_array)
+    plot_cooccurrence(matrix, total=label_array.shape[0], output_path=args.output)
+    print(f"Saved co-occurrence figure: {args.output}")
+    print(f"Saved co-occurrence matrix CSV: {args.output.with_suffix('.csv')}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

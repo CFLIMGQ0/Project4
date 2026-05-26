@@ -55,6 +55,7 @@ class TrainerConfig:
     use_multi_gpu: bool
     resume_path: str | None
     run_test: bool
+    test_result_metadata: dict[str, Any] | None = None
 
 
 def _is_scalar_metric(value: Any) -> bool:
@@ -96,6 +97,22 @@ def _extract_scalar_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         if _is_scalar_metric(value):
             flattened[key] = to_builtin_type(value)
     return flattened
+
+
+def _metric_with_fallback(metrics: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in metrics:
+            return to_builtin_type(metrics[key])
+    return None
+
+
+def _metrics_by_name(metrics: dict[str, Any], names: list[str], prefix: str) -> dict[str, Any]:
+    grouped: dict[str, Any] = {}
+    for name in names:
+        key = f"{prefix}_{name}"
+        if key in metrics:
+            grouped[name] = to_builtin_type(metrics[key])
+    return grouped
 
 
 class CSVLogger:
@@ -216,6 +233,7 @@ class Trainer:
         self.start_epoch = 1
         self.primary_best_metric = -float("inf") if self.cfg.monitor_mode == "max" else float("inf")
         self.primary_best_epoch = -1
+        self.no_improve = 0
         self.last_path = self.ckpt_dir / "last.ckpt"
         self.best_trackers = {
             "best_macro_f1": {
@@ -246,7 +264,15 @@ class Trainer:
 
         if self.cfg.resume_path:
             self._load_checkpoint(Path(self.cfg.resume_path), strict=False, load_training_state=True)
-        self._forward_accepts_labels = "labels" in inspect.signature(self.raw_model.forward).parameters
+        forward_parameters = inspect.signature(self.raw_model.forward).parameters
+        self._forward_accepts_labels = "labels" in forward_parameters
+        self._forward_accepts_instance_types = "instance_types" in forward_parameters
+        self._forward_accepts_pseudo_region_labels = "pseudo_region_labels" in forward_parameters
+        self._forward_accepts_pseudo_relevance = "pseudo_relevance" in forward_parameters
+        self._forward_accepts_current_epoch = "current_epoch" in forward_parameters
+        self._forward_accepts_structured_categorical = "structured_categorical" in forward_parameters
+        self._forward_accepts_structured_numeric = "structured_numeric" in forward_parameters
+        self._forward_accepts_structured_mask = "structured_mask" in forward_parameters
 
     @property
     def raw_model(self) -> nn.Module:
@@ -310,7 +336,7 @@ class Trainer:
         return float(self.optimizer.param_groups[0]["lr"])
 
     def _move_batch_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
-        return {
+        moved = {
             "images": batch["images"].to(self.device, non_blocking=True),
             "mask": batch["mask"].to(self.device, non_blocking=True),
             "labels": batch["labels"].to(self.device, non_blocking=True),
@@ -320,17 +346,61 @@ class Trainer:
             "img_nums": batch["img_nums"],
             "metas": batch["metas"],
         }
+        if "instance_types" in batch:
+            moved["instance_types"] = batch["instance_types"].to(self.device, non_blocking=True)
+        if "pseudo_region_labels" in batch:
+            moved["pseudo_region_labels"] = batch["pseudo_region_labels"].to(self.device, non_blocking=True)
+        if "pseudo_relevance" in batch:
+            moved["pseudo_relevance"] = batch["pseudo_relevance"].to(self.device, non_blocking=True)
+        if "structured_categorical" in batch:
+            moved["structured_categorical"] = batch["structured_categorical"].to(self.device, non_blocking=True)
+        if "structured_numeric" in batch:
+            moved["structured_numeric"] = batch["structured_numeric"].to(self.device, non_blocking=True)
+        if "structured_mask" in batch:
+            moved["structured_mask"] = batch["structured_mask"].to(self.device, non_blocking=True)
+        return moved
 
-    def _forward_model(self, batch: dict[str, Any]) -> dict[str, Any]:
+    def _forward_model(self, batch: dict[str, Any], current_epoch: float = 0.0) -> dict[str, Any]:
         kwargs = {
             "images": batch["images"],
             "mask": batch["mask"],
         }
         if self._forward_accepts_labels:
             kwargs["labels"] = batch["labels"]
+        if self._forward_accepts_instance_types and "instance_types" in batch:
+            kwargs["instance_types"] = batch["instance_types"]
+        if self._forward_accepts_pseudo_region_labels and "pseudo_region_labels" in batch:
+            kwargs["pseudo_region_labels"] = batch["pseudo_region_labels"]
+        if self._forward_accepts_pseudo_relevance and "pseudo_relevance" in batch:
+            kwargs["pseudo_relevance"] = batch["pseudo_relevance"]
+        if self._forward_accepts_current_epoch:
+            kwargs["current_epoch"] = float(current_epoch)
+        if self._forward_accepts_structured_categorical and "structured_categorical" in batch:
+            kwargs["structured_categorical"] = batch["structured_categorical"]
+        if self._forward_accepts_structured_numeric and "structured_numeric" in batch:
+            kwargs["structured_numeric"] = batch["structured_numeric"]
+        if self._forward_accepts_structured_mask and "structured_mask" in batch:
+            kwargs["structured_mask"] = batch["structured_mask"]
         return self.model(**kwargs)
 
-    def _primary_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def _primary_loss(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        outputs: dict[str, Any] | None = None,
+        current_epoch: float = 0.0,
+        train_mode: bool = False,
+    ) -> torch.Tensor:
+        custom_loss_fn = getattr(self.raw_model, "compute_loss", None)
+        if callable(custom_loss_fn):
+            loss = custom_loss_fn(
+                outputs=outputs or {"logits": logits},
+                labels=labels.float(),
+                criterion=self.criterion,
+                current_epoch=float(current_epoch),
+                train_mode=bool(train_mode),
+            )
+            return loss.mean() if isinstance(loss, torch.Tensor) and loss.ndim > 0 else loss
         loss = self.criterion(logits, labels.float())
         return loss.mean() if loss.ndim > 0 else loss
 
@@ -348,12 +418,77 @@ class Trainer:
             total = total + weight * current
         return total
 
-    def _extract_probabilities(self, logits: torch.Tensor) -> torch.Tensor:
-        return torch.sigmoid(logits)
+    def _extract_probabilities(self, outputs: dict[str, Any]) -> torch.Tensor:
+        for key in ("probabilities", "probs", "edl_probs"):
+            value = outputs.get(key)
+            if torch.is_tensor(value):
+                return value
+        return torch.sigmoid(outputs["logits"])
 
-    def _compute_metrics(self, y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, Any]:
+    def _resolve_multilabel_thresholds(self, outputs: dict[str, Any] | None = None) -> float | np.ndarray:
+        if self.cfg.task_type != "gastro_multilabel":
+            return 0.5
+
+        threshold_value: Any = None
+        if isinstance(outputs, dict):
+            threshold_value = outputs.get("label_thresholds")
+
+        if threshold_value is None:
+            getter = getattr(self.raw_model, "get_label_thresholds", None)
+            if callable(getter):
+                threshold_value = getter()
+            elif hasattr(self.raw_model, "threshold") and hasattr(self.raw_model.threshold, "thresholds"):
+                threshold_value = self.raw_model.threshold.thresholds
+
+        if torch.is_tensor(threshold_value):
+            threshold_array = threshold_value.detach().cpu().numpy().astype(np.float32)
+            if threshold_array.ndim > 1:
+                threshold_array = threshold_array.reshape(-1, threshold_array.shape[-1]).mean(axis=0)
+            return threshold_array.reshape(-1)
+        if isinstance(threshold_value, np.ndarray):
+            threshold_array = threshold_value.astype(np.float32)
+            if threshold_array.ndim > 1:
+                threshold_array = threshold_array.reshape(-1, threshold_array.shape[-1]).mean(axis=0)
+            return threshold_array.reshape(-1)
+        if isinstance(threshold_value, (list, tuple)):
+            threshold_array = np.asarray(threshold_value, dtype=np.float32)
+            if threshold_array.ndim > 1:
+                threshold_array = threshold_array.reshape(-1, threshold_array.shape[-1]).mean(axis=0)
+            return threshold_array.reshape(-1)
+        return 0.5
+
+    def _update_label_thresholds_from_validation(
+        self,
+        y_true: np.ndarray,
+        y_prob: np.ndarray,
+    ) -> float | np.ndarray | None:
+        if self.cfg.task_type != "gastro_multilabel":
+            return None
+        updater = getattr(self.raw_model, "update_label_thresholds_from_validation", None)
+        if not callable(updater):
+            return None
+        threshold_value = updater(y_true=y_true, y_prob=y_prob)
+        if torch.is_tensor(threshold_value):
+            return threshold_value.detach().cpu().numpy().astype(np.float32)
+        if isinstance(threshold_value, np.ndarray):
+            return threshold_value.astype(np.float32)
+        if isinstance(threshold_value, (list, tuple)):
+            return np.asarray(threshold_value, dtype=np.float32)
+        return None
+
+    def _compute_metrics(
+        self,
+        y_true: np.ndarray,
+        y_prob: np.ndarray,
+        threshold: float | np.ndarray = 0.5,
+    ) -> dict[str, Any]:
         if self.cfg.task_type == "gastro_multilabel":
-            return compute_multilabel_metrics(y_true=y_true, y_prob=y_prob, label_names=self.label_names, threshold=0.5)
+            return compute_multilabel_metrics(
+                y_true=y_true,
+                y_prob=y_prob,
+                label_names=self.label_names,
+                threshold=threshold,
+            )
         return compute_binary_metrics(y_true=y_true, y_prob=y_prob, class_names=self.class_names, threshold=0.5)
 
     def _monitor_value(self, metrics: dict[str, Any], loss: float | None = None) -> float:
@@ -388,11 +523,93 @@ class Trainer:
             }
         return payload
 
+    def _capture_rng_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+        }
+        if torch.cuda.is_available():
+            state["cuda"] = torch.cuda.get_rng_state_all()
+        return state
+
+    def _restore_rng_state(self, state: Any) -> None:
+        if not isinstance(state, dict):
+            return
+        try:
+            if "python" in state:
+                random.setstate(state["python"])
+            if "numpy" in state:
+                np.random.set_state(state["numpy"])
+            if "torch" in state:
+                torch_state = state["torch"]
+                if torch.is_tensor(torch_state):
+                    torch_state = torch_state.cpu()
+                torch.set_rng_state(torch_state)
+            if torch.cuda.is_available() and "cuda" in state:
+                cuda_states = [
+                    item.cpu() if torch.is_tensor(item) else item
+                    for item in state["cuda"]
+                ]
+                torch.cuda.set_rng_state_all(cuda_states)
+        except Exception as exc:
+            print(f"警告：恢复随机数状态失败，将继续使用当前随机数状态：{exc}")
+
+    def _capture_sampler_states(self) -> dict[str, Any]:
+        states: dict[str, Any] = {}
+        for split, loader in (
+            ("train", self.train_loader),
+            ("val", self.val_loader),
+            ("test", self.test_loader),
+        ):
+            sampler = getattr(loader, "batch_sampler", None)
+            if sampler is None:
+                continue
+            if hasattr(sampler, "state_dict"):
+                states[split] = sampler.state_dict()
+            elif hasattr(sampler, "iter_count"):
+                states[split] = {"iter_count": int(getattr(sampler, "iter_count"))}
+        return states
+
+    def _restore_sampler_states(self, states: Any) -> bool:
+        if not isinstance(states, dict):
+            return False
+        restored = False
+        for split, loader in (
+            ("train", self.train_loader),
+            ("val", self.val_loader),
+            ("test", self.test_loader),
+        ):
+            state = states.get(split)
+            if not isinstance(state, dict):
+                continue
+            sampler = getattr(loader, "batch_sampler", None)
+            if sampler is None:
+                continue
+            if hasattr(sampler, "load_state_dict"):
+                sampler.load_state_dict(state)
+                restored = True
+            elif hasattr(sampler, "iter_count"):
+                iter_count = int(state.get("iter_count", getattr(sampler, "iter_count")))
+                setattr(sampler, "iter_count", max(0, iter_count))
+                restored = True
+        return restored
+
+    def _align_sampler_states_after_legacy_resume(self, completed_epoch: int) -> None:
+        if completed_epoch <= 0:
+            return
+        for loader in (self.train_loader, self.val_loader):
+            sampler = getattr(loader, "batch_sampler", None)
+            if sampler is not None and hasattr(sampler, "iter_count"):
+                current_iter_count = int(getattr(sampler, "iter_count"))
+                setattr(sampler, "iter_count", max(current_iter_count, int(completed_epoch)))
+
     def _save_checkpoint(self, path: Path, epoch: int, monitor: float) -> None:
         payload = {
             "epoch": epoch,
             "primary_best_metric": self.primary_best_metric,
             "primary_best_epoch": self.primary_best_epoch,
+            "no_improve": self.no_improve,
             "monitor": monitor,
             "model_state": self.raw_model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
@@ -400,13 +617,18 @@ class Trainer:
             "scaler_state": self.scaler.state_dict(),
             "cfg": self.cfg.__dict__,
             "best_trackers": self._serialize_best_trackers(),
+            "rng_state": self._capture_rng_state(),
+            "sampler_states": self._capture_sampler_states(),
         }
         torch.save(payload, path)
 
     def _load_checkpoint(self, path: Path, strict: bool = True, load_training_state: bool = False) -> None:
         if not path.is_file():
             return
-        checkpoint = torch.load(path, map_location=self.device)
+        try:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(path, map_location=self.device)
         self.raw_model.load_state_dict(checkpoint["model_state"], strict=strict)
 
         if not load_training_state:
@@ -422,6 +644,7 @@ class Trainer:
         self.start_epoch = int(checkpoint.get("epoch", 0)) + 1
         self.primary_best_metric = float(checkpoint.get("primary_best_metric", self.primary_best_metric))
         self.primary_best_epoch = int(checkpoint.get("primary_best_epoch", self.primary_best_epoch))
+        self.no_improve = max(0, int(checkpoint.get("no_improve", self.no_improve)))
 
         trackers = checkpoint.get("best_trackers", {})
         if isinstance(trackers, dict):
@@ -434,6 +657,10 @@ class Trainer:
                 self.best_trackers[alias]["best_epoch"] = int(
                     saved_tracker.get("best_epoch", self.best_trackers[alias]["best_epoch"])
                 )
+        self._restore_rng_state(checkpoint.get("rng_state"))
+        if not self._restore_sampler_states(checkpoint.get("sampler_states")):
+            self._align_sampler_states_after_legacy_resume(completed_epoch=int(checkpoint.get("epoch", 0)))
+        print(f"已从断点继续训练：{path}，下一轮 epoch={self.start_epoch}")
 
     def _save_best_artifacts(self, alias: str, epoch: int, val_metrics: dict[str, Any]) -> None:
         save_confusion_matrix(
@@ -598,17 +825,29 @@ class Trainer:
         total_batches = 0
         y_true_list: list[np.ndarray] = []
         y_prob_list: list[np.ndarray] = []
+        last_outputs: dict[str, Any] | None = None
+        structured_gate_sum: torch.Tensor | None = None
+        structured_gate_sq_sum: torch.Tensor | None = None
+        structured_gate_count = 0
 
         self.optimizer.zero_grad(set_to_none=True)
+        loader_size = max(1, len(loader))
 
         for step, batch_cpu in enumerate(self._iter_progress(loader, desc=f"{split}-epoch{epoch}"), start=1):
             batch = self._move_batch_to_device(batch_cpu)
+            current_epoch = float(epoch - 1) + float(step) / float(loader_size)
 
             with torch.set_grad_enabled(train_mode):
                 with autocast(enabled=self.cfg.amp and self.device.type == "cuda"):
-                    outputs = self._forward_model(batch)
+                    outputs = self._forward_model(batch, current_epoch=current_epoch)
                     logits = outputs["logits"]
-                    loss_main = self._primary_loss(logits=logits, labels=batch["labels"])
+                    loss_main = self._primary_loss(
+                        logits=logits,
+                        labels=batch["labels"],
+                        outputs=outputs,
+                        current_epoch=current_epoch,
+                        train_mode=train_mode,
+                    )
                     loss_aux = self._aux_loss(outputs)
                     loss = loss_main + loss_aux
 
@@ -623,12 +862,27 @@ class Trainer:
 
             total_loss += float(loss.detach().cpu().item())
             total_batches += 1
+            last_outputs = outputs
 
-            probs = self._extract_probabilities(logits.detach())
+            probs = self._extract_probabilities(outputs).detach()
             y_prob = probs.detach().cpu().numpy()
             y_true = batch["labels"].detach().cpu().numpy()
             y_prob_list.append(y_prob)
             y_true_list.append(y_true)
+            structured_gates = outputs.get("structured_gates") if isinstance(outputs, dict) else None
+            if torch.is_tensor(structured_gates):
+                gate_values = structured_gates.detach().float()
+                if gate_values.ndim == 1:
+                    gate_values = gate_values.unsqueeze(-1)
+                gate_values = gate_values.reshape(-1, gate_values.shape[-1])
+                current_sum = gate_values.sum(dim=0).cpu()
+                current_sq_sum = (gate_values * gate_values).sum(dim=0).cpu()
+                if structured_gate_sum is None:
+                    structured_gate_sum = torch.zeros_like(current_sum)
+                    structured_gate_sq_sum = torch.zeros_like(current_sq_sum)
+                structured_gate_sum += current_sum
+                structured_gate_sq_sum += current_sq_sum
+                structured_gate_count += int(gate_values.shape[0])
 
         if train_mode and total_batches % max(1, self.cfg.grad_accum_steps) != 0:
             self.scaler.step(self.optimizer)
@@ -642,7 +896,35 @@ class Trainer:
         avg_loss = total_loss / max(1, total_batches)
         y_true_all = np.concatenate(y_true_list, axis=0)
         y_prob_all = np.concatenate(y_prob_list, axis=0)
-        metrics = self._compute_metrics(y_true=y_true_all, y_prob=y_prob_all)
+        metric_threshold = self._resolve_multilabel_thresholds(last_outputs)
+        if not train_mode and split == "val":
+            updated_thresholds = self._update_label_thresholds_from_validation(y_true=y_true_all, y_prob=y_prob_all)
+            if updated_thresholds is not None:
+                metric_threshold = updated_thresholds
+            else:
+                metric_threshold = self._resolve_multilabel_thresholds(last_outputs)
+        metrics = self._compute_metrics(y_true=y_true_all, y_prob=y_prob_all, threshold=metric_threshold)
+        if structured_gate_sum is not None and structured_gate_sq_sum is not None and structured_gate_count > 0:
+            gate_mean = structured_gate_sum / float(structured_gate_count)
+            gate_var = (structured_gate_sq_sum / float(structured_gate_count)) - gate_mean * gate_mean
+            gate_std = torch.sqrt(gate_var.clamp_min(0.0))
+            gate_stats: list[dict[str, Any]] = []
+            for label_index, label_name in enumerate(self.label_names):
+                if label_index >= int(gate_mean.numel()):
+                    continue
+                mean_value = float(gate_mean[label_index].item())
+                std_value = float(gate_std[label_index].item())
+                metrics[f"structured_gate_mean_{label_name}"] = mean_value
+                metrics[f"structured_gate_std_{label_name}"] = std_value
+                gate_stats.append(
+                    {
+                        "label": label_name,
+                        "mean": mean_value,
+                        "std": std_value,
+                        "count": int(structured_gate_count),
+                    }
+                )
+            metrics["structured_gate_stats"] = gate_stats
 
         return avg_loss, metrics
 
@@ -657,6 +939,8 @@ class Trainer:
                 "selection_value": payload["selection_value"],
                 "test_loss": payload["test_loss"],
             }
+            if isinstance(self.cfg.test_result_metadata, dict):
+                row.update(self.cfg.test_result_metadata)
             row.update(_extract_scalar_metrics(payload["metrics"]))
             rows.append(row)
         return rows
@@ -679,6 +963,38 @@ class Trainer:
                 for row in rows:
                     writer.writerow({field: row.get(field, "") for field in fieldnames})
 
+    def _write_modality_gate_stats_csv(self, test_results: dict[str, dict[str, Any]]) -> None:
+        rows: list[dict[str, Any]] = []
+        for alias, payload in test_results.items():
+            metrics = payload.get("metrics", {})
+            if not isinstance(metrics, dict):
+                continue
+            gate_stats = metrics.get("structured_gate_stats", [])
+            if not isinstance(gate_stats, list):
+                continue
+            for item in gate_stats:
+                if not isinstance(item, dict):
+                    continue
+                rows.append(
+                    {
+                        "checkpoint_alias": alias,
+                        "label": item.get("label", ""),
+                        "gate_mean": item.get("mean", ""),
+                        "gate_std": item.get("std", ""),
+                        "count": item.get("count", ""),
+                    }
+                )
+        if not rows:
+            return
+
+        csv_path = self.run_dir / "modality_gate_stats.csv"
+        fieldnames = ["checkpoint_alias", "label", "gate_mean", "gate_std", "count"]
+        with csv_path.open("w", encoding="utf-8", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+
     def _save_test_artifacts(self, directory: Path, metrics: dict[str, Any], checkpoint_alias: str) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         save_confusion_matrix(
@@ -695,6 +1011,70 @@ class Trainer:
             json.dumps(to_builtin_type(payload), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        result_path = directory / "test_results.json"
+        result_path.write_text(
+            json.dumps(self._build_compact_test_result(payload), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _build_compact_test_result(self, payload: dict[str, Any]) -> dict[str, Any]:
+        metrics = payload.get("metrics", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+
+        names = self.label_names if self.cfg.task_type == "gastro_multilabel" else self.class_names
+
+        return {
+            "checkpoint": {
+                "checkpoint_alias": payload.get("checkpoint_alias", ""),
+                "checkpoint_path": payload.get("checkpoint_path", ""),
+                "best_epoch": payload.get("best_epoch", ""),
+                "selection_metric": payload.get("selection_metric", ""),
+                "selection_value": payload.get("selection_value", None),
+                "result_dir": payload.get("result_dir", ""),
+            },
+            "loss": {
+                "test_loss": payload.get("test_loss", None),
+            },
+            "f1": {
+                "macro": _metric_with_fallback(metrics, "macro_f1"),
+                "micro": _metric_with_fallback(metrics, "micro_f1"),
+                "by_label": _metrics_by_name(metrics, names, "f1"),
+            },
+            "recall": {
+                "macro": _metric_with_fallback(metrics, "macro_recall"),
+                "micro": _metric_with_fallback(metrics, "micro_recall"),
+                "by_label": _metrics_by_name(metrics, names, "recall"),
+            },
+            "precision": {
+                "macro": _metric_with_fallback(metrics, "macro_precision"),
+                "micro": _metric_with_fallback(metrics, "micro_precision"),
+                "by_label": _metrics_by_name(metrics, names, "precision"),
+            },
+            "specificity": {
+                "macro": _metric_with_fallback(metrics, "macro_specificity"),
+                "by_label": _metrics_by_name(metrics, names, "specificity"),
+            },
+            "roc_auc": {
+                "macro": _metric_with_fallback(metrics, "macro_roc_auc", "macro_auc", "auc"),
+                "by_label": _metrics_by_name(metrics, names, "roc_auc"),
+            },
+            "pr_auc": {
+                "macro": _metric_with_fallback(metrics, "macro_pr_auc", "macro_ap", "ap"),
+                "by_label": _metrics_by_name(metrics, names, "pr_auc"),
+            },
+            "accuracy": {
+                "label_wise_mean": _metric_with_fallback(metrics, "label_wise_acc_mean"),
+                "subset_accuracy": _metric_with_fallback(metrics, "subset_accuracy", "accuracy"),
+                "by_label": _metrics_by_name(metrics, names, "label_wise_acc"),
+            },
+            "threshold": {
+                "mean": _metric_with_fallback(metrics, "threshold_mean"),
+                "by_label": _metrics_by_name(metrics, names, "threshold"),
+            },
+            "hamming_loss": _metric_with_fallback(metrics, "hamming_loss"),
+            "kappa": _metric_with_fallback(metrics, "kappa"),
+        }
 
     def _evaluate_best_checkpoints(self) -> dict[str, dict[str, Any]]:
         test_results: dict[str, dict[str, Any]] = {}
@@ -788,8 +1168,6 @@ class Trainer:
         print("-" * 72)
 
     def fit(self) -> dict[str, Any]:
-        no_improve = 0
-
         for epoch in range(self.start_epoch, self.cfg.max_epochs + 1):
             train_loss, train_metrics = self._run_one_epoch(
                 loader=self.train_loader,
@@ -820,9 +1198,9 @@ class Trainer:
             if self.primary_best_epoch < 0 or self._is_improved(val_monitor, self.primary_best_metric, self.cfg.monitor_mode):
                 self.primary_best_metric = val_monitor
                 self.primary_best_epoch = epoch
-                no_improve = 0
+                self.no_improve = 0
             else:
-                no_improve += 1
+                self.no_improve += 1
 
             improved_aliases = self._update_best_checkpoints(epoch, val_loss, val_metrics)
             self._save_checkpoint(self.last_path, epoch, val_monitor)
@@ -839,7 +1217,7 @@ class Trainer:
             if self.on_validation_epoch_end is not None:
                 self.on_validation_epoch_end(epoch, val_loss, val_metrics)
 
-            if no_improve >= self.cfg.patience:
+            if self.no_improve >= self.cfg.patience:
                 print(f"提前停止：验证集 {self.cfg.monitor_metric} 连续 {self.cfg.patience} 个 epoch 未提升。")
                 break
 
@@ -847,6 +1225,7 @@ class Trainer:
         if self.cfg.run_test:
             test_results = self._evaluate_best_checkpoints()
             self._write_test_result_csv(test_results)
+            self._write_modality_gate_stats_csv(test_results)
             self._print_test_summary(test_results)
         else:
             print("自动探索模式：跳过测试集评估，仅使用验证集结果进行参数选择。")

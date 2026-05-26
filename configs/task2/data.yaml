@@ -1,0 +1,8 @@
+task:
+  name: task2
+  display_name: TASK2 胃镜三标签
+
+data:
+  report_csv: valid_dicts_report_for task2.csv
+  task_data_subdir: task2
+  datalist_filename: gastro_multilabel_task_datalist.csv

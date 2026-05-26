@@ -13,7 +13,7 @@ import yaml
 from training.data import IMAGE_EXTENSIONS, resolve_exam_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "path.yaml"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "task1" / "path.yaml"
 
 try:
     from tqdm import tqdm
@@ -35,7 +35,7 @@ def build_progress(iterable: Iterable, desc: str):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="统计检查目录中的 img 数量分布")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="路径配置文件，默认 configs/path.yaml")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="路径配置文件，默认 configs/task1/path.yaml")
     parser.add_argument(
         "--source",
         choices=["report", "dataset"],

@@ -1,0 +1,43 @@
+goal: 固定 train.yaml 的训练超参数，自动运行 TASK1 label graph reasoner 模块消融实验
+
+# TASK1 专用自动探索：
+# 1. 固定 train_max_instances=16 跑 10 个模块结构；
+# 2. 固定阶段 1 最优模块，跑 train_max_instances=8/12/16/20/24；
+# 3. 如果最佳 train_max_instances 不是 16，则在最佳实例数下重新跑 10 个模块结构。
+# 4. 使用最终最优参数固定运行 11 个最终对比模型，backbone=ConvNeXt-Tiny。
+task1_module_instance_search:
+  enabled: true
+  output_dir_name: exp_task1_auto_module_instance_search
+  initial_train_max_instances: 16
+  train_max_instances_values: [8, 12, 16, 20, 24]
+  rerun_modules_if_best_instances_differs: true
+  run_final_model_suite: true
+  final_suite_dir_name: final_models_best_params
+  fixed_seed: true
+
+# 消融实验总输出根目录
+output_root_dir_name: task1_ablation
+
+# 每个消融实验训练结束后立即运行测试
+run_test: true
+
+# 结果排序依据
+selection_alias: best_macro_f1
+result_source: test_results
+
+# 训练稳定性评价阈值
+stability_filter:
+  enabled: true
+  min_epochs_trained: 10
+  max_final_gap: 0.05
+  max_val_loss_rebound_ratio: 0.25
+
+remark:
+  focus: 汇总 TASK1 label graph reasoner 保留、移除和替代模块的测试结果
+  include_model_evaluations: true
+  include_stability_filter: true
+
+experiments:
+  - name: exp_task1_ablation1
+    enabled: true
+    display_name: TASK1 Label Graph Reasoner 消融

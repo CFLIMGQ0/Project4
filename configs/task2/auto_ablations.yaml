@@ -1,0 +1,38 @@
+goal: 固定 train.yaml 的训练超参数，自动运行 TASK2 的 RG-HMIL 消融实验
+
+output_root_dir_name: ablations
+run_test: true
+selection_alias: best_macro_f1
+result_source: test_results
+
+stability_filter:
+  enabled: true
+  min_epochs_trained: 10
+  max_final_gap: 0.05
+  max_val_loss_rebound_ratio: 0.25
+
+remark:
+  focus: 汇总 TASK2 的 RG-HMIL 消融实验测试结果与稳定性表现
+  include_model_evaluations: true
+  include_stability_filter: true
+
+experiments:
+  - name: ablation_static_lgr
+    enabled: true
+    display_name: 静态基线消融
+
+  - name: ablation_text_guidance
+    enabled: true
+    display_name: 文本引导消融
+
+  - name: ablation_region_grouping
+    enabled: true
+    display_name: 区域分组消融
+
+  - name: ablation_conditional_graph
+    enabled: true
+    display_name: 条件图消融
+
+  - name: rg_hmil_full
+    enabled: true
+    display_name: 完整 RG-HMIL

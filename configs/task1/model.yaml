@@ -1,0 +1,12 @@
+models:
+  gastro_label_graph_mil:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    dropout: 0.2
+    use_label_graph: true
+    label_graph_type: learnable
+    use_label_wise_attention: true
+    attention_type: label_specific
+    pooling_type: label_attention

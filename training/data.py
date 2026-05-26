@@ -6,15 +6,19 @@ import math
 import os
 import random
 import re
+import shutil
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from torch.utils.data import Dataset, Sampler
 from torchvision import transforms
+from tasks import DEFAULT_GASTRO_TASK_NAME, get_task_spec
+from tasks.common import derive_patient_id_from_exam_dir
+from tasks.task2 import generate_pseudo_labels
 
 try:
     from tqdm import tqdm
@@ -24,14 +28,23 @@ except Exception:  # pragma: no cover
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-GASTRO_LABEL_NAMES = [
-    "label_esophageal_smt",
-    "label_esophageal_mucosal_or_tumor",
-    "label_gastritis",
-]
-
-COLO_BINARY_CLASS_NAMES = ["normal", "polyp"]
+GASTRO_LABEL_NAMES = list(get_task_spec(DEFAULT_GASTRO_TASK_NAME).label_names)
 IMAGE_CACHE_MODES = {"none", "memory", "disk", "memory_and_disk"}
+STRUCTURED_FIELD_NAMES = ("reportTitle", "age", "sex", "hp", "operationValue")
+STRUCTURED_CATEGORICAL_FIELDS = ("reportTitle", "sex", "hp", "operationValue")
+STRUCTURED_NUMERIC_FIELDS = ("age",)
+STRUCTURED_FIELD_TO_INDEX = {name: index for index, name in enumerate(STRUCTURED_FIELD_NAMES)}
+STRUCTURED_CATEGORICAL_TO_INDEX = {name: index for index, name in enumerate(STRUCTURED_CATEGORICAL_FIELDS)}
+STRUCTURED_NUMERIC_TO_INDEX = {name: index for index, name in enumerate(STRUCTURED_NUMERIC_FIELDS)}
+STRUCTURED_MISSING_TOKEN = "__MISSING__"
+STRUCTURED_OTHER_TOKEN = "__OTHER_LOW_FREQ__"
+STRUCTURED_REPORT_ALIASES = {
+    "reportTitle": ("reportTitle", "report_title"),
+    "age": ("age",),
+    "sex": ("sex",),
+    "hp": ("hp", "hp_status"),
+    "operationValue": ("operationValue", "openationValue", "operation_value"),
+}
 
 
 def _iter_progress(iterable, total: int | None = None, desc: str = "处理中"):
@@ -45,6 +58,36 @@ def to_int(value: Any) -> int:
         return 0
     cleaned = re.sub(r"[^0-9]", "", str(value))
     return int(cleaned) if cleaned else 0
+
+
+def _normalize_structured_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    return re.sub(r"\s+", " ", str(value).replace("\u3000", " ").strip())
+
+
+def _structured_row_value(row: dict[str, Any], field_name: str) -> str:
+    for alias in STRUCTURED_REPORT_ALIASES[field_name]:
+        if alias in row:
+            value = _normalize_structured_value(row.get(alias, ""))
+            if value:
+                return value
+    return ""
+
+
+def _parse_age_value(value: Any) -> float | None:
+    cleaned = _normalize_structured_value(value)
+    if not cleaned:
+        return None
+    match = re.search(r"\d+(?:\.\d+)?", cleaned)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
 
 
 def resolve_exam_dir(exam_dir: str | Path, dataset_root: str | Path | None = None) -> tuple[Path, bool]:
@@ -99,14 +142,30 @@ def build_task_records(
     min_instances: int = 1,
     dataset_root: str | Path | None = None,
 ) -> list[dict[str, Any]]:
+    if task_name == "gastro_multilabel":
+        task_spec = get_task_spec(DEFAULT_GASTRO_TASK_NAME)
+    else:
+        task_spec = get_task_spec(task_name)
+
     rows = load_task_rows(task_csv_path)
     records: list[dict[str, Any]] = []
 
     for row in _iter_progress(rows, total=len(rows), desc=f"构建{task_name}样本"):
         exam_dir = str(row.get("exam_dir", "")).strip()
+        patient_id = str(row.get("patient_id", "")).strip() or derive_patient_id_from_exam_dir(exam_dir)
         report_title = str(row.get("reportTitle", "")).strip()
         watch_result = str(row.get("watchResult", "")).strip()
+        watch = str(row.get("watch", "")).strip()
+        specimen = str(row.get("specimen", "")).strip()
+        hp = str(row.get("hp", "")).strip()
         img_num = to_int(row.get("img_num", 0))
+        structured_raw = {
+            "reportTitle": report_title,
+            "age": _structured_row_value(row, "age"),
+            "sex": _structured_row_value(row, "sex"),
+            "hp": hp or _structured_row_value(row, "hp"),
+            "operationValue": _structured_row_value(row, "operationValue"),
+        }
 
         resolved_exam_dir, _ = resolve_exam_dir(exam_dir, dataset_root=dataset_root)
 
@@ -114,29 +173,52 @@ def build_task_records(
         if len(image_paths) < min_instances:
             continue
 
-        if task_name == "gastro_multilabel":
-            labels = [to_int(row.get(label_name, 0)) for label_name in GASTRO_LABEL_NAMES]
+        if task_spec.is_multilabel:
+            labels = [to_int(row.get(label_name, 0)) for label_name in task_spec.label_names]
             if sum(labels) <= 0:
                 continue
-            records.append(
-                {
-                    "exam_dir": str(resolved_exam_dir),
-                    "report_title": report_title,
-                    "watch_result": watch_result,
-                    "img_num": img_num,
-                    "image_paths": image_paths,
-                    "labels": labels,
-                }
-            )
-        elif task_name == "colonoscopy_binary":
+            record = {
+                "patient_id": patient_id,
+                "exam_dir": str(resolved_exam_dir),
+                "report_title": report_title,
+                "watch_result": watch_result,
+                "watch": watch,
+                "specimen": specimen,
+                "hp": hp,
+                "age": structured_raw["age"],
+                "sex": structured_raw["sex"],
+                "operation_value": structured_raw["operationValue"],
+                "structured_raw": dict(structured_raw),
+                "img_num": img_num,
+                "image_paths": image_paths,
+                "labels": labels,
+            }
+            if task_spec.name == "task2":
+                pseudo_payload = generate_pseudo_labels(
+                    watch=watch,
+                    specimen=specimen,
+                    num_images=len(image_paths),
+                )
+                record["pseudo_region_labels"] = pseudo_payload["region_labels"]
+                record["pseudo_relevance"] = pseudo_payload["relevance_scores"]
+            records.append(record)
+        elif task_spec.is_binary:
             label = to_int(row.get("binary_label", -1))
             if label not in {0, 1}:
                 continue
             records.append(
                 {
+                    "patient_id": patient_id,
                     "exam_dir": str(resolved_exam_dir),
                     "report_title": report_title,
                     "watch_result": watch_result,
+                    "watch": watch,
+                    "specimen": specimen,
+                    "hp": hp,
+                    "age": structured_raw["age"],
+                    "sex": structured_raw["sex"],
+                    "operation_value": structured_raw["operationValue"],
+                    "structured_raw": dict(structured_raw),
                     "img_num": img_num,
                     "image_paths": image_paths,
                     "label": label,
@@ -152,6 +234,7 @@ def split_records(
     records: list[dict[str, Any]],
     seed: int,
     ratios: tuple[float, float, float] = (0.6, 0.2, 0.2),
+    group_by_patient: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     if len(records) == 0:
         return {"train": [], "val": [], "test": []}
@@ -160,6 +243,33 @@ def split_records(
         raise ValueError("ratios 必须和为 1")
 
     rng = random.Random(seed)
+
+    if group_by_patient:
+        patient_to_records: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            patient_id = str(record.get("patient_id", "")).strip() or derive_patient_id_from_exam_dir(
+                str(record.get("exam_dir", ""))
+            )
+            patient_to_records.setdefault(patient_id, []).append(record)
+
+        patient_ids = list(patient_to_records.keys())
+        rng.shuffle(patient_ids)
+
+        total_groups = len(patient_ids)
+        num_train = int(total_groups * ratios[0])
+        num_val = int(total_groups * ratios[1])
+        num_test = total_groups - num_train - num_val
+
+        train_ids = patient_ids[:num_train]
+        val_ids = patient_ids[num_train : num_train + num_val]
+        test_ids = patient_ids[num_train + num_val : num_train + num_val + num_test]
+
+        return {
+            "train": [record for patient_id in train_ids for record in patient_to_records[patient_id]],
+            "val": [record for patient_id in val_ids for record in patient_to_records[patient_id]],
+            "test": [record for patient_id in test_ids for record in patient_to_records[patient_id]],
+        }
+
     indices = list(range(len(records)))
     rng.shuffle(indices)
     shuffled = [records[index] for index in indices]
@@ -176,11 +286,211 @@ def split_records(
     }
 
 
+def enrich_records_with_report_fields(
+    records: list[dict[str, Any]],
+    report_csv_path: str | Path | None,
+) -> dict[str, Any]:
+    """按 exam_dir 回连源报告表，补齐 datalist 未保留的结构化字段。"""
+
+    if report_csv_path is None or not str(report_csv_path).strip():
+        return {"enabled": False, "reason": "empty_report_csv_path", "matched": 0, "total": len(records)}
+
+    path = Path(report_csv_path).expanduser()
+    if not path.is_file():
+        return {"enabled": False, "reason": f"report_csv_not_found: {path}", "matched": 0, "total": len(records)}
+
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+        report_rows = list(reader)
+
+    row_map: dict[str, dict[str, str]] = {}
+    for row in report_rows:
+        exam_dir = _normalize_structured_value(row.get("exam_dir", ""))
+        if not exam_dir:
+            continue
+        row_map[exam_dir] = row
+        try:
+            resolved = str(Path(exam_dir).expanduser().resolve())
+            row_map.setdefault(resolved, row)
+        except OSError:
+            pass
+
+    matched = 0
+    for record in records:
+        raw_payload = dict(record.get("structured_raw", {}))
+        for field_name in STRUCTURED_FIELD_NAMES:
+            raw_payload.setdefault(field_name, "")
+
+        row = row_map.get(str(record.get("exam_dir", "")).strip())
+        if row is None:
+            try:
+                row = row_map.get(str(Path(str(record.get("exam_dir", ""))).expanduser().resolve()))
+            except OSError:
+                row = None
+
+        if row is not None:
+            matched += 1
+            for field_name in STRUCTURED_FIELD_NAMES:
+                current_value = _normalize_structured_value(raw_payload.get(field_name, ""))
+                if current_value:
+                    raw_payload[field_name] = current_value
+                    continue
+                raw_payload[field_name] = _structured_row_value(row, field_name)
+
+        record["structured_raw"] = raw_payload
+        record["age"] = raw_payload.get("age", "")
+        record["sex"] = raw_payload.get("sex", "")
+        record["operation_value"] = raw_payload.get("operationValue", "")
+        if raw_payload.get("hp", "") and not record.get("hp"):
+            record["hp"] = raw_payload["hp"]
+
+    return {
+        "enabled": True,
+        "report_csv_path": str(path.resolve()),
+        "source_rows": len(report_rows),
+        "matched": matched,
+        "total": len(records),
+        "match_rate": float(matched / len(records)) if records else 0.0,
+    }
+
+
+def fit_structured_feature_metadata(
+    train_records: list[dict[str, Any]],
+    *,
+    min_category_count: int = 20,
+) -> dict[str, Any]:
+    min_category_count = max(1, int(min_category_count))
+    category_maps: dict[str, dict[str, int]] = {}
+    category_counts: dict[str, dict[str, int]] = {}
+    audit: list[dict[str, Any]] = []
+
+    for field_name in STRUCTURED_CATEGORICAL_FIELDS:
+        counts: dict[str, int] = {}
+        non_missing = 0
+        for record in train_records:
+            value = _normalize_structured_value(record.get("structured_raw", {}).get(field_name, ""))
+            if value:
+                non_missing += 1
+                counts[value] = counts.get(value, 0) + 1
+
+        kept_values = sorted(value for value, count in counts.items() if count >= min_category_count)
+        vocab = [STRUCTURED_MISSING_TOKEN, STRUCTURED_OTHER_TOKEN, *kept_values]
+        category_maps[field_name] = {value: index for index, value in enumerate(vocab)}
+        category_counts[field_name] = dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+        audit.append(
+            {
+                "field": field_name,
+                "type": "categorical",
+                "train_total": len(train_records),
+                "train_non_missing": non_missing,
+                "train_missing": len(train_records) - non_missing,
+                "train_missing_rate": float((len(train_records) - non_missing) / len(train_records)) if train_records else 0.0,
+                "raw_unique_non_missing": len(counts),
+                "encoded_unique": len(vocab),
+                "min_category_count": min_category_count,
+                "kept_categories": kept_values,
+                "low_frequency_category_count": len(counts) - len(kept_values),
+            }
+        )
+
+    age_values = [
+        parsed
+        for record in train_records
+        for parsed in [_parse_age_value(record.get("structured_raw", {}).get("age", ""))]
+        if parsed is not None
+    ]
+    age_mean = float(np.mean(age_values)) if age_values else 0.0
+    age_std = float(np.std(age_values)) if age_values else 1.0
+    if age_std < 1e-6:
+        age_std = 1.0
+    audit.append(
+        {
+            "field": "age",
+            "type": "numeric",
+            "train_total": len(train_records),
+            "train_non_missing": len(age_values),
+            "train_missing": len(train_records) - len(age_values),
+            "train_missing_rate": float((len(train_records) - len(age_values)) / len(train_records)) if train_records else 0.0,
+            "raw_unique_non_missing": len(set(age_values)),
+            "encoded_unique": 1,
+            "mean": age_mean,
+            "std": age_std,
+        }
+    )
+
+    return {
+        "field_names": list(STRUCTURED_FIELD_NAMES),
+        "categorical_fields": list(STRUCTURED_CATEGORICAL_FIELDS),
+        "numeric_fields": list(STRUCTURED_NUMERIC_FIELDS),
+        "field_to_index": dict(STRUCTURED_FIELD_TO_INDEX),
+        "categorical_to_index": dict(STRUCTURED_CATEGORICAL_TO_INDEX),
+        "numeric_to_index": dict(STRUCTURED_NUMERIC_TO_INDEX),
+        "missing_token": STRUCTURED_MISSING_TOKEN,
+        "other_token": STRUCTURED_OTHER_TOKEN,
+        "min_category_count": min_category_count,
+        "category_maps": category_maps,
+        "category_counts": category_counts,
+        "category_sizes": {field_name: len(vocab) for field_name, vocab in category_maps.items()},
+        "numeric_stats": {"age": {"mean": age_mean, "std": age_std}},
+        "audit": audit,
+    }
+
+
+def apply_structured_feature_metadata(
+    split_data: dict[str, list[dict[str, Any]]],
+    metadata: dict[str, Any],
+) -> None:
+    category_maps = metadata.get("category_maps", {})
+    numeric_stats = metadata.get("numeric_stats", {})
+    age_stats = numeric_stats.get("age", {}) if isinstance(numeric_stats, dict) else {}
+    age_mean = float(age_stats.get("mean", 0.0))
+    age_std = float(age_stats.get("std", 1.0)) or 1.0
+
+    for records in split_data.values():
+        for record in records:
+            raw_payload = dict(record.get("structured_raw", {}))
+            categorical_ids: list[int] = []
+            field_mask = [0.0 for _ in STRUCTURED_FIELD_NAMES]
+
+            for field_name in STRUCTURED_CATEGORICAL_FIELDS:
+                value = _normalize_structured_value(raw_payload.get(field_name, ""))
+                if value:
+                    field_mask[STRUCTURED_FIELD_TO_INDEX[field_name]] = 1.0
+                vocab = category_maps.get(field_name, {})
+                if not value:
+                    encoded = int(vocab.get(STRUCTURED_MISSING_TOKEN, 0))
+                else:
+                    encoded = int(vocab.get(value, vocab.get(STRUCTURED_OTHER_TOKEN, 1)))
+                categorical_ids.append(encoded)
+
+            age_value = _parse_age_value(raw_payload.get("age", ""))
+            if age_value is None:
+                age_encoded = 0.0
+            else:
+                field_mask[STRUCTURED_FIELD_TO_INDEX["age"]] = 1.0
+                age_encoded = float((age_value - age_mean) / age_std)
+
+            record["structured_categorical"] = categorical_ids
+            record["structured_numeric"] = [age_encoded]
+            record["structured_mask"] = field_mask
+
+
+def prepare_structured_features(
+    split_data: dict[str, list[dict[str, Any]]],
+    *,
+    fit_records: list[dict[str, Any]],
+    min_category_count: int = 20,
+) -> dict[str, Any]:
+    metadata = fit_structured_feature_metadata(fit_records, min_category_count=min_category_count)
+    apply_structured_feature_metadata(split_data, metadata)
+    return metadata
+
+
 def build_image_transform(image_size: int, is_train: bool) -> transforms.Compose:
     if is_train:
         return transforms.Compose(
             [
-                transforms.RandomResizedCrop(image_size, scale=(0.75, 1.0)),
+                transforms.RandomResizedCrop(image_size, scale=(0.75, 1.0), antialias=True),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.03),
                 transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
@@ -191,12 +501,64 @@ def build_image_transform(image_size: int, is_train: bool) -> transforms.Compose
 
     return transforms.Compose(
         [
-            transforms.Resize(int(image_size * 1.15)),
+            transforms.Resize(int(image_size * 1.15), antialias=True),
             transforms.CenterCrop(image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ]
     )
+
+
+def _normalize_image_key(image_path: str | Path) -> str:
+    return str(Path(image_path).expanduser().resolve())
+
+
+def load_roi_index(
+    roi_index_path: str | Path | None,
+    *,
+    max_crops_per_source: int,
+    min_score: float,
+) -> dict[str, list[str]]:
+    if roi_index_path is None or not str(roi_index_path).strip():
+        return {}
+    index_path = Path(roi_index_path).expanduser()
+    if not index_path.is_file():
+        raise FileNotFoundError(f"未找到 ROI 索引文件: {index_path}")
+
+    raw_map: dict[str, list[tuple[float, int, str]]] = {}
+    with index_path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            source_path = str(row.get("source_image_path", "")).strip()
+            crop_path = str(row.get("crop_path", "")).strip()
+            if not source_path or not crop_path:
+                continue
+            try:
+                score = float(row.get("score", 0.0))
+            except Exception:
+                score = 0.0
+            if score < min_score:
+                continue
+            try:
+                rank = int(float(row.get("rank", 9999)))
+            except Exception:
+                rank = 9999
+            crop = Path(crop_path).expanduser()
+            if not crop.is_file():
+                continue
+            try:
+                if crop.stat().st_size <= 0:
+                    continue
+            except OSError:
+                continue
+            raw_map.setdefault(_normalize_image_key(source_path), []).append((score, rank, str(crop.resolve())))
+
+    roi_map: dict[str, list[str]] = {}
+    keep_num = max(1, int(max_crops_per_source))
+    for source_path, items in raw_map.items():
+        items.sort(key=lambda item: (-item[0], item[1], item[2]))
+        roi_map[source_path] = [crop_path for _, _, crop_path in items[:keep_num]]
+    return roi_map
 
 
 class _LRUImageArrayCache:
@@ -235,7 +597,17 @@ class MILBagDataset(Dataset):
         random_instance_dropout: float = 0.0,
         image_cache_mode: str = "none",
         image_cache_dir: str | Path | None = None,
+        legacy_image_cache_dirs: list[str | Path] | None = None,
         memory_cache_size: int = 0,
+        roi_index_path: str | Path | None = None,
+        roi_enabled: bool = False,
+        roi_max_crops_per_bag: int = 0,
+        roi_max_crops_per_source: int = 1,
+        roi_min_score: float = 0.0,
+        split_name: str = "",
+        structured_shuffle_fields: list[str] | tuple[str, ...] | None = None,
+        structured_shuffle_apply_to: str = "none",
+        structured_shuffle_seed: int = 0,
     ) -> None:
         super().__init__()
         self.records = records
@@ -247,6 +619,28 @@ class MILBagDataset(Dataset):
         self.random_instance_dropout = random_instance_dropout if is_train else 0.0
         self.transform = build_image_transform(image_size=image_size, is_train=is_train)
         self.cache_image_size = int(image_size * 1.5)
+        self.roi_enabled = bool(roi_enabled)
+        self.roi_max_crops_per_bag = max(0, int(roi_max_crops_per_bag))
+        self.roi_max_crops_per_source = max(1, int(roi_max_crops_per_source))
+        self.roi_min_score = float(roi_min_score)
+        self.split_name = str(split_name).strip().lower()
+        self.structured_shuffle_fields = [
+            field_name
+            for field_name in (structured_shuffle_fields or [])
+            if field_name in STRUCTURED_FIELD_TO_INDEX
+        ]
+        self.structured_shuffle_apply_to = str(structured_shuffle_apply_to).strip().lower() or "none"
+        self.structured_shuffle_seed = int(structured_shuffle_seed)
+        self._structured_shuffle_values = self._build_structured_shuffle_values()
+        self.roi_map = (
+            load_roi_index(
+                roi_index_path,
+                max_crops_per_source=self.roi_max_crops_per_source,
+                min_score=self.roi_min_score,
+            )
+            if self.roi_enabled and self.roi_max_crops_per_bag > 0
+            else {}
+        )
         self.image_cache_mode = str(image_cache_mode).strip().lower() or "none"
         if self.image_cache_mode not in IMAGE_CACHE_MODES:
             raise ValueError(f"未知 image_cache_mode: {image_cache_mode}")
@@ -258,7 +652,99 @@ class MILBagDataset(Dataset):
                 raise ValueError("启用磁盘图像缓存时必须提供 image_cache_dir")
             self.image_cache_dir = Path(image_cache_dir).expanduser().resolve()
             self.image_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.legacy_image_cache_dirs: list[Path] = []
+        if self.use_disk_cache and legacy_image_cache_dirs:
+            seen_legacy: set[Path] = set()
+            for raw_dir in legacy_image_cache_dirs:
+                if raw_dir is None or not str(raw_dir).strip():
+                    continue
+                resolved_dir = Path(raw_dir).expanduser().resolve()
+                if self.image_cache_dir is not None and resolved_dir == self.image_cache_dir:
+                    continue
+                if resolved_dir in seen_legacy:
+                    continue
+                seen_legacy.add(resolved_dir)
+                self.legacy_image_cache_dirs.append(resolved_dir)
         self.memory_cache = _LRUImageArrayCache(memory_cache_size if self.use_memory_cache else 0)
+
+    def _should_shuffle_structured_fields(self) -> bool:
+        if not self.structured_shuffle_fields:
+            return False
+        apply_to = self.structured_shuffle_apply_to
+        if apply_to in {"", "none", "false", "off"}:
+            return False
+        if apply_to == "all":
+            return True
+        if apply_to in {"test", "test_only"}:
+            return self.split_name == "test"
+        if apply_to in {"eval", "val_test", "validation_test"}:
+            return self.split_name in {"val", "test"}
+        if apply_to in {"train", "train_only"}:
+            return self.split_name == "train"
+        return self.split_name == apply_to
+
+    def _build_structured_shuffle_values(self) -> dict[str, list[tuple[float, float]]] | dict[str, list[tuple[int, float]]]:
+        if not self._should_shuffle_structured_fields() or not self.records:
+            return {}
+
+        rng = random.Random(self.structured_shuffle_seed + sum(ord(char) for char in self.split_name))
+        shuffled_values: dict[str, list[Any]] = {}
+        for field_name in self.structured_shuffle_fields:
+            values: list[Any] = []
+            if field_name in STRUCTURED_CATEGORICAL_TO_INDEX:
+                cat_index = STRUCTURED_CATEGORICAL_TO_INDEX[field_name]
+                mask_index = STRUCTURED_FIELD_TO_INDEX[field_name]
+                for record in self.records:
+                    categorical = list(record.get("structured_categorical", []))
+                    mask = list(record.get("structured_mask", []))
+                    value = int(categorical[cat_index]) if cat_index < len(categorical) else 0
+                    mask_value = float(mask[mask_index]) if mask_index < len(mask) else 0.0
+                    values.append((value, mask_value))
+            elif field_name in STRUCTURED_NUMERIC_TO_INDEX:
+                numeric_index = STRUCTURED_NUMERIC_TO_INDEX[field_name]
+                mask_index = STRUCTURED_FIELD_TO_INDEX[field_name]
+                for record in self.records:
+                    numeric = list(record.get("structured_numeric", []))
+                    mask = list(record.get("structured_mask", []))
+                    value = float(numeric[numeric_index]) if numeric_index < len(numeric) else 0.0
+                    mask_value = float(mask[mask_index]) if mask_index < len(mask) else 0.0
+                    values.append((value, mask_value))
+            rng.shuffle(values)
+            shuffled_values[field_name] = values
+        return shuffled_values
+
+    def _structured_tensors_for_record(self, record: dict[str, Any], index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        if "structured_categorical" not in record or "structured_numeric" not in record or "structured_mask" not in record:
+            return None
+        categorical = [int(value) for value in record.get("structured_categorical", [])]
+        numeric = [float(value) for value in record.get("structured_numeric", [])]
+        field_mask = [float(value) for value in record.get("structured_mask", [])]
+
+        if self._structured_shuffle_values:
+            for field_name, values in self._structured_shuffle_values.items():
+                if not values:
+                    continue
+                shuffled_value, shuffled_mask = values[index % len(values)]
+                if field_name in STRUCTURED_CATEGORICAL_TO_INDEX:
+                    cat_index = STRUCTURED_CATEGORICAL_TO_INDEX[field_name]
+                    mask_index = STRUCTURED_FIELD_TO_INDEX[field_name]
+                    if cat_index < len(categorical):
+                        categorical[cat_index] = int(shuffled_value)
+                    if mask_index < len(field_mask):
+                        field_mask[mask_index] = float(shuffled_mask)
+                elif field_name in STRUCTURED_NUMERIC_TO_INDEX:
+                    numeric_index = STRUCTURED_NUMERIC_TO_INDEX[field_name]
+                    mask_index = STRUCTURED_FIELD_TO_INDEX[field_name]
+                    if numeric_index < len(numeric):
+                        numeric[numeric_index] = float(shuffled_value)
+                    if mask_index < len(field_mask):
+                        field_mask[mask_index] = float(shuffled_mask)
+
+        return (
+            torch.tensor(categorical, dtype=torch.long),
+            torch.tensor(numeric, dtype=torch.float32),
+            torch.tensor(field_mask, dtype=torch.float32),
+        )
 
     def __len__(self) -> int:
         return len(self.records)
@@ -266,8 +752,8 @@ class MILBagDataset(Dataset):
     def _memory_cache_key(self, image_path: str | Path) -> str:
         return str(Path(image_path).expanduser().resolve())
 
-    def _disk_cache_path(self, image_path: str | Path) -> Path | None:
-        if self.image_cache_dir is None:
+    def _disk_cache_path_for_dir(self, image_path: str | Path, cache_dir: Path | None) -> Path | None:
+        if cache_dir is None:
             return None
 
         source_path = Path(image_path).expanduser()
@@ -280,7 +766,50 @@ class MILBagDataset(Dataset):
             cache_signature = f"{resolved_path}|{self.cache_image_size}"
 
         digest = hashlib.sha1(cache_signature.encode("utf-8")).hexdigest()
-        return self.image_cache_dir / digest[:2] / f"{digest}.npy"
+        return cache_dir / digest[:2] / f"{digest}.npy"
+
+    def _disk_cache_path(self, image_path: str | Path) -> Path | None:
+        return self._disk_cache_path_for_dir(image_path, self.image_cache_dir)
+
+    def _legacy_disk_cache_paths(self, image_path: str | Path) -> list[Path]:
+        return [
+            candidate
+            for candidate in (
+                self._disk_cache_path_for_dir(image_path, cache_dir)
+                for cache_dir in self.legacy_image_cache_dirs
+            )
+            if candidate is not None
+        ]
+
+    def _load_disk_cache_file(self, cache_path: Path) -> np.ndarray:
+        with cache_path.open("rb") as file:
+            return np.load(file, allow_pickle=False)
+
+    def _promote_disk_cache(self, source_path: Path, target_path: Path | None) -> None:
+        if target_path is None or source_path == target_path or target_path.is_file():
+            return
+        if os.environ.get("PROJECT4_DISABLE_DISK_CACHE_WRITE") == "1":
+            return
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target_path.with_name(f"{target_path.name}.{os.getpid()}.tmp")
+        try:
+            try:
+                os.link(source_path, temp_path)
+            except OSError:
+                shutil.copy2(source_path, temp_path)
+            os.replace(temp_path, target_path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+
+    def _locate_existing_disk_cache(self, image_path: str | Path) -> tuple[Path | None, Path | None]:
+        primary_cache_path = self._disk_cache_path(image_path)
+        if primary_cache_path is not None and primary_cache_path.is_file():
+            return primary_cache_path, primary_cache_path
+        for legacy_cache_path in self._legacy_disk_cache_paths(image_path):
+            if legacy_cache_path.is_file():
+                return primary_cache_path, legacy_cache_path
+        return primary_cache_path, None
 
     def _load_source_image_array(self, image_path: str | Path) -> np.ndarray:
         with Image.open(image_path) as image:
@@ -300,6 +829,8 @@ class MILBagDataset(Dataset):
             return np.asarray(rgb_image, dtype=np.uint8)
 
     def _save_disk_cache(self, image_path: str | Path, image_array: np.ndarray) -> None:
+        if os.environ.get("PROJECT4_DISABLE_DISK_CACHE_WRITE") == "1":
+            return
         cache_path = self._disk_cache_path(image_path)
         if cache_path is None:
             return
@@ -324,19 +855,20 @@ class MILBagDataset(Dataset):
             if cached_array is not None:
                 return cached_array
 
-        cache_path = self._disk_cache_path(image_path)
-        if cache_path is not None and cache_path.is_file():
+        primary_cache_path, existing_cache_path = self._locate_existing_disk_cache(image_path)
+        if existing_cache_path is not None:
             try:
-                with cache_path.open("rb") as file:
-                    cached_array = np.load(file, allow_pickle=False)
+                cached_array = self._load_disk_cache_file(existing_cache_path)
+                if primary_cache_path is not None and existing_cache_path != primary_cache_path:
+                    self._promote_disk_cache(existing_cache_path, primary_cache_path)
                 if self.use_memory_cache:
                     self.memory_cache.put(memory_key, cached_array)
                 return cached_array
             except Exception:
-                cache_path.unlink(missing_ok=True)
+                existing_cache_path.unlink(missing_ok=True)
 
         image_array = self._load_source_image_array(image_path)
-        if cache_path is not None:
+        if primary_cache_path is not None:
             self._save_disk_cache(image_path, image_array)
         if self.use_memory_cache:
             self.memory_cache.put(memory_key, image_array)
@@ -365,8 +897,10 @@ class MILBagDataset(Dataset):
             iterator = unique_paths
 
         for index, image_path in enumerate(iterator, start=1):
-            cache_path = self._disk_cache_path(image_path)
-            if cache_path is not None and cache_path.is_file():
+            primary_cache_path, existing_cache_path = self._locate_existing_disk_cache(image_path)
+            if existing_cache_path is not None:
+                if primary_cache_path is not None and existing_cache_path != primary_cache_path:
+                    self._promote_disk_cache(existing_cache_path, primary_cache_path)
                 success += 1
                 if progress is not None and (index % 64 == 0 or index == len(unique_paths)):
                     progress.set_postfix({"成功": success, "失败": failed}, refresh=False)
@@ -403,8 +937,14 @@ class MILBagDataset(Dataset):
             current += 1
         return sorted(indices[:keep_num])
 
-    def _select_indices(self, num_instances: int, rng: random.Random) -> list[int]:
-        max_instances = self.max_instances if self.max_instances > 0 else num_instances
+    def _select_indices(
+        self,
+        num_instances: int,
+        rng: random.Random,
+        max_instances_override: int | None = None,
+    ) -> list[int]:
+        active_max_instances = self.max_instances if max_instances_override is None else int(max_instances_override)
+        max_instances = active_max_instances if active_max_instances > 0 else num_instances
         keep_num = min(num_instances, max_instances)
 
         if self.strategy == "random":
@@ -442,28 +982,68 @@ class MILBagDataset(Dataset):
 
         return indices
 
+    def _collect_roi_crop_paths(
+        self,
+        selected_source_paths: list[str],
+        rng: random.Random,
+    ) -> list[str]:
+        if not self.roi_map or self.roi_max_crops_per_bag <= 0:
+            return []
+
+        candidates: list[str] = []
+        for source_path in selected_source_paths:
+            candidates.extend(self.roi_map.get(_normalize_image_key(source_path), []))
+        candidates = list(dict.fromkeys(candidates))
+        if not candidates:
+            return []
+        if self.is_train:
+            rng.shuffle(candidates)
+        return candidates[: self.roi_max_crops_per_bag]
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = self.records[index]
         image_paths_all: list[str] = record["image_paths"]
         rng = random.Random((index + 1) * 104729 if self.is_train else index + 17)
 
-        selected_indices = self._select_indices(num_instances=len(image_paths_all), rng=rng)
+        original_max_instances = self.max_instances
+        if self.roi_enabled and self.roi_max_crops_per_bag > 0 and self.max_instances > 0:
+            original_max_instances = max(self.min_instances, self.max_instances - self.roi_max_crops_per_bag)
+        selected_indices = self._select_indices(
+            num_instances=len(image_paths_all),
+            rng=rng,
+            max_instances_override=original_max_instances,
+        )
         selected_paths = [image_paths_all[item] for item in selected_indices]
+        roi_crop_paths = self._collect_roi_crop_paths(selected_paths, rng=rng)
+        selected_paths = [*selected_paths, *roi_crop_paths]
 
+        roi_crop_path_set = set(roi_crop_paths)
+        loaded_paths: list[str] = []
+        loaded_roi_crop_paths: list[str] = []
         images = []
         for path in selected_paths:
-            image = Image.fromarray(self._load_image_array(path), mode="RGB")
+            try:
+                image = Image.fromarray(self._load_image_array(path), mode="RGB")
+            except (OSError, UnidentifiedImageError):
+                if path in roi_crop_path_set:
+                    continue
+                raise
             images.append(self.transform(image))
+            loaded_paths.append(path)
+            if path in roi_crop_path_set:
+                loaded_roi_crop_paths.append(path)
+        selected_paths = loaded_paths
+        roi_crop_paths = loaded_roi_crop_paths
         bag_images = torch.stack(images, dim=0)
 
-        if self.task_name == "gastro_multilabel":
+        if "labels" in record:
             label = torch.tensor(record["labels"], dtype=torch.float32)
-        elif self.task_name == "colonoscopy_binary":
+        elif "label" in record:
             label = torch.tensor(record["label"], dtype=torch.long)
         else:
             raise ValueError(f"未知 task_name: {self.task_name}")
 
-        return {
+        item = {
             "images": bag_images,
             "label": label,
             "exam_dir": record["exam_dir"],
@@ -472,6 +1052,34 @@ class MILBagDataset(Dataset):
             "img_num": int(record.get("img_num", len(image_paths_all))),
             "meta": {},
         }
+        structured_tensors = self._structured_tensors_for_record(record, index)
+        if structured_tensors is not None:
+            structured_categorical, structured_numeric, structured_mask = structured_tensors
+            item["structured_categorical"] = structured_categorical
+            item["structured_numeric"] = structured_numeric
+            item["structured_mask"] = structured_mask
+        if self.roi_enabled and self.roi_max_crops_per_bag > 0:
+            instance_types = [0 for _ in selected_indices]
+            instance_types.extend([1 for _ in roi_crop_paths])
+            item["instance_types"] = torch.tensor(instance_types, dtype=torch.long)
+        if "pseudo_region_labels" in record:
+            pseudo_region_labels_all = list(record["pseudo_region_labels"])
+            selected_values = [int(pseudo_region_labels_all[item_index]) for item_index in selected_indices]
+            selected_values.extend([-100 for _ in roi_crop_paths])
+            item["pseudo_region_labels"] = torch.tensor(
+                selected_values,
+                dtype=torch.long,
+            )
+        if "pseudo_relevance" in record:
+            pseudo_relevance_all = list(record["pseudo_relevance"])
+            selected_values = [float(pseudo_relevance_all[item_index]) for item_index in selected_indices]
+            selected_values.extend([-1.0 for _ in roi_crop_paths])
+            item["pseudo_relevance"] = torch.tensor(
+                selected_values,
+                dtype=torch.float32,
+            )
+        item["meta"]["roi_num_crops"] = len(roi_crop_paths)
+        return item
 
 
 def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
@@ -488,6 +1096,24 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
     report_titles: list[str] = []
     img_nums: list[int] = []
     metas: list[dict[str, Any]] = []
+    has_instance_types = any("instance_types" in item for item in batch)
+    has_pseudo_region_labels = any("pseudo_region_labels" in item for item in batch)
+    has_pseudo_relevance = any("pseudo_relevance" in item for item in batch)
+    has_structured = any("structured_categorical" in item for item in batch)
+    instance_types = torch.zeros((batch_size, max_num_instances), dtype=torch.long) if has_instance_types else None
+    pseudo_region_labels = torch.full((batch_size, max_num_instances), -100, dtype=torch.long) if has_pseudo_region_labels else None
+    pseudo_relevance = torch.full((batch_size, max_num_instances), -1.0, dtype=torch.float32) if has_pseudo_relevance else None
+    structured_categorical = None
+    structured_numeric = None
+    structured_mask = None
+    if has_structured:
+        first_structured = next(item for item in batch if "structured_categorical" in item)
+        cat_dim = int(first_structured["structured_categorical"].shape[0])
+        numeric_dim = int(first_structured["structured_numeric"].shape[0])
+        mask_dim = int(first_structured["structured_mask"].shape[0])
+        structured_categorical = torch.zeros((batch_size, cat_dim), dtype=torch.long)
+        structured_numeric = torch.zeros((batch_size, numeric_dim), dtype=torch.float32)
+        structured_mask = torch.zeros((batch_size, mask_dim), dtype=torch.float32)
 
     for batch_index, item in enumerate(batch):
         num_instances = item["images"].shape[0]
@@ -499,13 +1125,25 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         report_titles.append(item["report_title"])
         img_nums.append(item["img_num"])
         metas.append(item["meta"])
+        if instance_types is not None and "instance_types" in item:
+            instance_types[batch_index, :num_instances] = item["instance_types"]
+        if pseudo_region_labels is not None and "pseudo_region_labels" in item:
+            pseudo_region_labels[batch_index, :num_instances] = item["pseudo_region_labels"]
+        if pseudo_relevance is not None and "pseudo_relevance" in item:
+            pseudo_relevance[batch_index, :num_instances] = item["pseudo_relevance"]
+        if structured_categorical is not None and "structured_categorical" in item:
+            structured_categorical[batch_index] = item["structured_categorical"]
+        if structured_numeric is not None and "structured_numeric" in item:
+            structured_numeric[batch_index] = item["structured_numeric"]
+        if structured_mask is not None and "structured_mask" in item:
+            structured_mask[batch_index] = item["structured_mask"]
 
     if labels[0].ndim == 0:
         labels_tensor = torch.stack(labels, dim=0).long()
     else:
         labels_tensor = torch.stack(labels, dim=0).float()
 
-    return {
+    collated = {
         "images": images,
         "mask": mask,
         "labels": labels_tensor,
@@ -515,6 +1153,17 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "img_nums": img_nums,
         "metas": metas,
     }
+    if pseudo_region_labels is not None:
+        collated["pseudo_region_labels"] = pseudo_region_labels
+    if pseudo_relevance is not None:
+        collated["pseudo_relevance"] = pseudo_relevance
+    if instance_types is not None:
+        collated["instance_types"] = instance_types
+    if structured_categorical is not None and structured_numeric is not None and structured_mask is not None:
+        collated["structured_categorical"] = structured_categorical
+        collated["structured_numeric"] = structured_numeric
+        collated["structured_mask"] = structured_mask
+    return collated
 
 
 class InstanceAwareBatchSampler(Sampler[list[int]]):
@@ -531,7 +1180,7 @@ class InstanceAwareBatchSampler(Sampler[list[int]]):
         seed: int,
     ) -> None:
         self.records = records
-        self.max_instances_per_bag = max(1, int(max_instances_per_bag))
+        self.max_instances_per_bag = int(max_instances_per_bag)
         self.min_instances_per_bag = max(1, int(min_instances_per_bag))
         self.batch_size = max(1, int(batch_size))
         self.max_instances_per_batch = max(1, int(max_instances_per_batch))
@@ -543,9 +1192,21 @@ class InstanceAwareBatchSampler(Sampler[list[int]]):
         for record in self.records:
             num_instances = len(record.get("image_paths", []))
             num_instances = max(1, num_instances)
-            num_instances = min(num_instances, self.max_instances_per_bag)
+            if self.max_instances_per_bag > 0:
+                num_instances = min(num_instances, self.max_instances_per_bag)
             num_instances = max(num_instances, self.min_instances_per_bag)
             self.instance_counts.append(num_instances)
+
+    def state_dict(self) -> dict[str, int]:
+        return {
+            "seed": self.seed,
+            "iter_count": self.iter_count,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if not isinstance(state, dict):
+            return
+        self.iter_count = max(0, int(state.get("iter_count", self.iter_count)))
 
     def __iter__(self):
         indices = list(range(len(self.records)))

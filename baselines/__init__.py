@@ -1,5 +1,4 @@
-from .colon_baseline import ColonoscopyMILBaseline
-from .gastro_baseline import (
+from .task1 import (
     GASTRO_BASELINE_CLASS_REGISTRY,
     GASTRO_BASELINE_MODEL_NAMES,
     GastroAttentionMILBaseline,
@@ -21,5 +20,4 @@ __all__ = [
     "GastroTransformerMILBaseline",
     "GastroTopKMILBaseline",
     "build_gastro_baseline",
-    "ColonoscopyMILBaseline",
 ]
