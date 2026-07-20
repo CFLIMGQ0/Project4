@@ -285,7 +285,126 @@ models:
     structured_gate_l1_weight: 0.001
     structured_fields:
       - reportTitle
+      - age
+      - sex
       - operationValue
+
+  exp8_mm_struct_late_gate:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    structured_field_embed_dim: 64
+    structured_dropout: 0.2
+    modality_dropout: 0.15
+    structured_gate_l1_weight: 0.001
+    structured_fields:
+      - reportTitle
+      - age
+      - sex
+      - operationValue
+
+  exp8_mm_label_proto_graph:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    prototype_dropout: 0.1
+    prototype_mix: 0.35
+    graph_prior_mix: 0.3
+    proto_align_weight: 0.02
+    graph_prior_weight: 0.001
+
+  exp8_mm_text_contrast_distill:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    contrast_temperature: 0.07
+    text_itc_weight: 0.1
+    text_align_weight: 0.05
+
+  exp8_mm_watch_cross_attn:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    image_aux_weight: 0.5
+
+  # TASK3主模型：除文本编码器改为TextCNN外，其余结构参数与最终模型一致。
+  exp8_mm_watch_cross_attn_textcnn:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    image_aux_weight: 0.0
+
+  exp8_mm_text_guided_top64_align:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    image_aux_weight: 0.5
+    text_align_weight: 0.02
+    attention_sparse_weight: 0.001
+    consistency_weight: 0.05
 
   mamba_mil:
     backbone_name: convnext_tiny

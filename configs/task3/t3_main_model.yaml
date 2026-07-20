@@ -1,0 +1,135 @@
+experiment_name: t3_main_model
+seed: 2026
+folds: 5
+selection_alias: best_macro_f1
+
+paths:
+  source_csv: /home/Lim/Project4/datasets/task_data/task2/gastro_multilabel_task_datalist.csv
+  dataset_root: /home/Lim/Project4/datasets/main_data
+  output_dir: /home/Lim/Project4/outputs/train_runs/task3/t3_main_model
+
+datasets:
+  regular_white_light:
+    display_name: 常规白光胃镜
+    report_titles:
+      - 无痛胃镜检查报告
+      - 胃镜检查报告
+      - 一诊疗无痛胃镜报告
+      - 职工体检胃镜(无痛)报告
+      - 急诊胃镜下取异物报告
+  chromoscopic:
+    display_name: 染色胃镜
+    report_titles:
+      - 放大染色胃镜精查报告
+      - 无痛胃镜(含色素内镜)报告
+      - 国际部无痛胃镜检查（含色素内镜）报告
+      - 国际部胃镜检查（含色素内镜）报告
+  surgical:
+    display_name: 手术胃镜
+    report_titles:
+      - 胃镜手术(住院)报告
+      - 胃镜下切除手术报告
+      - 胃镜下其他手术报告
+      - 急诊胃镜报告
+  ultrasound:
+    display_name: 超声胃镜
+    report_titles:
+      - 超声胃镜检查报告
+      - 无痛超声胃镜报告
+
+text:
+  input_field: watch
+  forbidden_input_field: watchResult
+  mask_answer_terms: true
+  vocab_size: 8192
+  token_embed_dim: 128
+  max_length: 128
+  textcnn_kernel_sizes: [2, 3, 4]
+
+# 除文本编码器改为TextCNN外，以下参数固定为论文最终模型设置。
+model:
+  model_name: exp8_mm_watch_cross_attn_textcnn
+  params:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    image_aux_weight: 0.0
+
+training:
+  image_size: 224
+  max_epochs: 30
+  patience: 30
+  num_workers: 2
+  pretrained: true
+  run_test: true
+  run_overrides:
+    batch_size: 1
+    eval_batch_size: 1
+    train_max_instances: 64
+    eval_max_instances: 64
+    train_max_batch_instances: 128
+    eval_max_batch_instances: 128
+    pin_memory: true
+    persistent_workers: false
+    loader_prefetch_factor: 1
+    image_cache_mode: disk
+    image_cache_scope: shared
+    image_cache_dir: /home/Lim/Project4/datasets/image_cache
+    image_cache_warmup: false
+    memory_cache_size: 0
+    random_instance_dropout: 0.0
+    optimizer_name: adamw
+    lr: 0.00002
+    weight_decay: 0.02
+    warmup_ratio: 0.2
+    grad_accum_steps: 4
+    amp: true
+    topk_evidence: 5
+    loss_name: asymmetric
+    monitor_metric: val_loss
+    monitor_mode: min
+    train_sampling_strategy: uniform
+    eval_sampling_strategy: uniform
+    modality_level: report_assist
+    modality_fields: image+masked_watch
+    inference_inputs: image+masked_watch
+    leakage_note: TASK3仅输入类别名称掩码后的watch，不输入watchResult。
+
+class_balance:
+  enabled: true
+  apply_to: train_only
+  mode: multilabel_minority_oversample
+  target_strategy: per_label_majority
+  max_repeat_per_bag: 30
+  max_added_records: 10000
+  allow_overshoot_ratio: 0.05
+  top_candidate_pool: 32
+  candidate_sample_size: 256
+  prefer_multi_tail_positive: true
+  label_names:
+    - label_esophageal_smt
+    - label_esophageal_mucosal_or_tumor
+    - label_gastritis
+  tail_labels: []
+  report_filename: class_balance_report.json
+
+metrics:
+  - macro_f1
+  - micro_f1
+  - macro_roc_auc
+  - macro_pr_auc
+  - subset_accuracy
+  - hamming_loss
+  - kappa

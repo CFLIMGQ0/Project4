@@ -45,6 +45,33 @@ STRUCTURED_REPORT_ALIASES = {
     "hp": ("hp", "hp_status"),
     "operationValue": ("operationValue", "openationValue", "operation_value"),
 }
+TEXT_FIELD_NAMES = (
+    "reportTitle",
+    "age",
+    "sex",
+    "hp",
+    "operationValue",
+    "specimen",
+    "score",
+    "suggest",
+    "watch",
+)
+TEXT_REPORT_ALIASES = {
+    "reportTitle": ("reportTitle", "report_title"),
+    "age": ("age",),
+    "sex": ("sex",),
+    "hp": ("hp", "hp_status"),
+    "operationValue": ("operationValue", "openationValue", "operation_value"),
+    "specimen": ("specimen",),
+    "score": ("score",),
+    "suggest": ("suggest", "suggestion"),
+    "watch": ("watch", "watch_text"),
+}
+TEXT_TOKEN_VOCAB_SIZE = 8192
+TEXT_TOKEN_MAX_LENGTH = 128
+TEXT_SAFE_FIELDS = ("reportTitle", "hp", "operationValue", "specimen", "score")
+TEXT_WATCH_FIELDS = ("watch",)
+TEXT_GUIDED_FIELDS = ("reportTitle", "age", "sex", "hp", "operationValue", "specimen", "score")
 
 
 def _iter_progress(iterable, total: int | None = None, desc: str = "处理中"):
@@ -75,6 +102,57 @@ def _structured_row_value(row: dict[str, Any], field_name: str) -> str:
             if value:
                 return value
     return ""
+
+
+def _report_row_value(row: dict[str, Any], field_name: str) -> str:
+    for alias in TEXT_REPORT_ALIASES[field_name]:
+        if alias in row:
+            value = _normalize_structured_value(row.get(alias, ""))
+            if value:
+                return value
+    return ""
+
+
+def _text_raw_from_row(row: dict[str, Any]) -> dict[str, str]:
+    return {field_name: _report_row_value(row, field_name) for field_name in TEXT_FIELD_NAMES}
+
+
+def _hash_text_token(token: str, *, vocab_size: int = TEXT_TOKEN_VOCAB_SIZE) -> int:
+    digest = hashlib.sha1(token.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="little", signed=False) % (int(vocab_size) - 1) + 1
+
+
+def _tokenize_text_value(value: Any) -> list[str]:
+    text = _normalize_structured_value(value).lower()
+    if not text:
+        return []
+    return re.findall(r"[\u4e00-\u9fff]|[a-z0-9]+", text)
+
+
+def _encode_text_fields(
+    text_raw: dict[str, Any],
+    fields: tuple[str, ...],
+    *,
+    max_length: int = TEXT_TOKEN_MAX_LENGTH,
+    vocab_size: int = TEXT_TOKEN_VOCAB_SIZE,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    token_ids: list[int] = []
+    for field_name in fields:
+        value = text_raw.get(field_name, "")
+        for token in _tokenize_text_value(value):
+            token_ids.append(_hash_text_token(f"{field_name}:{token}", vocab_size=vocab_size))
+            if len(token_ids) >= max_length:
+                break
+        if len(token_ids) >= max_length:
+            break
+
+    ids = torch.zeros(max_length, dtype=torch.long)
+    mask = torch.zeros(max_length, dtype=torch.bool)
+    if token_ids:
+        used = token_ids[:max_length]
+        ids[: len(used)] = torch.tensor(used, dtype=torch.long)
+        mask[: len(used)] = True
+    return ids, mask
 
 
 def _parse_age_value(value: Any) -> float | None:
@@ -158,6 +236,8 @@ def build_task_records(
         watch = str(row.get("watch", "")).strip()
         specimen = str(row.get("specimen", "")).strip()
         hp = str(row.get("hp", "")).strip()
+        score = _report_row_value(row, "score")
+        suggest = _report_row_value(row, "suggest")
         img_num = to_int(row.get("img_num", 0))
         structured_raw = {
             "reportTitle": report_title,
@@ -166,6 +246,17 @@ def build_task_records(
             "hp": hp or _structured_row_value(row, "hp"),
             "operationValue": _structured_row_value(row, "operationValue"),
         }
+        text_raw = _text_raw_from_row(row)
+        text_raw.update(
+            {
+                "reportTitle": report_title,
+                "hp": hp or text_raw.get("hp", ""),
+                "specimen": specimen,
+                "score": score,
+                "suggest": suggest,
+                "watch": watch,
+            }
+        )
 
         resolved_exam_dir, _ = resolve_exam_dir(exam_dir, dataset_root=dataset_root)
 
@@ -185,10 +276,13 @@ def build_task_records(
                 "watch": watch,
                 "specimen": specimen,
                 "hp": hp,
+                "score": score,
+                "suggest": suggest,
                 "age": structured_raw["age"],
                 "sex": structured_raw["sex"],
                 "operation_value": structured_raw["operationValue"],
                 "structured_raw": dict(structured_raw),
+                "text_raw": dict(text_raw),
                 "img_num": img_num,
                 "image_paths": image_paths,
                 "labels": labels,
@@ -215,10 +309,13 @@ def build_task_records(
                     "watch": watch,
                     "specimen": specimen,
                     "hp": hp,
+                    "score": score,
+                    "suggest": suggest,
                     "age": structured_raw["age"],
                     "sex": structured_raw["sex"],
                     "operation_value": structured_raw["operationValue"],
                     "structured_raw": dict(structured_raw),
+                    "text_raw": dict(text_raw),
                     "img_num": img_num,
                     "image_paths": image_paths,
                     "label": label,
@@ -320,6 +417,9 @@ def enrich_records_with_report_fields(
         raw_payload = dict(record.get("structured_raw", {}))
         for field_name in STRUCTURED_FIELD_NAMES:
             raw_payload.setdefault(field_name, "")
+        text_payload = dict(record.get("text_raw", {}))
+        for field_name in TEXT_FIELD_NAMES:
+            text_payload.setdefault(field_name, "")
 
         row = row_map.get(str(record.get("exam_dir", "")).strip())
         if row is None:
@@ -336,11 +436,24 @@ def enrich_records_with_report_fields(
                     raw_payload[field_name] = current_value
                     continue
                 raw_payload[field_name] = _structured_row_value(row, field_name)
+            for field_name in TEXT_FIELD_NAMES:
+                current_value = _normalize_structured_value(text_payload.get(field_name, ""))
+                if current_value:
+                    text_payload[field_name] = current_value
+                    continue
+                text_payload[field_name] = _report_row_value(row, field_name)
 
         record["structured_raw"] = raw_payload
+        record["text_raw"] = text_payload
         record["age"] = raw_payload.get("age", "")
         record["sex"] = raw_payload.get("sex", "")
         record["operation_value"] = raw_payload.get("operationValue", "")
+        record["score"] = text_payload.get("score", "")
+        record["suggest"] = text_payload.get("suggest", "")
+        if text_payload.get("specimen", "") and not record.get("specimen"):
+            record["specimen"] = text_payload["specimen"]
+        if text_payload.get("watch", "") and not record.get("watch"):
+            record["watch"] = text_payload["watch"]
         if raw_payload.get("hp", "") and not record.get("hp"):
             record["hp"] = raw_payload["hp"]
 
@@ -746,6 +859,22 @@ class MILBagDataset(Dataset):
             torch.tensor(field_mask, dtype=torch.float32),
         )
 
+    def _text_tensors_for_record(self, record: dict[str, Any]) -> dict[str, torch.Tensor] | None:
+        text_raw = record.get("text_raw")
+        if not isinstance(text_raw, dict):
+            return None
+        text_ids, text_mask = _encode_text_fields(text_raw, TEXT_SAFE_FIELDS)
+        watch_ids, watch_mask = _encode_text_fields(text_raw, TEXT_WATCH_FIELDS)
+        guided_ids, guided_mask = _encode_text_fields(text_raw, TEXT_GUIDED_FIELDS)
+        return {
+            "text_token_ids": text_ids,
+            "text_token_mask": text_mask,
+            "watch_token_ids": watch_ids,
+            "watch_token_mask": watch_mask,
+            "guided_text_token_ids": guided_ids,
+            "guided_text_token_mask": guided_mask,
+        }
+
     def __len__(self) -> int:
         return len(self.records)
 
@@ -1058,6 +1187,9 @@ class MILBagDataset(Dataset):
             item["structured_categorical"] = structured_categorical
             item["structured_numeric"] = structured_numeric
             item["structured_mask"] = structured_mask
+        text_tensors = self._text_tensors_for_record(record)
+        if text_tensors is not None:
+            item.update(text_tensors)
         if self.roi_enabled and self.roi_max_crops_per_bag > 0:
             instance_types = [0 for _ in selected_indices]
             instance_types.extend([1 for _ in roi_crop_paths])
@@ -1100,6 +1232,18 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
     has_pseudo_region_labels = any("pseudo_region_labels" in item for item in batch)
     has_pseudo_relevance = any("pseudo_relevance" in item for item in batch)
     has_structured = any("structured_categorical" in item for item in batch)
+    text_channels = (
+        ("text_token_ids", "text_token_mask"),
+        ("watch_token_ids", "watch_token_mask"),
+        ("guided_text_token_ids", "guided_text_token_mask"),
+    )
+    text_batches: dict[str, torch.Tensor] = {}
+    for ids_key, mask_key in text_channels:
+        if any(ids_key in item for item in batch):
+            first_text = next(item for item in batch if ids_key in item)
+            text_len = int(first_text[ids_key].shape[0])
+            text_batches[ids_key] = torch.zeros((batch_size, text_len), dtype=torch.long)
+            text_batches[mask_key] = torch.zeros((batch_size, text_len), dtype=torch.bool)
     instance_types = torch.zeros((batch_size, max_num_instances), dtype=torch.long) if has_instance_types else None
     pseudo_region_labels = torch.full((batch_size, max_num_instances), -100, dtype=torch.long) if has_pseudo_region_labels else None
     pseudo_relevance = torch.full((batch_size, max_num_instances), -1.0, dtype=torch.float32) if has_pseudo_relevance else None
@@ -1137,6 +1281,10 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
             structured_numeric[batch_index] = item["structured_numeric"]
         if structured_mask is not None and "structured_mask" in item:
             structured_mask[batch_index] = item["structured_mask"]
+        for ids_key, mask_key in text_channels:
+            if ids_key in text_batches and ids_key in item:
+                text_batches[ids_key][batch_index] = item[ids_key]
+                text_batches[mask_key][batch_index] = item[mask_key]
 
     if labels[0].ndim == 0:
         labels_tensor = torch.stack(labels, dim=0).long()
@@ -1163,6 +1311,7 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         collated["structured_categorical"] = structured_categorical
         collated["structured_numeric"] = structured_numeric
         collated["structured_mask"] = structured_mask
+    collated.update(text_batches)
     return collated
 
 

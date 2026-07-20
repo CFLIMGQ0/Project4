@@ -6,28 +6,39 @@
 
 ## 当前默认落地方案
 
-当前 `configs/task2/train.yaml` 已将 `exp_8` 默认训练入口切换为 `train_007_exp8_mm_ablation_title_operation` 对应的最佳结构化短字段方案：
-
-```text
-exp8_structured_late_gate_mil
-image + reportTitle + operationValue
-```
-
-也就是说，直接在 `src` 目录运行：
+当前 `configs/task2/train.yaml` 已开启 `auto_exp_8: true`。也就是说，直接在 `src` 目录运行：
 
 ```bash
 python train.py
 ```
 
-默认不再批量运行 `exp_8_mm_ablation` 的 17 组字段消融，而是训练单个 `exp_8` 模型。该模型复用 `train_007_exp8_mm_ablation_title_operation` 的关键设置：64 张原图、`label_hypergraph`、label-wise gated late fusion、`structured_dropout=0.2`、`modality_dropout=0.15`、`structured_gate_l1_weight=0.001`、`seed=2026`。
+会一键批量运行 `exp_8` 五个主实验：
 
-对应历史结果为：
+```text
+exp8_mm_struct_late_gate
+exp8_mm_label_proto_graph
+exp8_mm_text_contrast_distill
+exp8_mm_watch_cross_attn
+exp8_mm_text_guided_top64_align
+```
+
+其中第一个结构化 late-gate 实验使用 `exp_8_mm_ablation` 中非置乱正式候选最优的字段组合：
+
+```text
+image + reportTitle + age + sex + operationValue
+```
+
+五个实验都使用 64 张原图作为图像底座，不把 ROI 作为本轮变量。当前默认不再批量运行 `exp_8_mm_ablation` 的 17 组字段消融；如需重跑字段消融，需要把 `auto_exp_8` 改为 `false`，再把 `auto_exp_8_mm_ablation` 改为 `true`。
+
+`exp_8_mm_ablation` 中按 `macro_f1` 最高的是 `train_017_exp8_mm_ablation_shuffle_operation_train`，但它属于置乱审计实验，不适合作为正式 `exp_8` 默认输入。非置乱正式候选中，`train_011_exp8_mm_ablation_all_without_hp` 表现最好，因此当前将其固化为 `exp_8` 默认结构化 late-gate 配置。
 
 | 来源实验 | 输入 | macro_f1 | micro_f1 | best_epoch | 说明 |
 |---|---|---:|---:|---:|---|
-| `train_007_exp8_mm_ablation_title_operation` | image + `reportTitle` + `operationValue` | 0.8841 | 0.8824 | 15 | 当前 exp_8 默认复用的最佳字段组合 |
+| `train_001_exp8_mm_ablation_image_baseline` | image | 0.8719 | 0.8701 | 26 | 结构化字段消融的图像基线 |
+| `train_011_exp8_mm_ablation_all_without_hp` | image + `reportTitle` + `age` + `sex` + `operationValue` | 0.8823 | 0.8800 | 10 | 当前 exp_8 结构化 late-gate 主实验复用的非置乱正式候选 |
+| `train_017_exp8_mm_ablation_shuffle_operation_train` | image + 全字段，训练/验证/测试置乱 `operationValue` | 0.8829 | 0.8810 | 10 | 审计实验，不作为正式默认输入 |
 
-注意：`reportTitle` 和 `operationValue` 仍属于流程相关字段，适合作为当前性能最优的 `exp_8` 主模型配置，但论文表述中仍应说明其检查路径代理风险。
+注意：`reportTitle` 和 `operationValue` 仍属于流程相关字段，适合作为当前性能最优的 `exp_8` 主模型配置，但论文表述中必须说明其检查路径代理风险。若需要最保守的低风险可部署结论，应单独汇报 `image + age + sex`，不要把流程字段收益解释成纯图像证据收益。
 
 ## 一、基础设置
 
@@ -48,7 +59,7 @@ python train.py
 
 ```text
 outputs/train_runs/task2/exp_8/
-└── train_007_exp8_mm_ablation_title_operation/
+└── train_011_exp8_mm_ablation_all_without_hp/
     ├── config.yaml
     ├── log.csv
     ├── test_result.csv
@@ -58,7 +69,7 @@ outputs/train_runs/task2/exp_8/
     └── checkpoints/
 ```
 
-该目录名固定复用原 `exp_8_mm_ablation` 第 7 组实验名，便于把当前 `exp_8` 主实验和历史最优字段组合对应起来。每个 `train_dir` 必须保存 `config.yaml`、`log.csv`、`test_result.csv`、`test_report.csv`、`checkpoints/` 和多模态字段审计文件。
+该目录名固定复用原 `exp_8_mm_ablation` 第 11 组实验名，便于把当前 `exp_8` 主实验和非置乱正式候选最优字段组合对应起来。每个 `train_dir` 必须保存 `config.yaml`、`log.csv`、`test_result.csv`、`test_report.csv`、`checkpoints/` 和多模态字段审计文件。
 
 ### 1.2 可用模态与当前代码现状
 
@@ -121,19 +132,27 @@ leakage_note: 中文说明
 
 ### 3.1 核心思路
 
-在 `long_mil` 图像分支之外加入诊断前结构化信息，使用 label-wise gate 控制每个标签对结构化信息的依赖。这个实验风险最低，适合作为 `exp_8` 的正式多模态基线。
+在 `long_mil` 图像分支之外加入结构化短字段，使用 label-wise gate 控制每个标签对结构化信息的依赖。该实验分为保守低风险口径和当前性能候选口径：保守口径只使用 `age`、`sex` 等低风险字段；当前 `exp_8` 默认口径根据 `exp_8_mm_ablation` 结果加入 `reportTitle` 和 `operationValue`，但必须标注流程字段风险。
 
 ### 3.2 输入字段
 
-严格版第一阶段只使用低泄漏字段：
+保守低风险版使用：
 
 | 字段 | 处理方式 |
 |---|---|
-| `reportTitle` | 简单文本类别 embedding，不做完整诊断文本解析 |
 | `age` | 连续变量标准化，缺失值置 0，同时加缺失 mask |
 | `sex` | embedding，缺失单独一类 |
 
-不使用 `hp`、`operationValue`、`specimen`、`score`、`suggest`、`watch`、`watchResult`。
+当前 `exp_8` 默认性能候选使用：
+
+| 字段 | 处理方式 | 风险说明 |
+|---|---|---|
+| `reportTitle` | 简单文本类别 embedding，不做完整诊断文本解析 | 可能携带检查类型/路径先验 |
+| `age` | 连续变量标准化，缺失值置 0，同时加缺失 mask | 低风险人口学字段 |
+| `sex` | embedding，缺失单独一类 | 低风险人口学字段 |
+| `operationValue` | 类别 embedding，低频类别合并 | 可能携带操作路径或术式选择代理信息 |
+
+当前默认不使用 `hp`、`specimen`、`score`、`suggest`、`watch`、`watchResult`。其中 `watchResult` 是标签来源，始终禁止作为模型输入。
 
 ### 3.3 模型结构
 
@@ -178,6 +197,7 @@ multimodal:
     - reportTitle
     - age
     - sex
+    - operationValue
   modality_level: strict_deploy
 ```
 

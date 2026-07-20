@@ -1,0 +1,50 @@
+experiment_name: exp10_text_classification
+seed: 2026
+
+paths:
+  data_csv: /home/Lim/Project4/datasets/task_data/task2/gastro_multilabel_task_datalist.csv
+  output_dir: /home/Lim/Project4/outputs/train_runs/task2/exp10_text_classification
+
+data:
+  # 正式输入固定为医生书写的内镜所见；watchResult 是标签来源，严禁输入模型。
+  text_field: watch
+  forbidden_input_fields:
+    - watchResult
+  label_names:
+    - label_esophageal_smt
+    - label_esophageal_mucosal_or_tumor
+    - label_gastritis
+  split_ratio: [0.6, 0.2, 0.2]
+  group_by_patient: true
+  mask_token: MASKTARGET
+  max_length: 128
+  vocab_size: 8192
+  hash_vocab_size: 8192
+  min_token_frequency: 1
+
+training:
+  batch_size: 64
+  num_workers: 2
+  max_epochs: 50
+  patience: 8
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  threshold_grid: [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
+
+model:
+  token_embed_dim: 128
+  encoder_dim: 512
+  mlp_hidden_dim: 256
+  dropout: 0.2
+  textcnn_kernel_sizes: [2, 3, 4]
+  rnn_hidden_dim: 256
+  transformer_layers: 2
+  transformer_heads: 4
+
+# 固定五种文本编码器；它们共用相同的 MLP 三标签分类头和训练评估流程。
+models:
+  - hashed_mean_encoder
+  - vocab_attention_encoder
+  - textcnn_encoder
+  - bigru_encoder
+  - transformer_encoder

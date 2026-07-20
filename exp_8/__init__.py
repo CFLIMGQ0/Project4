@@ -1,13 +1,33 @@
 from .models import (
     EXP8_CLASS_REGISTRY,
     EXP8_MODEL_NAMES,
+    Exp8LabelProtoGraphLongMILModel,
     Exp8StructuredLateGateMILModel,
+    Exp8StructuredLateGateLongMILModel,
+    Exp8TextContrastDistillLongMILModel,
+    Exp8TextGuidedTop64AlignMILModel,
+    Exp8WatchCrossAttentionLongMILModel,
+    Exp8WatchCrossAttentionTextCNNLongMILModel,
+    Exp9WatchCrossAttentionNoContextModel,
+    Exp9WatchCrossAttentionNoGateLongMILModel,
+    Exp9WatchNoTextLongMILModel,
+    Exp9WatchPooledLateFusionLongMILModel,
     build_exp8_model,
 )
 
 __all__ = [
     "EXP8_CLASS_REGISTRY",
     "EXP8_MODEL_NAMES",
+    "Exp8LabelProtoGraphLongMILModel",
     "Exp8StructuredLateGateMILModel",
+    "Exp8StructuredLateGateLongMILModel",
+    "Exp8TextContrastDistillLongMILModel",
+    "Exp8TextGuidedTop64AlignMILModel",
+    "Exp8WatchCrossAttentionLongMILModel",
+    "Exp8WatchCrossAttentionTextCNNLongMILModel",
+    "Exp9WatchCrossAttentionNoContextModel",
+    "Exp9WatchCrossAttentionNoGateLongMILModel",
+    "Exp9WatchNoTextLongMILModel",
+    "Exp9WatchPooledLateFusionLongMILModel",
     "build_exp8_model",
 ]

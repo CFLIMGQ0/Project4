@@ -300,6 +300,17 @@ def normalize_entry(raw: dict[str, Any], *, inherit_run_from_source: bool) -> di
     }
 
 
+def apply_global_run_overrides(
+    entries: list[dict[str, Any]],
+    global_overrides: dict[str, Any],
+) -> None:
+    for entry in entries:
+        run_overrides = dict(entry.get("run_overrides", {}))
+        run_overrides.update(global_overrides)
+        run_overrides.pop("seed", None)
+        entry["run_overrides"] = run_overrides
+
+
 def load_entries(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     inherit_run_from_source = bool(cfg.get("inherit_run_from_source", True))
     table2 = [normalize_entry(item, inherit_run_from_source=inherit_run_from_source) for item in cfg.get("table2", {}).get("models", [])]
@@ -331,6 +342,96 @@ def resolve_task_csv(path_cfg: dict[str, str], train_cfg: dict[str, Any], task_n
         if candidate.is_file():
             return candidate
     raise FileNotFoundError("未找到 TASK1 datalist，可尝试先运行 scripts/task1_build_datalist.py")
+
+
+def task_records_cache_path(task_csv: Path) -> Path:
+    return task_csv.with_suffix(".records_cache.json")
+
+
+def records_cache_meta(
+    *,
+    task_csv: Path,
+    task_name: str,
+    min_instances: int,
+    dataset_root: str | None,
+) -> dict[str, Any]:
+    stat = task_csv.stat()
+    return {
+        "task_csv": str(task_csv.resolve()),
+        "task_csv_mtime_ns": int(stat.st_mtime_ns),
+        "task_csv_size": int(stat.st_size),
+        "task_name": task_name,
+        "min_instances": int(min_instances),
+        "dataset_root": str(Path(dataset_root).expanduser().resolve()) if dataset_root else "",
+    }
+
+
+def load_records_cache(cache_path: Path, expected_meta: dict[str, Any]) -> list[dict[str, Any]] | None:
+    if not cache_path.is_file():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("meta") != expected_meta:
+        return None
+    records = payload.get("records")
+    if not isinstance(records, list):
+        return None
+    return records
+
+
+def write_records_cache(cache_path: Path, meta: dict[str, Any], records: list[dict[str, Any]]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "meta": meta,
+        "num_records": len(records),
+        "records": records,
+    }
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(to_builtin_type(payload), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(cache_path)
+
+
+def load_or_build_task_records(
+    *,
+    task_csv: Path,
+    task_name: str,
+    min_instances: int,
+    dataset_root: str | None,
+    force_rebuild: bool,
+) -> list[dict[str, Any]]:
+    cache_path = task_records_cache_path(task_csv)
+    meta = records_cache_meta(
+        task_csv=task_csv,
+        task_name=task_name,
+        min_instances=min_instances,
+        dataset_root=dataset_root,
+    )
+    if not force_rebuild:
+        cached_records = load_records_cache(cache_path, meta)
+        if cached_records is not None:
+            print(f"[TASK1 5-fold] 读取样本 records 缓存：{cache_path}，样本数={len(cached_records)}")
+            return cached_records
+
+    print(
+        "[TASK1 5-fold] 未命中 records 缓存，开始从 datalist 解析样本并扫描 image_paths；"
+        "该步骤不会重新生成 datalist。"
+    )
+    records = build_task_records(
+        task_csv_path=task_csv,
+        task_name=task_name,
+        min_instances=min_instances,
+        dataset_root=dataset_root,
+    )
+    write_records_cache(cache_path, meta, records)
+    print(f"[TASK1 5-fold] 已写入样本 records 缓存：{cache_path}")
+    return records
 
 
 def label_values(record: dict[str, Any], label_names: list[str]) -> tuple[int, ...]:
@@ -709,6 +810,13 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_entries, table_entries = load_entries(cfg)
+    global_run_overrides: dict[str, Any] = {}
+    if "image_cache_warmup" in cfg:
+        global_run_overrides["image_cache_warmup"] = bool(cfg.get("image_cache_warmup", False))
+    if isinstance(cfg.get("run_overrides"), dict):
+        global_run_overrides.update(cfg["run_overrides"])
+    if global_run_overrides:
+        apply_global_run_overrides(all_entries, global_run_overrides)
     overall_metrics = list(cfg.get("metrics", {}).get("overall", []))
     label_metrics = list(cfg.get("metrics", {}).get("label_wise", []))
     selection_alias = str(cfg.get("selection_alias", "best_macro_f1")).strip()
@@ -717,11 +825,12 @@ def main() -> None:
 
     task_spec = get_task_spec("task1")
     task_csv = resolve_task_csv(path_cfg, train_cfg, "task1")
-    records = build_task_records(
-        task_csv_path=task_csv,
+    records = load_or_build_task_records(
+        task_csv=task_csv,
         task_name="task1",
         min_instances=int(train_cfg["min_instances"]),
         dataset_root=path_cfg.get("dataset_root"),
+        force_rebuild=bool(cfg.get("force_rebuild_records_cache", False)),
     )
     records = maybe_limit_records(records, max_num=max_exams_per_task, seed=seed)
     split_folds = make_stratified_folds(

@@ -16,8 +16,8 @@ train_sampling_strategy: random
 eval_sampling_strategy: uniform
 task_selection_dir_name: task_data
 train_run_dir_name: train_runs
-experiment_dir_name: exp_8
-single_run_dir_name: train_007_exp8_mm_ablation_title_operation
+experiment_dir_name: exp11_module_ablation
+single_run_dir_name: ""
 run_dir_prefix: run
 structured_min_category_count: 20
 
@@ -41,12 +41,12 @@ class_balance:
   tail_labels: []
   report_filename: class_balance_report.json
 
-# 运行模型：默认使用 exp_8 中表现最好的 train_007 配置
-# 即 exp8_structured_late_gate_mil + reportTitle + operationValue。
+# 单模型模式下默认指向 exp8_mm_watch_cross_attn；当前已开启 exp11 四模块组合消融。
+# 直接 python train.py 会批量运行 exp11_module_ablation 的10个缺失组合实验。
 enabled_models:
-  - exp8_structured_late_gate_mil
+  - exp8_mm_watch_cross_attn
 
-# 默认训练参数：对齐 train_007_exp8_mm_ablation_title_operation
+# 默认训练参数：对齐 train_011_exp8_mm_ablation_all_without_hp
 batch_size: 1
 eval_batch_size: 1
 train_max_instances: 64
@@ -74,6 +74,8 @@ monitor_metric: val_loss
 monitor_mode: min
 
 # 自动模式
+# 当前默认一键批量运行 exp11_module_ablation。
+# 其他自动模式均须保持关闭。
 auto_explore: false
 auto_baselines: false
 auto_sotas: false
@@ -85,7 +87,10 @@ auto_exp_4: false
 auto_exp_5: false
 auto_exp_6: false
 auto_exp_7: false
+auto_exp_8: false
 auto_exp_8_mm_ablation: false
+auto_exp_9_ablation: false
+auto_exp_11_module_ablation: true
 auto_exp_5_roi:
   enabled: true
   model_id: facebook/sam2.1-hiera-large

@@ -8,6 +8,8 @@ run_test: true
 skip_completed: true
 force_rerun: false
 inherit_run_from_source: true
+force_rebuild_records_cache: false
+image_cache_warmup: false
 
 metrics:
   overall:

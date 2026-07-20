@@ -6,21 +6,21 @@
 
 ## 一、结论先行
 
-### 1.1 适合优先加入的字段
+### 1.1 已完成实验后的字段建议
 
 | 字段 | 推荐级别 | 主要理由 | 建议用法 |
 |---|---|---|---|
-| `age` | 优先加入 | 对两个食管标签有中等关联，且与其他字段冗余低 | 连续数值标准化 + 缺失 mask，也可保留年龄段 embedding 做对照 |
-| `sex` | 可加入 | 与其他字段冗余低，加入成本低，但标签关联弱 | 类别 embedding，作为基础人口学字段 |
-| `hp` | 有条件加入 | 对 `label_gastritis` 极强，对两个食管标签基本无效 | 使用 label-wise gate，只允许模型按标签决定是否使用 |
+| `age` | 保留 | 单独加入提升很小，但与 `sex` 组合后 `subset_accuracy` 明显高于图像基线 | 连续数值标准化 + 缺失 mask |
+| `sex` | 保留 | 低风险、低成本，与 `age` 组合构成保守结构化基线 | 类别 embedding，缺失单独一类 |
+| `hp` | 暂不放入默认 exp_8 | `image + age + sex + hp` 未超过图像基线，也低于 `image + age + sex` | 作为胃炎专项或补充实验分析 |
 
-基础可部署结构化组合建议为：
+保守低风险结构化组合建议为：
 
 ```text
-image + age + sex + hp
+image + age + sex
 ```
 
-其中 `age` 是最值得优先验证的基础临床键，`sex` 是低成本辅助键，`hp` 是胃炎专属强字段。
+当前 `exp_8` 默认性能候选不是这个保守组合，而是 `image + reportTitle + age + sex + operationValue`。该组合来自非置乱正式候选中的最佳结果，需要和流程字段风险说明一起汇报。
 
 ### 1.2 有效但需要谨慎加入的字段
 
@@ -243,77 +243,116 @@ exp8_mm_ablation_all_shuffle_title_operation_test
 
 ## 八、最终推荐方案
 
-### 8.1 正式低风险多模态基线
+### 8.1 保守低风险多模态基线
 
-推荐作为后续多模态建模的正式主方案：
+从已完成结果看，低风险字段中 `image + age + sex` 比图像基线略有提升，而 `image + age + sex + hp` 没有带来稳定增益。因此低风险可部署基线建议使用：
 
 ```text
-image + age + sex + hp
+image + age + sex
 ```
 
 实验名：
 
 ```text
-exp8_mm_ablation_age_sex_hp
+exp8_mm_ablation_age_sex
 ```
 
-理由：
+对应结果：
 
-- `age` 对两个食管标签有中等关联，且相对独立。
-- `sex` 信号弱但低风险、低成本。
-- `hp` 对胃炎标签有明确医学意义，但需要 label-wise gate 限制其影响范围。
-- 该组合相对可部署，不直接引入检查标题和操作路径。
+| 实验名 | 输入 | macro_f1 | micro_f1 | subset_accuracy |
+|---|---|---:|---:|---:|
+| `exp8_mm_ablation_image_baseline` | image | 0.8719 | 0.8701 | 0.7478 |
+| `exp8_mm_ablation_age_sex` | image + `age` + `sex` | 0.8738 | 0.8715 | 0.7654 |
+| `exp8_mm_ablation_age_sex_hp` | image + `age` + `sex` + `hp` | 0.8713 | 0.8689 | 0.7443 |
 
-### 8.2 性能上限/谨慎方案
+`hp` 仍有明确临床意义，但在本轮训练里没有改善整体 `macro_f1`，建议作为补充实验或胃炎标签专项分析，不放入当前默认 `exp_8` 主模型。
 
-作为结构化字段性能上限和风险审计方案：
+### 8.2 当前 exp_8 默认性能候选
+
+非置乱正式候选中，表现最好的是 `all_without_hp`：
 
 ```text
-image + age + sex + hp + reportTitle + operationValue
+image + reportTitle + age + sex + operationValue
 ```
 
 实验名：
 
 ```text
-exp8_mm_ablation_all_structured
+exp8_mm_ablation_all_without_hp
 ```
 
-该方案可以用于判断结构化字段最大收益，但需要同时报告：
+对应结果：
+
+| 实验名 | 输入 | macro_f1 | micro_f1 | subset_accuracy |
+|---|---|---:|---:|---:|
+| `exp8_mm_ablation_all_structured` | image + 全部五个字段 | 0.8766 | 0.8746 | 0.7601 |
+| `exp8_mm_ablation_all_without_hp` | image + `reportTitle` + `age` + `sex` + `operationValue` | 0.8823 | 0.8800 | 0.7690 |
+| `exp8_mm_ablation_all_without_age` | image + `reportTitle` + `sex` + `hp` + `operationValue` | 0.8807 | 0.8789 | 0.7725 |
+
+因此当前 `exp_8` 默认入口已经切换为：
 
 ```text
-exp8_mm_ablation_all_without_title
-exp8_mm_ablation_all_without_operation
+exp8_structured_late_gate_mil
+structured_fields = reportTitle, age, sex, operationValue
+```
+
+需要强调：`reportTitle` 和 `operationValue` 是流程相关字段，可能携带检查路径或术式选择代理信息。它们可以作为当前性能最好的 `exp_8` 主模型配置，但不应被解释为纯图像能力提升。
+
+### 8.3 置乱审计结论
+
+本轮最高 `macro_f1` 来自：
+
+```text
+exp8_mm_ablation_shuffle_operation_train
+```
+
+该实验在训练/验证/测试中置乱 `operationValue`，属于字段依赖审计，不作为正式默认输入。它的高分说明当前收益并不完全依赖 `operationValue` 的真实取值，也提示 `reportTitle`、`age`、`sex` 或数据划分中的其他结构化分布仍可能提供较强先验。
+
+置乱审计结果应与以下实验一起汇报：
+
+```text
 exp8_mm_ablation_all_shuffle_title_test
 exp8_mm_ablation_all_shuffle_operation_test
+exp8_mm_ablation_all_shuffle_title_operation_test
+exp8_mm_ablation_shuffle_title_train
+exp8_mm_ablation_shuffle_operation_train
 ```
 
-只有在置乱后性能没有异常崩塌、分层评估没有明显流程依赖时，才考虑把 `reportTitle` 或 `operationValue` 纳入正式推理输入。
-
-### 8.3 论文或实验汇报建议
+### 8.4 论文或实验汇报建议
 
 建议最终分三类汇报：
 
 | 类型 | 模型 | 汇报定位 |
 |---|---|---|
 | image-only | `exp8_mm_ablation_image_baseline` | 基础图像模型 |
-| strict structured | `exp8_mm_ablation_age_sex_hp` | 推荐低风险多模态主结果 |
-| full structured audit | `exp8_mm_ablation_all_structured` 及置乱/去字段消融 | 结构化字段上限和泄漏审计 |
+| low-risk structured | `exp8_mm_ablation_age_sex` | 保守低风险多模态基线 |
+| exp_8 default | `exp8_mm_ablation_all_without_hp` | 当前性能最优的非置乱正式候选 |
+| structured audit | 去字段与置乱实验 | 结构化字段依赖和流程代理风险审计 |
 
-如果 `all_structured` 显著优于 `age_sex_hp`，但提升主要来自 `reportTitle` 或 `operationValue`，应在结论中写成：
+建议结论写成：
 
 ```text
-流程相关字段可以提高预测性能，但存在检查路径代理风险；正式可部署多模态模型优先采用 age、sex、hp，reportTitle 和 operationValue 作为审计字段或受限场景字段。
+低风险人口学字段只能带来小幅增益；加入 reportTitle 和 operationValue 后性能更高，但二者存在检查路径代理风险。当前 exp_8 默认采用 image + reportTitle + age + sex + operationValue 作为性能候选，同时保留 image + age + sex 作为更保守的低风险基线。
 ```
 
 ## 九、结果记录模板
 
 | 实验名 | 字段 | macro_f1 | subset_accuracy | SMT F1 | 黏膜/肿瘤 F1 | 胃炎 F1 | 主要结论 |
 |---|---|---:|---:|---:|---:|---:|---|
-| `exp8_mm_ablation_image_baseline` | image | 待填 | 待填 | 待填 | 待填 | 待填 | 图像基线 |
-| `exp8_mm_ablation_age` | image+age | 待填 | 待填 | 待填 | 待填 | 待填 | 验证年龄贡献 |
-| `exp8_mm_ablation_age_sex` | image+age+sex | 待填 | 待填 | 待填 | 待填 | 待填 | 低风险人口学 |
-| `exp8_mm_ablation_age_sex_hp` | image+age+sex+hp | 待填 | 待填 | 待填 | 待填 | 待填 | 推荐基础结构化 |
-| `exp8_mm_ablation_reportTitle` | image+reportTitle | 待填 | 待填 | 待填 | 待填 | 待填 | 标题贡献 |
-| `exp8_mm_ablation_operationValue` | image+operationValue | 待填 | 待填 | 待填 | 待填 | 待填 | 操作字段贡献 |
-| `exp8_mm_ablation_title_operation` | image+reportTitle+operationValue | 待填 | 待填 | 待填 | 待填 | 待填 | 强字段冗余 |
-| `exp8_mm_ablation_all_structured` | image+all | 待填 | 待填 | 待填 | 待填 | 待填 | 全结构化上限 |
+| `exp8_mm_ablation_image_baseline` | image | 0.8719 | 0.7478 | 0.8421 | 0.8686 | 0.9049 | 图像基线 |
+| `exp8_mm_ablation_age` | image+age | 0.8720 | 0.7513 | 0.8402 | 0.8682 | 0.9075 | 年龄单字段提升很小 |
+| `exp8_mm_ablation_age_sex` | image+age+sex | 0.8738 | 0.7654 | 0.8427 | 0.8664 | 0.9122 | 保守低风险结构化基线 |
+| `exp8_mm_ablation_age_sex_hp` | image+age+sex+hp | 0.8713 | 0.7443 | 0.8360 | 0.8661 | 0.9118 | HP 未带来整体增益 |
+| `exp8_mm_ablation_reportTitle` | image+reportTitle | 0.8773 | 0.7549 | 0.8484 | 0.8768 | 0.9068 | 标题有稳定贡献但需审计流程依赖 |
+| `exp8_mm_ablation_operationValue` | image+operationValue | 0.8757 | 0.7496 | 0.8421 | 0.8744 | 0.9107 | 操作字段有贡献但风险较高 |
+| `exp8_mm_ablation_title_operation` | image+reportTitle+operationValue | 0.8761 | 0.7619 | 0.8462 | 0.8722 | 0.9099 | 两个强字段组合未明显叠加 |
+| `exp8_mm_ablation_all_structured` | image+all | 0.8766 | 0.7601 | 0.8467 | 0.8694 | 0.9137 | 全字段不如去 HP |
+| `exp8_mm_ablation_all_without_title` | image+age+sex+hp+operationValue | 0.8788 | 0.7619 | 0.8448 | 0.8726 | 0.9191 | 去标题后仍优于全字段 |
+| `exp8_mm_ablation_all_without_operation` | image+reportTitle+age+sex+hp | 0.8761 | 0.7531 | 0.8457 | 0.8760 | 0.9067 | 去操作字段后接近全字段 |
+| `exp8_mm_ablation_all_without_hp` | image+reportTitle+age+sex+operationValue | 0.8823 | 0.7690 | 0.8489 | 0.8764 | 0.9214 | 非置乱正式候选最优，当前 exp_8 默认 |
+| `exp8_mm_ablation_all_without_age` | image+reportTitle+sex+hp+operationValue | 0.8807 | 0.7725 | 0.8566 | 0.8732 | 0.9122 | 去年龄后仍强，流程字段贡献明显 |
+| `exp8_mm_ablation_all_shuffle_title_test` | 全字段，测试置乱 reportTitle | 0.8763 | 0.7619 | 0.8467 | 0.8708 | 0.9114 | 标题测试置乱下降不明显 |
+| `exp8_mm_ablation_all_shuffle_operation_test` | 全字段，测试置乱 operationValue | 0.8747 | 0.7566 | 0.8467 | 0.8676 | 0.9099 | 操作测试置乱略降 |
+| `exp8_mm_ablation_all_shuffle_title_operation_test` | 全字段，测试同时置乱二者 | 0.8758 | 0.7601 | 0.8467 | 0.8694 | 0.9114 | 同时置乱未出现崩塌 |
+| `exp8_mm_ablation_shuffle_title_train` | 全字段，训练/验证/测试置乱 reportTitle | 0.8781 | 0.7601 | 0.8406 | 0.8758 | 0.9179 | 审计实验，不作正式输入 |
+| `exp8_mm_ablation_shuffle_operation_train` | 全字段，训练/验证/测试置乱 operationValue | 0.8829 | 0.7637 | 0.8477 | 0.8806 | 0.9204 | 最高分但属于审计实验 |

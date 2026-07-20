@@ -1,6 +1,6 @@
 # 基础参数
 task_name: task1
-gpu_ids: [0, 1, 2]
+gpu_ids: [0, 1, 2, 3]
 num_workers: 8
 seed: 42
 image_size: 224

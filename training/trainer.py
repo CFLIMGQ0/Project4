@@ -56,6 +56,7 @@ class TrainerConfig:
     resume_path: str | None
     run_test: bool
     test_result_metadata: dict[str, Any] | None = None
+    data_parallel_device_ids: list[int] | None = None
 
 
 def _is_scalar_metric(value: Any) -> bool:
@@ -196,11 +197,36 @@ class Trainer:
         self.last_confusion_matrix_path = self.run_dir / "last_confusion_matrix.png"
         self.loss_history = self._restore_loss_history()
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device_ids = self.cfg.data_parallel_device_ids
+        if device_ids:
+            device_ids = [int(device_id) for device_id in device_ids]
+            if len(device_ids) < 2:
+                raise ValueError("DataParallel 至少需要2张GPU")
+            if len(set(device_ids)) != len(device_ids):
+                raise ValueError(f"DataParallel device_ids 存在重复值: {device_ids}")
+            invalid_ids = [
+                device_id for device_id in device_ids
+                if device_id < 0 or device_id >= torch.cuda.device_count()
+            ]
+            if invalid_ids:
+                raise ValueError(
+                    f"DataParallel device_ids 超出可见GPU范围: {invalid_ids}，"
+                    f"可见GPU数量={torch.cuda.device_count()}"
+                )
+
+        primary_device_id = device_ids[0] if device_ids and self.cfg.use_multi_gpu else 0
+        self.device = torch.device(f"cuda:{primary_device_id}" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
 
         if self.cfg.use_multi_gpu and torch.cuda.device_count() > 1:
-            self.model = nn.DataParallel(self.model)
+            if device_ids:
+                self.model = nn.DataParallel(
+                    self.model,
+                    device_ids=device_ids,
+                    output_device=device_ids[0],
+                )
+            else:
+                self.model = nn.DataParallel(self.model)
 
         pos_weight_tensor = None
         if self.cfg.pos_weight is not None:
@@ -273,6 +299,12 @@ class Trainer:
         self._forward_accepts_structured_categorical = "structured_categorical" in forward_parameters
         self._forward_accepts_structured_numeric = "structured_numeric" in forward_parameters
         self._forward_accepts_structured_mask = "structured_mask" in forward_parameters
+        self._forward_accepts_text_token_ids = "text_token_ids" in forward_parameters
+        self._forward_accepts_text_token_mask = "text_token_mask" in forward_parameters
+        self._forward_accepts_watch_token_ids = "watch_token_ids" in forward_parameters
+        self._forward_accepts_watch_token_mask = "watch_token_mask" in forward_parameters
+        self._forward_accepts_guided_text_token_ids = "guided_text_token_ids" in forward_parameters
+        self._forward_accepts_guided_text_token_mask = "guided_text_token_mask" in forward_parameters
 
     @property
     def raw_model(self) -> nn.Module:
@@ -358,6 +390,16 @@ class Trainer:
             moved["structured_numeric"] = batch["structured_numeric"].to(self.device, non_blocking=True)
         if "structured_mask" in batch:
             moved["structured_mask"] = batch["structured_mask"].to(self.device, non_blocking=True)
+        for key in (
+            "text_token_ids",
+            "text_token_mask",
+            "watch_token_ids",
+            "watch_token_mask",
+            "guided_text_token_ids",
+            "guided_text_token_mask",
+        ):
+            if key in batch:
+                moved[key] = batch[key].to(self.device, non_blocking=True)
         return moved
 
     def _forward_model(self, batch: dict[str, Any], current_epoch: float = 0.0) -> dict[str, Any]:
@@ -381,6 +423,18 @@ class Trainer:
             kwargs["structured_numeric"] = batch["structured_numeric"]
         if self._forward_accepts_structured_mask and "structured_mask" in batch:
             kwargs["structured_mask"] = batch["structured_mask"]
+        if self._forward_accepts_text_token_ids and "text_token_ids" in batch:
+            kwargs["text_token_ids"] = batch["text_token_ids"]
+        if self._forward_accepts_text_token_mask and "text_token_mask" in batch:
+            kwargs["text_token_mask"] = batch["text_token_mask"]
+        if self._forward_accepts_watch_token_ids and "watch_token_ids" in batch:
+            kwargs["watch_token_ids"] = batch["watch_token_ids"]
+        if self._forward_accepts_watch_token_mask and "watch_token_mask" in batch:
+            kwargs["watch_token_mask"] = batch["watch_token_mask"]
+        if self._forward_accepts_guided_text_token_ids and "guided_text_token_ids" in batch:
+            kwargs["guided_text_token_ids"] = batch["guided_text_token_ids"]
+        if self._forward_accepts_guided_text_token_mask and "guided_text_token_mask" in batch:
+            kwargs["guided_text_token_mask"] = batch["guided_text_token_mask"]
         return self.model(**kwargs)
 
     def _primary_loss(

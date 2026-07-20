@@ -146,6 +146,7 @@ TRACKER_ALIAS_TO_META = {
 SERIES_TRACKER_ALIASES = tuple(TRACKER_ALIAS_TO_META.keys())
 IMAGE_CACHE_SCOPE_VALUES = {"task", "shared"}
 SHARED_IMAGE_CACHE_DIR_NAME = "shared"
+DEFAULT_CLI_TASK_NAME = "task2"
 
 AUTO_BASELINE_ALLOWED_MODEL_NAMES = tuple(
     name
@@ -186,6 +187,13 @@ AUTO_EXP7_ALLOWED_MODEL_NAMES = (
     "exp6_roi_context_64_64",
     "exp6_long_mil_128_no_roi",
 )
+AUTO_EXP8_ALLOWED_MODEL_NAMES = (
+    "exp8_mm_struct_late_gate",
+    "exp8_mm_label_proto_graph",
+    "exp8_mm_text_contrast_distill",
+    "exp8_mm_watch_cross_attn",
+    "exp8_mm_text_guided_top64_align",
+)
 AUTO_EXP8_MM_ABLATION_ALLOWED_MODEL_NAMES = (
     "exp8_mm_ablation_image_baseline",
     "exp8_mm_ablation_age",
@@ -204,6 +212,33 @@ AUTO_EXP8_MM_ABLATION_ALLOWED_MODEL_NAMES = (
     "exp8_mm_ablation_all_shuffle_title_operation_test",
     "exp8_mm_ablation_shuffle_title_train",
     "exp8_mm_ablation_shuffle_operation_train",
+)
+AUTO_EXP9_ABLATION_INSTANCE_VALUES = (16, 32, 48, 64, 80, 96)
+AUTO_EXP9_ABLATION_ALLOWED_MODEL_NAMES = tuple(
+    [f"exp9_watch_instances_{instances}" for instances in AUTO_EXP9_ABLATION_INSTANCE_VALUES]
+    + [f"exp9_watch_no_context_instances_{instances}" for instances in AUTO_EXP9_ABLATION_INSTANCE_VALUES]
+    + [
+        "exp9_watch_no_text",
+        "exp9_watch_label_graph",
+        "exp9_watch_no_cross_attn_pool_fusion",
+        "exp9_watch_cross_attn_no_gate",
+        "exp9_watch_cross_attn_no_image_aux",
+    ]
+)
+AUTO_EXP11_MODULE_ABLATION_COMBINATIONS = (
+    "none",
+    "1",
+    "2",
+    "3",
+    "4",
+    "13",
+    "14",
+    "23",
+    "24",
+    "34",
+)
+AUTO_EXP11_MODULE_ABLATION_ALLOWED_MODEL_NAMES = tuple(
+    f"exp11_module_ablation_{combo}" for combo in AUTO_EXP11_MODULE_ABLATION_COMBINATIONS
 )
 
 try:
@@ -1641,11 +1676,26 @@ def load_train_config(config_path: Path) -> dict[str, Any]:
         auto_exp7_enabled = bool(auto_exp7_raw.get("enabled", False))
     else:
         auto_exp7_enabled = bool(auto_exp7_raw)
+    auto_exp8_raw = payload.get("auto_exp_8", False)
+    if isinstance(auto_exp8_raw, dict):
+        auto_exp8_enabled = bool(auto_exp8_raw.get("enabled", False))
+    else:
+        auto_exp8_enabled = bool(auto_exp8_raw)
     auto_exp8_mm_ablation_raw = payload.get("auto_exp_8_mm_ablation", False)
     if isinstance(auto_exp8_mm_ablation_raw, dict):
         auto_exp8_mm_ablation_enabled = bool(auto_exp8_mm_ablation_raw.get("enabled", False))
     else:
         auto_exp8_mm_ablation_enabled = bool(auto_exp8_mm_ablation_raw)
+    auto_exp9_ablation_raw = payload.get("auto_exp_9_ablation", False)
+    if isinstance(auto_exp9_ablation_raw, dict):
+        auto_exp9_ablation_enabled = bool(auto_exp9_ablation_raw.get("enabled", False))
+    else:
+        auto_exp9_ablation_enabled = bool(auto_exp9_ablation_raw)
+    auto_exp11_module_ablation_raw = payload.get("auto_exp_11_module_ablation", False)
+    if isinstance(auto_exp11_module_ablation_raw, dict):
+        auto_exp11_module_ablation_enabled = bool(auto_exp11_module_ablation_raw.get("enabled", False))
+    else:
+        auto_exp11_module_ablation_enabled = bool(auto_exp11_module_ablation_raw)
     auto_exp2_skip_models = _normalize_name_list(
         payload.get("auto_exp_2_skip_models", []),
         "auto_exp_2_skip_models",
@@ -1696,7 +1746,10 @@ def load_train_config(config_path: Path) -> dict[str, Any]:
         "auto_exp_5": auto_exp5_enabled,
         "auto_exp_6": auto_exp6_enabled,
         "auto_exp_7": auto_exp7_enabled,
+        "auto_exp_8": auto_exp8_enabled,
         "auto_exp_8_mm_ablation": auto_exp8_mm_ablation_enabled,
+        "auto_exp_9_ablation": auto_exp9_ablation_enabled,
+        "auto_exp_11_module_ablation": auto_exp11_module_ablation_enabled,
         "auto_exp_5_roi": payload.get("auto_exp_5_roi", {}) or {},
         "auto_exp_6_roi": payload.get("auto_exp_6_roi", payload.get("auto_exp_5_roi", {})) or {},
         "auto_exp_7_roi": payload.get("auto_exp_7_roi", payload.get("auto_exp_6_roi", payload.get("auto_exp_5_roi", {}))) or {},
@@ -2371,6 +2424,8 @@ def _copy_balanced_record(record: dict[str, Any], source_index: int, duplicate_i
         copied["pseudo_relevance"] = list(copied["pseudo_relevance"])
     if "structured_raw" in copied:
         copied["structured_raw"] = dict(copied["structured_raw"])
+    if "text_raw" in copied:
+        copied["text_raw"] = dict(copied["text_raw"])
     if "structured_categorical" in copied:
         copied["structured_categorical"] = list(copied["structured_categorical"])
     if "structured_numeric" in copied:
@@ -4171,6 +4226,575 @@ def build_auto_exp8_mm_ablation_config(
     }
 
 
+def _build_exp8_main_entry(
+    *,
+    name: str,
+    display_name: str,
+    selected_task_name: str,
+    run_overrides: dict[str, Any],
+    metadata: dict[str, Any],
+    seed: int | None = None,
+) -> dict[str, Any]:
+    task_meta = resolve_model_task_meta(name, selected_task_name)
+    entry = {
+        "name": name,
+        "display_name": display_name,
+        "enabled": True,
+        "base_model_name": name,
+        "task_name": task_meta["task_name"],
+        "task_dir_name": task_meta["task_dir_name"],
+        "run_prefix": task_meta["run_prefix"],
+        "model_params": {},
+        "run_overrides": run_overrides,
+        "metadata": metadata,
+    }
+    if seed is not None:
+        entry["seed"] = int(seed)
+    return entry
+
+
+def _build_exp8_non_structured_run_overrides(
+    *,
+    modality_level: str,
+    modality_fields: str,
+    inference_inputs: str,
+    leakage_note: str,
+) -> dict[str, Any]:
+    run_overrides = _build_exp6_long64_run_overrides()
+    run_overrides.update(
+        {
+            "structured_fields": [],
+            "modality_level": modality_level,
+            "modality_fields": modality_fields,
+            "inference_inputs": inference_inputs,
+            "leakage_note": leakage_note,
+        }
+    )
+    return run_overrides
+
+
+def build_auto_exp8_entries(
+    *,
+    selected_task_name: str,
+    requested_names: list[str] | None = None,
+    base_seed: int | None = None,
+) -> list[dict[str, Any]]:
+    requested_name_set = set(requested_names or [])
+    specs = [
+        (
+            "exp8_mm_struct_late_gate",
+            "结构化字段 label-wise gated late fusion",
+            _build_exp8_run_overrides(
+                fields=["reportTitle", "age", "sex", "operationValue"],
+                leakage_note=(
+                    "exp_8 实验1：基于 exp_8_mm_ablation 非置乱最佳正式候选；"
+                    "使用 reportTitle、age、sex、operationValue，不使用 watchResult。"
+                    "reportTitle/operationValue 属于流程相关字段，需在论文中说明检查路径代理风险。"
+                ),
+            ),
+            {
+                "modality_level": "strict_deploy",
+                "inference_inputs": "image+structured",
+                "summary_name": "exp8_mm_struct_late_gate",
+            },
+        ),
+        (
+            "exp8_mm_label_proto_graph",
+            "固定标签文本原型 + label graph",
+            _build_exp8_non_structured_run_overrides(
+                modality_level="fixed_proto",
+                modality_fields="image+fixed_label_proto",
+                inference_inputs="image+fixed_proto",
+                leakage_note="exp_8 实验2：只使用固定标签文本原型，不输入个体报告文本或 watchResult。",
+            ),
+            {
+                "modality_level": "fixed_proto",
+                "inference_inputs": "image+fixed_proto",
+                "summary_name": "exp8_mm_label_proto_graph",
+            },
+        ),
+        (
+            "exp8_mm_text_contrast_distill",
+            "训练期图文对比蒸馏 image-only student",
+            _build_exp8_non_structured_run_overrides(
+                modality_level="train_time_distill",
+                modality_fields="image+safe_text(train_only)",
+                inference_inputs="image",
+                leakage_note="exp_8 实验3：训练期使用安全报告字段做图文对齐，测试 logits 保持 image-only；不使用 watchResult。",
+            ),
+            {
+                "modality_level": "train_time_distill",
+                "inference_inputs": "image",
+                "summary_name": "exp8_mm_text_contrast_distill",
+            },
+        ),
+        (
+            "exp8_mm_watch_cross_attn",
+            "watch 文本与图像 token cross-attention",
+            _build_exp8_non_structured_run_overrides(
+                modality_level="report_assist",
+                modality_fields="image+watch",
+                inference_inputs="image+watch",
+                leakage_note="exp_8 实验4：测试阶段输入 watch，属于报告辅助任务；不输入 watchResult。",
+            ),
+            {
+                "modality_level": "report_assist",
+                "inference_inputs": "image+watch",
+                "summary_name": "exp8_mm_watch_cross_attn",
+            },
+        ),
+        (
+            "exp8_mm_text_guided_top64_align",
+            "文本引导 64 图实例重加权 + 图文对齐",
+            _build_exp8_non_structured_run_overrides(
+                modality_level="report_assist",
+                modality_fields="image+text_guided_top64",
+                inference_inputs="image+text_guided_fields",
+                leakage_note="exp_8 实验5：使用低到中风险文本字段进行实例重加权与对齐；当前实现为训练内 64 图重加权，不使用 watchResult。",
+            ),
+            {
+                "modality_level": "report_assist",
+                "inference_inputs": "image+text_guided_fields",
+                "summary_name": "exp8_mm_text_guided_top64_align",
+            },
+        ),
+    ]
+    entries = [
+        _build_exp8_main_entry(
+            name=name,
+            display_name=display_name,
+            selected_task_name=selected_task_name,
+            run_overrides=run_overrides,
+            metadata=metadata,
+            seed=(base_seed + index if base_seed is not None else None),
+        )
+        for index, (name, display_name, run_overrides, metadata) in enumerate(specs)
+        if not requested_name_set or name in requested_name_set
+    ]
+    if requested_names:
+        missing = [name for name in requested_names if name not in AUTO_EXP8_ALLOWED_MODEL_NAMES]
+        if missing:
+            raise ValueError(f"auto_exp_8 模式下这些实验名不属于 exp_8：{missing}")
+        if not entries:
+            raise ValueError("auto_exp_8 模式下没有可运行的实验")
+    return entries
+
+
+def build_auto_exp8_config(
+    *,
+    train_cfg: dict[str, Any],
+    selected_task_name: str,
+    model_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not model_entries:
+        raise ValueError("auto_exp_8 模式下没有可运行的实验")
+    task_names = {entry["task_name"] for entry in model_entries}
+    if len(task_names) != 1:
+        raise ValueError("auto_exp_8 当前仅支持单任务批量运行")
+
+    task_meta = resolve_model_task_meta(resolve_series_entry_model_name(model_entries[0]), selected_task_name)
+    selection_alias = str(train_cfg.get("remark_metric_alias", "best_macro_f1")).strip() or "best_macro_f1"
+    selection_meta = TRACKER_ALIAS_TO_META.get(selection_alias, TRACKER_ALIAS_TO_META["best_macro_f1"])
+    return {
+        "config_path": "inline:auto_exp_8",
+        "goal": "执行 exp_8.md 中优先级前 5 个 TASK2 多模态融合实验。",
+        "task_name": task_meta["task_name"],
+        "task_dir_name": task_meta["task_dir_name"],
+        "experiment_dir_name": "exp_8",
+        "output_dir_name": "",
+        "selection_alias": selection_alias,
+        "selection_metric_name": str(selection_meta["metric_name"]),
+        "selection_mode": str(selection_meta["mode"]),
+        "result_source": "test_results",
+        "stability_filter": {
+            "enabled": True,
+            "min_epochs_trained": 10,
+            "max_final_gap": 0.05,
+            "max_val_loss_rebound_ratio": 0.25,
+        },
+        "remark": {
+            "focus": "汇总 exp_8 五个多模态主实验：结构化 late gate、固定标签原型、训练期图文蒸馏、watch cross-attention、文本引导 64 图对齐。",
+            "include_model_evaluations": True,
+            "include_stability_filter": True,
+        },
+        "models": model_entries,
+        "run_test": True,
+    }
+
+
+def _build_exp9_watch_model_params(**overrides: Any) -> dict[str, Any]:
+    params = {
+        "backbone_name": "convnext_tiny",
+        "freeze_stages": 1,
+        "feature_dim": 512,
+        "attn_dim": 256,
+        "hidden_dim": 1024,
+        "dropout": 0.2,
+        "encoder_chunk_size": 16,
+        "num_heads": 4,
+        "num_layers": 2,
+        "use_label_graph": True,
+        "label_graph_type": "label_hypergraph",
+        "label_hypergraph_edges": 2,
+        "text_vocab_size": 8192,
+        "text_embed_dim": 128,
+        "image_aux_weight": 0.5,
+    }
+    params.update(overrides)
+    return params
+
+
+def _build_exp9_watch_run_overrides(
+    *,
+    instances: int = 64,
+    modality_fields: str = "image+watch",
+    inference_inputs: str = "image+watch",
+    leakage_note: str,
+    ablation_group: str,
+) -> dict[str, Any]:
+    run_overrides = _build_exp6_no_roi_run_overrides(original_instances=int(instances))
+    run_overrides.update(
+        {
+            "structured_fields": [],
+            "modality_level": "report_assist_ablation",
+            "modality_fields": modality_fields,
+            "inference_inputs": inference_inputs,
+            "leakage_note": leakage_note,
+            "ablation_group": ablation_group,
+        }
+    )
+    return run_overrides
+
+
+def _build_exp9_watch_entry(
+    *,
+    name: str,
+    display_name: str,
+    base_model_name: str,
+    selected_task_name: str,
+    model_params: dict[str, Any],
+    run_overrides: dict[str, Any],
+    metadata: dict[str, Any],
+    seed: int | None = None,
+) -> dict[str, Any]:
+    task_meta = resolve_model_task_meta(base_model_name, selected_task_name)
+    entry = {
+        "name": name,
+        "display_name": display_name,
+        "enabled": True,
+        "base_model_name": base_model_name,
+        "task_name": task_meta["task_name"],
+        "task_dir_name": task_meta["task_dir_name"],
+        "run_prefix": task_meta["run_prefix"],
+        "model_params": model_params,
+        "run_overrides": run_overrides,
+        "metadata": metadata,
+    }
+    if seed is not None:
+        entry["seed"] = int(seed)
+    return entry
+
+
+def build_auto_exp9_ablation_entries(
+    *,
+    selected_task_name: str,
+    requested_names: list[str] | None = None,
+    base_seed: int | None = None,
+) -> list[dict[str, Any]]:
+    requested_name_set = set(requested_names or [])
+    entries: list[dict[str, Any]] = []
+    base_note = "exp_9_ablation：基于 exp8_mm_watch_cross_attn 的 watch 报告辅助模型消融；不使用 watchResult。"
+
+    def add_entry(
+        *,
+        name: str,
+        display_name: str,
+        base_model_name: str,
+        instances: int,
+        ablation_group: str,
+        modality_fields: str = "image+watch",
+        inference_inputs: str = "image+watch",
+        model_overrides: dict[str, Any] | None = None,
+        leakage_note: str | None = None,
+    ) -> None:
+        if requested_name_set and name not in requested_name_set:
+            return
+        entries.append(
+            _build_exp9_watch_entry(
+                name=name,
+                display_name=display_name,
+                base_model_name=base_model_name,
+                selected_task_name=selected_task_name,
+                model_params=_build_exp9_watch_model_params(**(model_overrides or {})),
+                run_overrides=_build_exp9_watch_run_overrides(
+                    instances=instances,
+                    modality_fields=modality_fields,
+                    inference_inputs=inference_inputs,
+                    leakage_note=leakage_note or base_note,
+                    ablation_group=ablation_group,
+                ),
+                metadata={
+                    "summary_name": name,
+                    "ablation_group": ablation_group,
+                    "instances": int(instances),
+                    "inference_inputs": inference_inputs,
+                },
+                seed=base_seed,
+            )
+        )
+
+    for instances in AUTO_EXP9_ABLATION_INSTANCE_VALUES:
+        add_entry(
+            name=f"exp9_watch_instances_{instances}",
+            display_name=f"watch cross-attn 完整模型 | {instances} 图",
+            base_model_name="exp8_mm_watch_cross_attn",
+            instances=instances,
+            ablation_group="instance_count",
+            leakage_note=f"{base_note} 图像数量消融：最多输入 {instances} 张原图。",
+        )
+
+    for instances in AUTO_EXP9_ABLATION_INSTANCE_VALUES:
+        add_entry(
+            name=f"exp9_watch_no_context_instances_{instances}",
+            display_name=f"去掉位置编码和 Transformer context | {instances} 图",
+            base_model_name="exp9_watch_no_context",
+            instances=instances,
+            ablation_group="no_position_transformer_context",
+            leakage_note=f"{base_note} 去掉位置编码和 Transformer context encoder，最多输入 {instances} 张原图。",
+        )
+
+    add_entry(
+        name="exp9_watch_no_text",
+        display_name="去掉 watch 文本，仅保留图像分支",
+        base_model_name="exp9_watch_no_text",
+        instances=64,
+        ablation_group="watch_text",
+        modality_fields="image",
+        inference_inputs="image",
+        leakage_note=f"{base_note} 去掉 watch 文本输入，用于估计 watch 文本整体贡献。",
+    )
+    add_entry(
+        name="exp9_watch_label_graph",
+        display_name="label_graph 替代 label_hypergraph",
+        base_model_name="exp8_mm_watch_cross_attn",
+        instances=64,
+        ablation_group="label_relation",
+        model_overrides={"label_graph_type": "learnable"},
+        leakage_note=f"{base_note} 将 label_hypergraph 换回普通 learnable label_graph。",
+    )
+    add_entry(
+        name="exp9_watch_no_cross_attn_pool_fusion",
+        display_name="去掉 cross-attention，改用 watch pooled late fusion",
+        base_model_name="exp9_watch_no_cross_attn_pool_fusion",
+        instances=64,
+        ablation_group="text_fusion",
+        leakage_note=f"{base_note} 去掉 label-wise cross-attention，改用 watch pooled embedding late fusion。",
+    )
+    add_entry(
+        name="exp9_watch_cross_attn_no_gate",
+        display_name="保留 cross-attention，去掉 gate",
+        base_model_name="exp9_watch_cross_attn_no_gate",
+        instances=64,
+        ablation_group="text_gate",
+        leakage_note=f"{base_note} 保留 watch cross-attention，但去掉 gate，直接注入文本表征。",
+    )
+    add_entry(
+        name="exp9_watch_cross_attn_no_image_aux",
+        display_name="去掉 image_aux 辅助损失",
+        base_model_name="exp8_mm_watch_cross_attn",
+        instances=64,
+        ablation_group="aux_loss",
+        model_overrides={"image_aux_weight": 0.0},
+        leakage_note=f"{base_note} 将 image_aux_weight 置为 0，检验图像分支辅助约束的作用。",
+    )
+
+    if requested_names:
+        missing = [name for name in requested_names if name not in AUTO_EXP9_ABLATION_ALLOWED_MODEL_NAMES]
+        if missing:
+            raise ValueError(f"auto_exp_9_ablation 模式下这些实验名不属于 exp_9_ablation：{missing}")
+        if not entries:
+            raise ValueError("auto_exp_9_ablation 模式下没有可运行的实验")
+
+    return entries
+
+
+def build_auto_exp9_ablation_config(
+    *,
+    train_cfg: dict[str, Any],
+    selected_task_name: str,
+    model_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not model_entries:
+        raise ValueError("auto_exp_9_ablation 模式下没有可运行的实验")
+    task_names = {entry["task_name"] for entry in model_entries}
+    if len(task_names) != 1:
+        raise ValueError("auto_exp_9_ablation 当前仅支持单任务批量运行")
+
+    task_meta = resolve_model_task_meta(resolve_series_entry_model_name(model_entries[0]), selected_task_name)
+    selection_alias = str(train_cfg.get("remark_metric_alias", "best_macro_f1")).strip() or "best_macro_f1"
+    selection_meta = TRACKER_ALIAS_TO_META.get(selection_alias, TRACKER_ALIAS_TO_META["best_macro_f1"])
+    return {
+        "config_path": "inline:auto_exp_9_ablation",
+        "goal": "围绕 exp8_mm_watch_cross_attn 执行 TASK2 exp_9_ablation，消融图像数量、位置编码/Transformer context、watch 文本、标签关系、文本融合、gate 与 image_aux。",
+        "task_name": task_meta["task_name"],
+        "task_dir_name": task_meta["task_dir_name"],
+        "experiment_dir_name": "exp_9_ablation",
+        "output_dir_name": "",
+        "selection_alias": selection_alias,
+        "selection_metric_name": str(selection_meta["metric_name"]),
+        "selection_mode": str(selection_meta["mode"]),
+        "result_source": "test_results",
+        "stability_filter": {
+            "enabled": True,
+            "min_epochs_trained": 10,
+            "max_final_gap": 0.05,
+            "max_val_loss_rebound_ratio": 0.25,
+        },
+        "remark": {
+            "focus": "汇总 exp_9_ablation：基于 exp8_mm_watch_cross_attn 的 17 组消融，重点比较图像数量、序列上下文、watch 文本、标签关系、文本融合方式、gate 和 image_aux。",
+            "include_model_evaluations": True,
+            "include_stability_filter": True,
+        },
+        "models": model_entries,
+        "run_test": True,
+    }
+
+
+def build_auto_exp11_module_ablation_entries(
+    *,
+    selected_task_name: str,
+    requested_names: list[str] | None = None,
+    base_seed: int | None = None,
+) -> list[dict[str, Any]]:
+    requested_name_set = set(requested_names or [])
+    entries: list[dict[str, Any]] = []
+    module_names = {
+        "1": "位置编码+上下文编码器",
+        "2": "超图学习",
+        "3": "交叉注意力",
+        "4": "门控机制",
+    }
+
+    for combo in AUTO_EXP11_MODULE_ABLATION_COMBINATIONS:
+        name = f"exp11_module_ablation_{combo}"
+        if requested_name_set and name not in requested_name_set:
+            continue
+        active_modules = set() if combo == "none" else set(combo)
+        use_m1 = "1" in active_modules
+        use_m2 = "2" in active_modules
+        use_m3 = "3" in active_modules
+        use_m4 = "4" in active_modules
+        fusion_mode = "cross_attention" if use_m3 else ("pooled" if use_m4 else "none")
+        uses_watch = fusion_mode != "none"
+        data_parallel_device_ids = [0, 1, 2]
+        display_modules = "Baseline" if combo == "none" else " + ".join(
+            f"M{module_id}" for module_id in combo
+        )
+        active_description = "、".join(module_names[module_id] for module_id in combo) if combo != "none" else "无新增模块"
+        model_params = _build_exp9_watch_model_params(
+            use_context_encoder=use_m1,
+            label_graph_type="label_hypergraph" if use_m2 else "learnable",
+            watch_fusion_mode=fusion_mode,
+            use_text_gate=use_m4,
+            image_aux_weight=0.5,
+        )
+        run_overrides = _build_exp9_watch_run_overrides(
+            instances=64,
+            modality_fields="image+watch" if uses_watch else "image",
+            inference_inputs="image+watch" if uses_watch else "image",
+            leakage_note=(
+                f"exp11_module_ablation：四模块全因子消融缺失组合 {combo}；"
+                f"启用模块为{active_description}；固定64张原图，image_aux_weight=0.5，与 exp_9 对齐。"
+            ),
+            ablation_group="module_combination",
+        )
+        run_overrides["data_parallel_device_ids"] = data_parallel_device_ids
+        run_overrides["num_workers"] = 6
+        run_overrides["loader_prefetch_factor"] = 2
+        run_overrides["persistent_workers"] = True
+        task_meta = resolve_model_task_meta("exp11_module_ablation", selected_task_name)
+        entry = {
+            "name": name,
+            "display_name": f"{display_modules} | 组合={combo}",
+            "enabled": True,
+            "base_model_name": "exp11_module_ablation",
+            "task_name": task_meta["task_name"],
+            "task_dir_name": task_meta["task_dir_name"],
+            "run_prefix": task_meta["run_prefix"],
+            "model_params": model_params,
+            "run_overrides": run_overrides,
+            "metadata": {
+                "summary_name": name,
+                "ablation_group": "module_combination",
+                "module_combo": combo,
+                "use_m1_context": use_m1,
+                "use_m2_hypergraph": use_m2,
+                "use_m3_cross_attention": use_m3,
+                "use_m4_gate": use_m4,
+                "instances": 64,
+                "gpu_count": len(data_parallel_device_ids),
+                "data_parallel_device_ids": data_parallel_device_ids,
+                "inference_inputs": "image+watch" if uses_watch else "image",
+            },
+        }
+        if base_seed is not None:
+            entry["seed"] = int(base_seed)
+        entries.append(entry)
+
+    if requested_names:
+        missing = [
+            name for name in requested_names
+            if name not in AUTO_EXP11_MODULE_ABLATION_ALLOWED_MODEL_NAMES
+        ]
+        if missing:
+            raise ValueError(f"auto_exp_11_module_ablation 模式下存在未知实验名：{missing}")
+        if not entries:
+            raise ValueError("auto_exp_11_module_ablation 模式下没有可运行的实验")
+    return entries
+
+
+def build_auto_exp11_module_ablation_config(
+    *,
+    train_cfg: dict[str, Any],
+    selected_task_name: str,
+    model_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not model_entries:
+        raise ValueError("auto_exp_11_module_ablation 模式下没有可运行的实验")
+    task_names = {entry["task_name"] for entry in model_entries}
+    if len(task_names) != 1:
+        raise ValueError("auto_exp_11_module_ablation 当前仅支持单任务批量运行")
+
+    task_meta = resolve_model_task_meta(resolve_series_entry_model_name(model_entries[0]), selected_task_name)
+    selection_alias = str(train_cfg.get("remark_metric_alias", "best_macro_f1")).strip() or "best_macro_f1"
+    selection_meta = TRACKER_ALIAS_TO_META.get(selection_alias, TRACKER_ALIAS_TO_META["best_macro_f1"])
+    return {
+        "config_path": "inline:auto_exp_11_module_ablation",
+        "goal": "完成四模块全因子消融中缺失的10个组合实验。",
+        "task_name": task_meta["task_name"],
+        "task_dir_name": task_meta["task_dir_name"],
+        "experiment_dir_name": "exp11_module_ablation",
+        "output_dir_name": "",
+        "selection_alias": selection_alias,
+        "selection_metric_name": str(selection_meta["metric_name"]),
+        "selection_mode": str(selection_meta["mode"]),
+        "result_source": "test_results",
+        "stability_filter": {
+            "enabled": True,
+            "min_epochs_trained": 10,
+            "max_final_gap": 0.05,
+            "max_val_loss_rebound_ratio": 0.25,
+        },
+        "remark": {
+            "focus": "汇总 exp11_module_ablation 的10个缺失组合，比较 M1、M2、M3、M4 的主效应与交互作用。",
+            "include_model_evaluations": True,
+            "include_stability_filter": True,
+        },
+        "models": model_entries,
+        "run_test": True,
+    }
+
+
 def resolve_run_cfg(train_cfg: dict[str, Any], model_name: str) -> dict[str, Any]:
     run_cfg = dict(train_cfg["default_run"])
     if model_name in {"full_feature_mil", "hier_full_mil", "hier_full_lg_mil", "mamba_mil"}:
@@ -4180,11 +4804,74 @@ def resolve_run_cfg(train_cfg: dict[str, Any], model_name: str) -> dict[str, Any
     elif model_name == "exp8_structured_late_gate_mil":
         run_cfg.update(
             _build_exp8_run_overrides(
-                fields=["reportTitle", "operationValue"],
-                leakage_note="结构化短字段消融；不使用 watchResult，避免最终诊断文本泄漏。",
+                fields=["reportTitle", "age", "sex", "operationValue"],
+                leakage_note=(
+                    "exp_8 默认结构化 late-gate：复用 exp_8_mm_ablation 中非置乱正式候选最优的 "
+                    "all_without_hp 字段组合；不使用 watchResult。"
+                    "reportTitle/operationValue 属于流程相关字段，需标注检查路径代理风险。"
+                ),
             )
         )
         run_cfg["seed"] = int(train_cfg.get("seed", 2026))
+    elif model_name == "exp8_mm_struct_late_gate":
+        run_cfg.update(
+            _build_exp8_run_overrides(
+                fields=["reportTitle", "age", "sex", "operationValue"],
+                leakage_note=(
+                    "exp_8 实验1：基于 exp_8_mm_ablation 非置乱最佳正式候选；"
+                    "使用 reportTitle、age、sex、operationValue，不使用 watchResult。"
+                    "reportTitle/operationValue 属于流程相关字段，需在论文中说明检查路径代理风险。"
+                ),
+            )
+        )
+    elif model_name == "exp8_mm_label_proto_graph":
+        run_cfg.update(_build_exp6_long64_run_overrides())
+        run_cfg.update(
+            {
+                "structured_fields": [],
+                "modality_level": "fixed_proto",
+                "modality_fields": "image+fixed_label_proto",
+                "inference_inputs": "image+fixed_proto",
+                "leakage_note": "exp_8 实验2：只使用固定标签文本原型，不输入个体报告文本或 watchResult。",
+            }
+        )
+    elif model_name == "exp8_mm_text_contrast_distill":
+        run_cfg.update(_build_exp6_long64_run_overrides())
+        run_cfg.update(
+            {
+                "structured_fields": [],
+                "modality_level": "train_time_distill",
+                "modality_fields": "image+safe_text(train_only)",
+                "inference_inputs": "image",
+                "leakage_note": "exp_8 实验3：训练期使用安全报告字段做图文对齐，测试 logits 保持 image-only；不使用 watchResult。",
+            }
+        )
+    elif model_name in {"exp8_mm_watch_cross_attn", "exp8_mm_watch_cross_attn_textcnn"}:
+        run_cfg.update(_build_exp6_long64_run_overrides())
+        run_cfg.update(
+            {
+                "structured_fields": [],
+                "modality_level": "report_assist",
+                "modality_fields": "image+watch",
+                "inference_inputs": "image+watch",
+                "leakage_note": (
+                    "测试阶段输入类别名称掩码后的 watch，属于报告辅助任务；不输入 watchResult。"
+                    if model_name == "exp8_mm_watch_cross_attn_textcnn"
+                    else "exp_8 实验4：测试阶段输入 watch，属于报告辅助任务；不输入 watchResult。"
+                ),
+            }
+        )
+    elif model_name == "exp8_mm_text_guided_top64_align":
+        run_cfg.update(_build_exp6_long64_run_overrides())
+        run_cfg.update(
+            {
+                "structured_fields": [],
+                "modality_level": "report_assist",
+                "modality_fields": "image+text_guided_top64",
+                "inference_inputs": "image+text_guided_fields",
+                "leakage_note": "exp_8 实验5：使用低到中风险文本字段进行实例重加权与对齐；当前实现为训练内 64 图重加权，不使用 watchResult。",
+            }
+        )
     return run_cfg
 
 
@@ -4709,9 +5396,26 @@ def build_model_bundle(
             structured_field_embed_dim=int(model_param_cfg.get("structured_field_embed_dim", 64)),
             structured_dropout=float(model_param_cfg.get("structured_dropout", 0.2)),
             modality_dropout=float(model_param_cfg.get("modality_dropout", 0.15)),
+            prototype_dropout=float(model_param_cfg.get("prototype_dropout", 0.1)),
+            prototype_mix=float(model_param_cfg.get("prototype_mix", 0.35)),
+            graph_prior_mix=float(model_param_cfg.get("graph_prior_mix", 0.3)),
+            text_vocab_size=int(model_param_cfg.get("text_vocab_size", 8192)),
+            text_embed_dim=int(model_param_cfg.get("text_embed_dim", 128)),
+            contrast_temperature=float(model_param_cfg.get("contrast_temperature", 0.07)),
+            use_context_encoder=bool(model_param_cfg.get("use_context_encoder", True)),
+            watch_fusion_mode=str(model_param_cfg.get("watch_fusion_mode", "none")),
+            use_text_gate=bool(model_param_cfg.get("use_text_gate", False)),
+            textcnn_kernel_sizes=tuple(model_param_cfg.get("textcnn_kernel_sizes", (2, 3, 4))),
         )
         aux_loss_weights = {
             "structured_gate_l1": float(model_param_cfg.get("structured_gate_l1_weight", 0.0)),
+            "proto_align": float(model_param_cfg.get("proto_align_weight", 0.0)),
+            "graph_prior": float(model_param_cfg.get("graph_prior_weight", 0.0)),
+            "text_align": float(model_param_cfg.get("text_align_weight", 0.0)),
+            "text_itc": float(model_param_cfg.get("text_itc_weight", 0.0)),
+            "image_aux": float(model_param_cfg.get("image_aux_weight", 0.0)),
+            "attention_sparse": float(model_param_cfg.get("attention_sparse_weight", 0.0)),
+            "consistency": float(model_param_cfg.get("consistency_weight", 0.0)),
         }
         trainer_cfg = TrainerConfig(
             task_type=task_type,
@@ -4733,6 +5437,10 @@ def build_model_bundle(
             resume_path=resume_path,
             run_test=run_test,
             test_result_metadata=build_test_result_metadata(run_cfg),
+            data_parallel_device_ids=(
+                [int(device_id) for device_id in run_cfg.get("data_parallel_device_ids", [])]
+                or None
+            ),
         )
         return model, trainer_cfg, resolved_task_name, label_names, class_names
 
@@ -5623,7 +6331,14 @@ def run_auto_model_series(
             entry_use_multi_gpu = False
         elif "use_multi_gpu" in entry_run_overrides:
             entry_use_multi_gpu = bool(entry_run_overrides.get("use_multi_gpu"))
-        entry_active_gpu_count = active_gpu_count if entry_use_multi_gpu else (1 if torch.cuda.is_available() else 0)
+        entry_device_ids = [
+            int(device_id)
+            for device_id in entry_run_overrides.get("data_parallel_device_ids", [])
+        ]
+        if entry_use_multi_gpu and entry_device_ids:
+            entry_active_gpu_count = len(entry_device_ids)
+        else:
+            entry_active_gpu_count = active_gpu_count if entry_use_multi_gpu else (1 if torch.cuda.is_available() else 0)
 
         print(
             f"\n[自动 {series_label}] "
@@ -5636,10 +6351,15 @@ def run_auto_model_series(
         if entry["run_overrides"]:
             print(f"[自动 {series_label}] run_overrides: {format_param_overrides(entry['run_overrides'])}")
         print(f"[自动 {series_label}] seed: {entry_seed}")
-        if entry_num_workers != num_workers or entry_use_multi_gpu != use_multi_gpu:
+        if (
+            entry_num_workers != num_workers
+            or entry_use_multi_gpu != use_multi_gpu
+            or bool(entry_device_ids)
+        ):
             print(
                 f"[自动 {series_label}] 资源覆盖: "
-                f"num_workers={entry_num_workers}, use_multi_gpu={entry_use_multi_gpu}"
+                f"num_workers={entry_num_workers}, use_multi_gpu={entry_use_multi_gpu}, "
+                f"device_ids={entry_device_ids or 'all'}, active_gpu_count={entry_active_gpu_count}"
             )
 
         record = build_auto_series_record(entry, run_dir)
@@ -6890,6 +7610,41 @@ def run_auto_exp7(
     )
 
 
+def run_auto_exp8(
+    *,
+    train_cfg: dict[str, Any],
+    auto_exp8_cfg: dict[str, Any],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    model_entries: list[dict[str, Any]],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    run_auto_model_series(
+        series_label="EXP8",
+        progress_desc="auto-exp8",
+        train_cfg=train_cfg,
+        auto_series_cfg=auto_exp8_cfg,
+        model_cfg=model_cfg,
+        training_context=training_context,
+        model_entries=model_entries,
+        seed=seed,
+        max_epochs=max_epochs,
+        patience=patience,
+        image_size=image_size,
+        num_workers=num_workers,
+        pretrained=pretrained,
+        use_multi_gpu=use_multi_gpu,
+        active_gpu_count=active_gpu_count,
+    )
+
+
 def run_auto_exp8_mm_ablation(
     *,
     train_cfg: dict[str, Any],
@@ -6911,6 +7666,76 @@ def run_auto_exp8_mm_ablation(
         progress_desc="auto-exp8-mm-ablation",
         train_cfg=train_cfg,
         auto_series_cfg=auto_exp8_mm_ablation_cfg,
+        model_cfg=model_cfg,
+        training_context=training_context,
+        model_entries=model_entries,
+        seed=seed,
+        max_epochs=max_epochs,
+        patience=patience,
+        image_size=image_size,
+        num_workers=num_workers,
+        pretrained=pretrained,
+        use_multi_gpu=use_multi_gpu,
+        active_gpu_count=active_gpu_count,
+    )
+
+
+def run_auto_exp9_ablation(
+    *,
+    train_cfg: dict[str, Any],
+    auto_exp9_ablation_cfg: dict[str, Any],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    model_entries: list[dict[str, Any]],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    run_auto_model_series(
+        series_label="EXP9-Ablation",
+        progress_desc="auto-exp9-ablation",
+        train_cfg=train_cfg,
+        auto_series_cfg=auto_exp9_ablation_cfg,
+        model_cfg=model_cfg,
+        training_context=training_context,
+        model_entries=model_entries,
+        seed=seed,
+        max_epochs=max_epochs,
+        patience=patience,
+        image_size=image_size,
+        num_workers=num_workers,
+        pretrained=pretrained,
+        use_multi_gpu=use_multi_gpu,
+        active_gpu_count=active_gpu_count,
+    )
+
+
+def run_auto_exp11_module_ablation(
+    *,
+    train_cfg: dict[str, Any],
+    auto_exp11_module_ablation_cfg: dict[str, Any],
+    model_cfg: dict[str, dict[str, Any]],
+    training_context: dict[str, Any],
+    model_entries: list[dict[str, Any]],
+    seed: int,
+    max_epochs: int,
+    patience: int,
+    image_size: int,
+    num_workers: int,
+    pretrained: bool,
+    use_multi_gpu: bool,
+    active_gpu_count: int,
+) -> None:
+    run_auto_model_series(
+        series_label="EXP11-Module-Ablation",
+        progress_desc="auto-exp11-module-ablation",
+        train_cfg=train_cfg,
+        auto_series_cfg=auto_exp11_module_ablation_cfg,
         model_cfg=model_cfg,
         training_context=training_context,
         model_entries=model_entries,
@@ -7290,7 +8115,10 @@ def run_auto_explore(
 def main() -> None:
     args = parse_args()
 
-    preliminary_task_name = resolve_train_task_name(args.task if str(args.task).strip() else None, None)
+    preliminary_task_name = resolve_train_task_name(
+        args.task if str(args.task).strip() else DEFAULT_CLI_TASK_NAME,
+        None,
+    )
 
     path_config_path = (
         Path(args.config)
@@ -7333,9 +8161,12 @@ def main() -> None:
         or bool(train_cfg["auto_exp_5"])
         or bool(train_cfg["auto_exp_6"])
         or bool(train_cfg["auto_exp_7"])
+        or bool(train_cfg["auto_exp_8"])
         or bool(train_cfg["auto_exp_8_mm_ablation"])
+        or bool(train_cfg["auto_exp_9_ablation"])
+        or bool(train_cfg["auto_exp_11_module_ablation"])
     ):
-        raise ValueError("auto_explore 与 auto_baselines/auto_sotas/auto_ablations/auto_distinct/auto_5fold/auto_exp_1/auto_exp_2/auto_exp_3/auto_exp_4/auto_exp_5/auto_exp_6/auto_exp_7/auto_exp_8_mm_ablation 不能同时开启，请二选一")
+        raise ValueError("auto_explore 与其他自动批量实验模式不能同时开启，请二选一")
 
     auto_mode_count = int(bool(train_cfg["auto_baselines"]))
     auto_mode_count += int(bool(train_cfg["auto_sotas"]))
@@ -7346,12 +8177,15 @@ def main() -> None:
     auto_mode_count += int(bool(train_cfg["auto_exp_5"]))
     auto_mode_count += int(bool(train_cfg["auto_exp_6"]))
     auto_mode_count += int(bool(train_cfg["auto_exp_7"]))
+    auto_mode_count += int(bool(train_cfg["auto_exp_8"]))
     auto_mode_count += int(bool(train_cfg["auto_exp_8_mm_ablation"]))
+    auto_mode_count += int(bool(train_cfg["auto_exp_9_ablation"]))
+    auto_mode_count += int(bool(train_cfg["auto_exp_11_module_ablation"]))
     auto_mode_count += int(bool(train_cfg["auto_ablations"]))
     auto_mode_count += int(bool(train_cfg["auto_distinct"]))
     auto_mode_count += int(bool(train_cfg["auto_5fold"]))
     if auto_mode_count > 1:
-        raise ValueError("auto_baselines、auto_sotas、auto_ablations、auto_distinct、auto_5fold、auto_exp_1、auto_exp_2、auto_exp_3、auto_exp_4、auto_exp_5、auto_exp_6、auto_exp_7、auto_exp_8_mm_ablation 不能同时开启多个，请只保留一个自动模式")
+        raise ValueError("自动批量实验模式不能同时开启多个，请只保留一个自动模式")
 
     seed = args.seed if args.seed is not None else train_cfg["seed"]
     max_epochs = args.epochs if args.epochs is not None else train_cfg["max_epochs"]
@@ -7481,8 +8315,14 @@ def main() -> None:
     auto_exp6_entries: list[dict[str, Any]] = []
     auto_exp7_cfg: dict[str, Any] | None = None
     auto_exp7_entries: list[dict[str, Any]] = []
+    auto_exp8_cfg: dict[str, Any] | None = None
+    auto_exp8_entries: list[dict[str, Any]] = []
     auto_exp8_mm_ablation_cfg: dict[str, Any] | None = None
     auto_exp8_mm_ablation_entries: list[dict[str, Any]] = []
+    auto_exp9_ablation_cfg: dict[str, Any] | None = None
+    auto_exp9_ablation_entries: list[dict[str, Any]] = []
+    auto_exp11_module_ablation_cfg: dict[str, Any] | None = None
+    auto_exp11_module_ablation_entries: list[dict[str, Any]] = []
     requested_names = [item.strip() for item in args.models.split(",") if item.strip()]
 
     if bool(train_cfg["auto_baselines"]):
@@ -7610,6 +8450,18 @@ def main() -> None:
             model_entries=auto_exp7_entries,
         )
 
+    if bool(train_cfg["auto_exp_8"]):
+        auto_exp8_entries = build_auto_exp8_entries(
+            selected_task_name=selected_task_name,
+            requested_names=requested_names if requested_names else None,
+            base_seed=seed,
+        )
+        auto_exp8_cfg = build_auto_exp8_config(
+            train_cfg=train_cfg,
+            selected_task_name=selected_task_name,
+            model_entries=auto_exp8_entries,
+        )
+
     if bool(train_cfg["auto_exp_8_mm_ablation"]):
         auto_exp8_mm_ablation_entries = build_auto_exp8_mm_ablation_entries(
             selected_task_name=selected_task_name,
@@ -7620,6 +8472,30 @@ def main() -> None:
             train_cfg=train_cfg,
             selected_task_name=selected_task_name,
             model_entries=auto_exp8_mm_ablation_entries,
+        )
+
+    if bool(train_cfg["auto_exp_9_ablation"]):
+        auto_exp9_ablation_entries = build_auto_exp9_ablation_entries(
+            selected_task_name=selected_task_name,
+            requested_names=requested_names if requested_names else None,
+            base_seed=seed,
+        )
+        auto_exp9_ablation_cfg = build_auto_exp9_ablation_config(
+            train_cfg=train_cfg,
+            selected_task_name=selected_task_name,
+            model_entries=auto_exp9_ablation_entries,
+        )
+
+    if bool(train_cfg["auto_exp_11_module_ablation"]):
+        auto_exp11_module_ablation_entries = build_auto_exp11_module_ablation_entries(
+            selected_task_name=selected_task_name,
+            requested_names=requested_names if requested_names else None,
+            base_seed=seed,
+        )
+        auto_exp11_module_ablation_cfg = build_auto_exp11_module_ablation_config(
+            train_cfg=train_cfg,
+            selected_task_name=selected_task_name,
+            model_entries=auto_exp11_module_ablation_entries,
         )
 
     if auto_ablations_cfg is not None and requested_names:
@@ -7636,7 +8512,10 @@ def main() -> None:
         or auto_exp5_cfg is not None
         or auto_exp6_cfg is not None
         or auto_exp7_cfg is not None
+        or auto_exp8_cfg is not None
         or auto_exp8_mm_ablation_cfg is not None
+        or auto_exp9_ablation_cfg is not None
+        or auto_exp11_module_ablation_cfg is not None
     ):
         selected_names = [item["name"] for item in auto_baseline_entries] + [item["name"] for item in auto_sota_entries]
         selected_names += [item["name"] for item in auto_exp1_entries]
@@ -7646,7 +8525,10 @@ def main() -> None:
         selected_names += [item["name"] for item in auto_exp5_entries]
         selected_names += [item["name"] for item in auto_exp6_entries]
         selected_names += [item["name"] for item in auto_exp7_entries]
+        selected_names += [item["name"] for item in auto_exp8_entries]
         selected_names += [item["name"] for item in auto_exp8_mm_ablation_entries]
+        selected_names += [item["name"] for item in auto_exp9_ablation_entries]
+        selected_names += [item["name"] for item in auto_exp11_module_ablation_entries]
         selected_task_model_names = (
             [resolve_series_entry_model_name(item) for item in auto_baseline_entries]
             + [resolve_series_entry_model_name(item) for item in auto_sota_entries]
@@ -7657,7 +8539,10 @@ def main() -> None:
             + [resolve_series_entry_model_name(item) for item in auto_exp5_entries]
             + [resolve_series_entry_model_name(item) for item in auto_exp6_entries]
             + [resolve_series_entry_model_name(item) for item in auto_exp7_entries]
+            + [resolve_series_entry_model_name(item) for item in auto_exp8_entries]
             + [resolve_series_entry_model_name(item) for item in auto_exp8_mm_ablation_entries]
+            + [resolve_series_entry_model_name(item) for item in auto_exp9_ablation_entries]
+            + [resolve_series_entry_model_name(item) for item in auto_exp11_module_ablation_entries]
             + [
                 resolve_series_entry_model_name(entry)
                 for experiment in auto_ablation_experiments
@@ -7877,6 +8762,22 @@ def main() -> None:
             use_multi_gpu=use_multi_gpu,
             active_gpu_count=active_gpu_count,
         )
+    if auto_exp8_cfg is not None:
+        run_auto_exp8(
+            train_cfg=train_cfg,
+            auto_exp8_cfg=auto_exp8_cfg,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            model_entries=auto_exp8_entries,
+            seed=seed,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
     if auto_exp8_mm_ablation_cfg is not None:
         run_auto_exp8_mm_ablation(
             train_cfg=train_cfg,
@@ -7884,6 +8785,38 @@ def main() -> None:
             model_cfg=model_cfg,
             training_context=training_context,
             model_entries=auto_exp8_mm_ablation_entries,
+            seed=seed,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
+    if auto_exp9_ablation_cfg is not None:
+        run_auto_exp9_ablation(
+            train_cfg=train_cfg,
+            auto_exp9_ablation_cfg=auto_exp9_ablation_cfg,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            model_entries=auto_exp9_ablation_entries,
+            seed=seed,
+            max_epochs=max_epochs,
+            patience=patience,
+            image_size=image_size,
+            num_workers=num_workers,
+            pretrained=pretrained,
+            use_multi_gpu=use_multi_gpu,
+            active_gpu_count=active_gpu_count,
+        )
+    if auto_exp11_module_ablation_cfg is not None:
+        run_auto_exp11_module_ablation(
+            train_cfg=train_cfg,
+            auto_exp11_module_ablation_cfg=auto_exp11_module_ablation_cfg,
+            model_cfg=model_cfg,
+            training_context=training_context,
+            model_entries=auto_exp11_module_ablation_entries,
             seed=seed,
             max_epochs=max_epochs,
             patience=patience,
@@ -7904,7 +8837,10 @@ def main() -> None:
         or auto_exp5_cfg is not None
         or auto_exp6_cfg is not None
         or auto_exp7_cfg is not None
+        or auto_exp8_cfg is not None
         or auto_exp8_mm_ablation_cfg is not None
+        or auto_exp9_ablation_cfg is not None
+        or auto_exp11_module_ablation_cfg is not None
     ):
         return
 
