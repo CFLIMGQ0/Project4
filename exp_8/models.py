@@ -76,7 +76,284 @@ def _masked_instance_softmax(scores: torch.Tensor, mask: torch.Tensor) -> torch.
 def _optional_bce(logits: torch.Tensor, labels: torch.Tensor | None) -> torch.Tensor:
     if labels is None:
         return torch.zeros((), device=logits.device, dtype=logits.dtype)
-    return F.binary_cross_entropy_with_logits(logits, labels.to(dtype=logits.dtype))
+    return F.binary_cross_entropy_with_logits(logits.float(), labels.float())
+
+
+def _soft_binary_distillation(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    """多标签二元软目标蒸馏；教师目标不接收学生分支的反向梯度。"""
+    value = max(1e-3, float(temperature))
+    # Distillation is evaluated in float32 under AMP so saturated teacher or
+    # student logits cannot introduce float16 infinities into the total loss.
+    student_logits_float = student_logits.float()
+    teacher_probabilities = torch.sigmoid(teacher_logits.detach().float() / value)
+    return (
+        F.binary_cross_entropy_with_logits(
+            student_logits_float / value,
+            teacher_probabilities,
+        )
+        * (value**2)
+    )
+
+
+class ContinuousFourierFeatures(nn.Module):
+    """将连续流程坐标映射为固定多频特征。"""
+
+    def __init__(self, num_frequencies: int = 8) -> None:
+        super().__init__()
+        frequencies = torch.pi * (2.0 ** torch.arange(max(1, int(num_frequencies)), dtype=torch.float32))
+        self.register_buffer("frequencies", frequencies, persistent=False)
+
+    @property
+    def output_dim(self) -> int:
+        return 1 + 2 * int(self.frequencies.numel())
+
+    def forward(self, values: torch.Tensor) -> torch.Tensor:
+        values_float = values.float().unsqueeze(-1)
+        angles = values_float * self.frequencies
+        encoded = torch.cat([values_float, torch.sin(angles), torch.cos(angles)], dim=-1)
+        return encoded.to(dtype=values.dtype)
+
+
+class AProCoPE(nn.Module):
+    """采集锚定式流程上下文位置编码。
+
+    模块输出可加到实例特征的连续绝对位置表示，以及可选的逐头相对
+    attention bias。上下文坐标始终由真实采集坐标进行单调变形得到。
+    """
+
+    def __init__(
+        self,
+        *,
+        feature_dim: int,
+        num_heads: int,
+        position_dim: int = 64,
+        transition_mode: str = "persistent",
+        mass_conservation: bool = True,
+        route: str = "both",
+        warp_alpha: float = 1.5,
+        fourier_frequencies: int = 8,
+        dropout: float = 0.2,
+    ) -> None:
+        super().__init__()
+        self.feature_dim = int(feature_dim)
+        self.num_heads = max(1, int(num_heads))
+        self.position_dim = max(8, int(position_dim))
+        self.transition_mode = str(transition_mode).strip().lower()
+        self.mass_conservation = bool(mass_conservation)
+        self.route = str(route).strip().lower()
+        self.warp_alpha = max(0.0, float(warp_alpha))
+        if self.transition_mode not in {"none", "pairwise", "persistent"}:
+            raise ValueError(f"未知 APro-CoPE transition_mode: {transition_mode}")
+        if self.route not in {"absolute", "relative", "both"}:
+            raise ValueError(f"未知 APro-CoPE route: {route}")
+
+        self.transition_projector = nn.Sequential(
+            nn.Linear(self.feature_dim, self.position_dim),
+            nn.LayerNorm(self.position_dim),
+        )
+        transition_input_dim = self.position_dim * 6 + 1
+        self.transition_mlp = nn.Sequential(
+            nn.LayerNorm(transition_input_dim),
+            nn.Linear(transition_input_dim, self.position_dim),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(self.position_dim, 1),
+        )
+        self.fourier = ContinuousFourierFeatures(fourier_frequencies)
+        coordinate_dim = 3 * self.fourier.output_dim
+        self.absolute_projector = nn.Sequential(
+            nn.Linear(coordinate_dim, self.feature_dim),
+            nn.GELU(),
+            nn.Linear(self.feature_dim, self.feature_dim),
+        )
+        self.relative_bias = nn.Sequential(
+            nn.Linear(coordinate_dim, self.position_dim),
+            nn.GELU(),
+            nn.Linear(self.position_dim, self.num_heads),
+        )
+
+    @staticmethod
+    def acquisition_coordinates(
+        mask: torch.Tensor,
+        instance_indices: torch.Tensor | None,
+        original_image_counts: torch.Tensor | None,
+        *,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        batch_size, num_instances = mask.shape
+        device = mask.device
+        valid_counts = mask.sum(dim=1).clamp_min(1)
+        slots = torch.arange(num_instances, device=device).view(1, -1).expand(batch_size, -1)
+        slot_denom = (valid_counts - 1).clamp_min(1).view(-1, 1)
+        fallback = slots.float() / slot_denom.float()
+
+        if instance_indices is None or original_image_counts is None:
+            coordinates = fallback
+        else:
+            source_indices = instance_indices.to(device=device)
+            source_counts = original_image_counts.to(device=device).clamp_min(1).view(-1, 1)
+            source_denom = (source_counts - 1).clamp_min(1)
+            raw = source_indices.clamp_min(0).float() / source_denom.float()
+            valid_source = (source_indices >= 0) & (source_indices < source_counts)
+            coordinates = torch.where(valid_source, raw, fallback)
+        return coordinates.to(dtype=dtype) * mask.to(dtype=dtype)
+
+    def _contextual_coordinates(
+        self,
+        features: torch.Tensor,
+        mask: torch.Tensor,
+        raw_coordinates: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        projected = self.transition_projector(features)
+        projected = projected * mask.unsqueeze(-1).to(dtype=projected.dtype)
+        delta_minus = torch.zeros_like(projected)
+        delta_plus = torch.zeros_like(projected)
+        delta_minus[:, 1:] = projected[:, 1:] - projected[:, :-1]
+        delta_plus[:, :-1] = projected[:, 1:] - projected[:, :-1]
+
+        gap = torch.zeros_like(raw_coordinates)
+        valid_gap = torch.zeros_like(mask)
+        if raw_coordinates.shape[1] > 1:
+            valid_gap[:, 1:] = mask[:, 1:] & mask[:, :-1]
+            raw_gap = raw_coordinates[:, 1:] - raw_coordinates[:, :-1]
+            gap[:, 1:] = torch.where(
+                valid_gap[:, 1:],
+                raw_gap.clamp_min(1e-6),
+                torch.zeros_like(raw_gap),
+            )
+
+        if self.transition_mode == "none":
+            eta = torch.zeros_like(raw_coordinates)
+        else:
+            future_delta = delta_plus
+            future_abs = delta_plus.abs()
+            persistence = delta_minus * delta_plus
+            if self.transition_mode == "pairwise":
+                future_delta = torch.zeros_like(future_delta)
+                future_abs = torch.zeros_like(future_abs)
+                persistence = torch.zeros_like(persistence)
+            transition_input = torch.cat(
+                [
+                    projected,
+                    delta_minus,
+                    future_delta,
+                    delta_minus.abs(),
+                    future_abs,
+                    persistence,
+                    gap.unsqueeze(-1),
+                ],
+                dim=-1,
+            )
+            eta = self.warp_alpha * torch.tanh(self.transition_mlp(transition_input).squeeze(-1))
+            eta = eta * valid_gap.to(dtype=eta.dtype)
+
+        warped_weight = gap * torch.exp(eta.float()).to(dtype=gap.dtype)
+        if self.mass_conservation:
+            valid_counts = mask.sum(dim=1).clamp_min(1)
+            last_indices = (valid_counts - 1).view(-1, 1)
+            last_raw = raw_coordinates.gather(1, last_indices).squeeze(1)
+            first_raw = raw_coordinates[:, 0]
+            span = (last_raw - first_raw).clamp_min(0.0)
+            normalizer = warped_weight.sum(dim=1).clamp_min(1e-8)
+            warped_gap = warped_weight * (span / normalizer).unsqueeze(1)
+        else:
+            warped_gap = warped_weight
+
+        contextual = raw_coordinates[:, :1] + torch.cumsum(warped_gap, dim=1)
+        contextual[:, 0] = raw_coordinates[:, 0]
+        contextual = contextual * mask.to(dtype=contextual.dtype)
+        return contextual, eta
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        mask: torch.Tensor,
+        instance_indices: torch.Tensor | None,
+        original_image_counts: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, dict[str, torch.Tensor]]:
+        raw = self.acquisition_coordinates(
+            mask,
+            instance_indices,
+            original_image_counts,
+            dtype=features.dtype,
+        )
+        contextual, eta = self._contextual_coordinates(features, mask, raw)
+
+        absolute = None
+        if self.route in {"absolute", "both"}:
+            absolute_input = torch.cat(
+                [self.fourier(raw), self.fourier(contextual), self.fourier(contextual - raw)],
+                dim=-1,
+            )
+            absolute = self.absolute_projector(absolute_input)
+            absolute = absolute * mask.unsqueeze(-1).to(dtype=absolute.dtype)
+
+        attention_bias = None
+        if self.route in {"relative", "both"}:
+            delta_raw = raw.unsqueeze(2) - raw.unsqueeze(1)
+            delta_context = contextual.unsqueeze(2) - contextual.unsqueeze(1)
+            relative_input = torch.cat(
+                [
+                    self.fourier(delta_raw),
+                    self.fourier(delta_context),
+                    self.fourier(delta_context - delta_raw),
+                ],
+                dim=-1,
+            )
+            attention_bias = 2.0 * torch.tanh(self.relative_bias(relative_input))
+            attention_bias = attention_bias.permute(0, 3, 1, 2).contiguous()
+            valid_pairs = mask[:, None, :, None] & mask[:, None, None, :]
+            attention_bias = attention_bias * valid_pairs.to(dtype=attention_bias.dtype)
+
+        diagnostics = {
+            "apro_raw_coordinates": raw,
+            "apro_context_coordinates": contextual,
+            "apro_transition_eta": eta,
+        }
+        return absolute, attention_bias, diagnostics
+
+
+class BidirectionalContextualCoPE(nn.Module):
+    """面向非因果检查序列的 CoPE 对照实现。
+
+    原始 CoPE 面向因果注意力。本对照保留“由内容门控决定位置推进量”这一
+    核心思想，并在双向 Transformer 中使用有符号上下文距离偏置。
+    """
+
+    def __init__(self, feature_dim: int, num_heads: int, max_positions: int = 128) -> None:
+        super().__init__()
+        self.num_heads = max(1, int(num_heads))
+        self.max_positions = max(8, int(max_positions))
+        self.gate = nn.Sequential(nn.LayerNorm(int(feature_dim)), nn.Linear(int(feature_dim), self.num_heads))
+        self.position_bias = nn.Parameter(torch.zeros(self.num_heads, self.max_positions + 1))
+        self.direction_bias = nn.Parameter(torch.zeros(self.num_heads))
+        nn.init.normal_(self.position_bias, std=0.02)
+
+    def forward(self, features: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        gates = torch.sigmoid(self.gate(features)).permute(0, 2, 1)
+        gates = gates * mask[:, None, :].to(dtype=gates.dtype)
+        increments = torch.zeros_like(gates)
+        increments[:, :, 1:] = gates[:, :, :-1]
+        positions = torch.cumsum(increments, dim=-1)
+        signed_distance = positions.unsqueeze(-1) - positions.unsqueeze(-2)
+        distance = signed_distance.abs().clamp(max=float(self.max_positions))
+        lower = distance.floor().long()
+        upper = (lower + 1).clamp(max=self.max_positions)
+        fraction = distance - lower.to(dtype=distance.dtype)
+        table = self.position_bias.view(1, self.num_heads, 1, 1, -1).expand(
+            features.shape[0], -1, features.shape[1], features.shape[1], -1
+        )
+        lower_bias = torch.gather(table, -1, lower.unsqueeze(-1)).squeeze(-1)
+        upper_bias = torch.gather(table, -1, upper.unsqueeze(-1)).squeeze(-1)
+        bias = lower_bias + fraction * (upper_bias - lower_bias)
+        bias = bias + self.direction_bias.view(1, -1, 1, 1) * signed_distance.sign()
+        valid_pairs = mask[:, None, :, None] & mask[:, None, None, :]
+        bias = bias * valid_pairs.to(dtype=bias.dtype)
+        return bias, {"cope_context_positions": positions, "cope_gates": gates}
 
 
 class StructuredFieldEncoder(nn.Module):
@@ -358,6 +635,10 @@ class Exp8LongMILBase(Exp4BaseModel):
             "use_context_encoder",
             "watch_fusion_mode",
             "use_text_gate",
+            "position_variant",
+            "apro_position_dim",
+            "apro_warp_alpha",
+            "apro_fourier_frequencies",
         ):
             kwargs.pop(unused_key, None)
         super().__init__(**kwargs)
@@ -863,6 +1144,229 @@ class Exp8WatchCrossAttentionTextCNNLongMILModel(Exp8WatchCrossAttentionLongMILM
         )
 
 
+class Exp12AProCoPEWatchCrossAttentionTextCNNModel(
+    Exp8WatchCrossAttentionTextCNNLongMILModel
+):
+    """TASK3 APro-CoPE完整模型及位置模块消融的统一实现。"""
+
+    POSITION_VARIANTS = {
+        "no_pe",
+        "original_pe",
+        "standard_cope",
+        "raw_acquisition_pe",
+        "apro_pairwise",
+        "apro_no_conservation",
+        "apro_absolute_only",
+        "apro_relative_only",
+        "apro_full",
+    }
+
+    def __init__(
+        self,
+        *,
+        position_variant: str = "apro_full",
+        apro_position_dim: int = 64,
+        apro_warp_alpha: float = 1.5,
+        apro_fourier_frequencies: int = 8,
+        num_heads: int = 4,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(num_heads=num_heads, **kwargs)
+        self.position_variant = str(position_variant).strip().lower()
+        if self.position_variant not in self.POSITION_VARIANTS:
+            raise ValueError(f"未知位置编码实验配置: {position_variant}")
+        self.apro_positioner: AProCoPE | None = None
+        self.standard_cope: BidirectionalContextualCoPE | None = None
+        self.raw_acquisition_proj: nn.Module | None = None
+        dropout = float(kwargs.get("dropout", 0.2))
+
+        apro_settings = {
+            "apro_pairwise": ("pairwise", True, "both"),
+            "apro_no_conservation": ("persistent", False, "both"),
+            "apro_absolute_only": ("persistent", True, "absolute"),
+            "apro_relative_only": ("persistent", True, "relative"),
+            "apro_full": ("persistent", True, "both"),
+        }
+        if self.position_variant in apro_settings:
+            transition_mode, mass_conservation, route = apro_settings[self.position_variant]
+            self.apro_positioner = AProCoPE(
+                feature_dim=self.feature_dim,
+                num_heads=int(num_heads),
+                position_dim=int(apro_position_dim),
+                transition_mode=transition_mode,
+                mass_conservation=mass_conservation,
+                route=route,
+                warp_alpha=float(apro_warp_alpha),
+                fourier_frequencies=int(apro_fourier_frequencies),
+                dropout=dropout,
+            )
+        elif self.position_variant == "standard_cope":
+            self.standard_cope = BidirectionalContextualCoPE(
+                feature_dim=self.feature_dim,
+                num_heads=int(num_heads),
+                max_positions=128,
+            )
+        elif self.position_variant == "raw_acquisition_pe":
+            self.raw_acquisition_proj = nn.Sequential(
+                nn.Linear(1, self.feature_dim),
+                nn.GELU(),
+                nn.Linear(self.feature_dim, self.feature_dim),
+            )
+
+    def _encode_position(
+        self,
+        features: torch.Tensor,
+        mask: torch.Tensor,
+        instance_indices: torch.Tensor | None,
+        original_image_counts: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
+        diagnostics: dict[str, torch.Tensor] = {}
+        attention_bias = None
+        if self.position_variant == "no_pe":
+            positioned = features * mask.unsqueeze(-1).to(dtype=features.dtype)
+        elif self.position_variant == "original_pe":
+            positioned = self.position_encoding(features, mask)
+        elif self.position_variant == "raw_acquisition_pe":
+            if self.raw_acquisition_proj is None:
+                raise RuntimeError("Raw Acquisition PE 未初始化")
+            raw = AProCoPE.acquisition_coordinates(
+                mask,
+                instance_indices,
+                original_image_counts,
+                dtype=features.dtype,
+            )
+            positioned = features + self.raw_acquisition_proj(raw.unsqueeze(-1))
+            positioned = positioned * mask.unsqueeze(-1).to(dtype=features.dtype)
+            diagnostics["apro_raw_coordinates"] = raw
+        elif self.position_variant == "standard_cope":
+            if self.standard_cope is None:
+                raise RuntimeError("Standard CoPE 未初始化")
+            attention_bias, diagnostics = self.standard_cope(features, mask)
+            positioned = features * mask.unsqueeze(-1).to(dtype=features.dtype)
+        else:
+            if self.apro_positioner is None:
+                raise RuntimeError("APro-CoPE 未初始化")
+            absolute, attention_bias, diagnostics = self.apro_positioner(
+                features,
+                mask,
+                instance_indices,
+                original_image_counts,
+            )
+            positioned = features if absolute is None else features + absolute
+            positioned = positioned * mask.unsqueeze(-1).to(dtype=features.dtype)
+        return positioned, attention_bias, diagnostics
+
+    def encode_long_mil(
+        self,
+        images: torch.Tensor,
+        mask: torch.Tensor,
+        instance_indices: torch.Tensor | None = None,
+        original_image_counts: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        features, extra_outputs = self.encode_instances(images, mask)
+        features, attention_bias, position_outputs = self._encode_position(
+            features,
+            mask,
+            instance_indices,
+            original_image_counts,
+        )
+        if attention_bias is None:
+            context_features = self.context_encoder(features, src_key_padding_mask=~mask)
+        else:
+            batch_size, num_heads, num_instances, _ = attention_bias.shape
+            key_invalid = (~mask)[:, None, None, :]
+            attention_bias = attention_bias.masked_fill(key_invalid, -1e4)
+            encoder_mask = attention_bias.reshape(batch_size * num_heads, num_instances, num_instances)
+            context_features = self.context_encoder(features, mask=encoder_mask)
+        context_features = context_features * mask.unsqueeze(-1).to(dtype=context_features.dtype)
+        bag_embeds, attention = self.mil_pool(context_features, mask)
+        label_embeds, graph_outputs = self.refine_labels(bag_embeds)
+        extra_outputs.update(position_outputs)
+        extra_outputs.update(graph_outputs)
+        return context_features, label_embeds, attention, extra_outputs
+
+    def forward(
+        self,
+        images: torch.Tensor,
+        mask: torch.Tensor,
+        labels: torch.Tensor | None = None,
+        watch_token_ids: torch.Tensor | None = None,
+        watch_token_mask: torch.Tensor | None = None,
+        instance_indices: torch.Tensor | None = None,
+        original_image_counts: torch.Tensor | None = None,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
+        del kwargs
+        context_features, label_embeds, attention, extra_outputs = self.encode_long_mil(
+            images,
+            mask,
+            instance_indices,
+            original_image_counts,
+        )
+        return self._build_watch_cross_attention_outputs(
+            images=images,
+            label_embeds=label_embeds,
+            attention=attention,
+            features=context_features,
+            extra_outputs=extra_outputs,
+            labels=labels,
+            watch_token_ids=watch_token_ids,
+            watch_token_mask=watch_token_mask,
+            use_gate=True,
+        )
+
+
+class Exp8WatchCrossAttentionTextCNNImageDistillModel(
+    Exp8WatchCrossAttentionTextCNNLongMILModel
+):
+    """训练时由多模态分支指导图像分支，验证和测试仅使用图像分支。"""
+
+    def __init__(
+        self,
+        *,
+        image_distill_temperature: float = 2.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.image_distill_temperature = max(1e-3, float(image_distill_temperature))
+
+    def forward(
+        self,
+        images: torch.Tensor,
+        mask: torch.Tensor,
+        labels: torch.Tensor | None = None,
+        watch_token_ids: torch.Tensor | None = None,
+        watch_token_mask: torch.Tensor | None = None,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
+        if not self.training:
+            # 严格的纯图像推理路径：不调用文本编码器或交叉注意力。
+            outputs = self.image_only_outputs(images, mask)
+            outputs["image_only_logits"] = outputs["logits"]
+            outputs["aux_losses"] = {}
+            return outputs
+
+        outputs = super().forward(
+            images=images,
+            mask=mask,
+            labels=labels,
+            watch_token_ids=watch_token_ids,
+            watch_token_mask=watch_token_mask,
+            **kwargs,
+        )
+        multimodal_teacher_logits = outputs["logits"]
+        image_student_logits = outputs["image_only_logits"]
+        outputs["multimodal_teacher_logits"] = multimodal_teacher_logits
+        aux_losses = dict(outputs.get("aux_losses", {}))
+        aux_losses["image_distill"] = _soft_binary_distillation(
+            student_logits=image_student_logits,
+            teacher_logits=multimodal_teacher_logits,
+            temperature=self.image_distill_temperature,
+        )
+        outputs["aux_losses"] = aux_losses
+        return outputs
+
+
 class Exp9WatchNoTextLongMILModel(Exp8LongMILBase):
     """exp_9 消融：保留 exp8 watch 图像底座，但不输入 watch 文本。"""
 
@@ -1002,6 +1506,7 @@ class Exp11ModuleAblationModel(Exp8LongMILBase):
         use_text_gate: bool = False,
         text_vocab_size: int = 8192,
         text_embed_dim: int = 128,
+        textcnn_kernel_sizes: tuple[int, ...] | list[int] = (2, 3, 4),
         num_heads: int = 4,
         **kwargs: Any,
     ) -> None:
@@ -1019,11 +1524,14 @@ class Exp11ModuleAblationModel(Exp8LongMILBase):
         self.text_cross_attn = None
         self.text_gate = None
         if self.watch_fusion_mode != "none":
-            self.text_encoder = HashedTextEncoder(
+            # TASK3 的主模型使用 TextCNN。参数化全因子消融必须保持文本
+            # 编码器不变，避免在开关 M1--M4 的同时引入额外模型差异。
+            self.text_encoder = TextCNNSequenceEncoder(
                 vocab_size=int(text_vocab_size),
                 token_embed_dim=int(text_embed_dim),
                 output_dim=self.feature_dim,
                 dropout=dropout,
+                kernel_sizes=tuple(int(value) for value in textcnn_kernel_sizes),
             )
         if self.watch_fusion_mode == "cross_attention":
             head_count = int(num_heads) if self.feature_dim % int(num_heads) == 0 else 1
@@ -1247,6 +1755,10 @@ EXP8_CLASS_REGISTRY = {
     "exp8_mm_text_contrast_distill": Exp8TextContrastDistillLongMILModel,
     "exp8_mm_watch_cross_attn": Exp8WatchCrossAttentionLongMILModel,
     "exp8_mm_watch_cross_attn_textcnn": Exp8WatchCrossAttentionTextCNNLongMILModel,
+    "exp8_mm_watch_cross_attn_textcnn_image_distill": (
+        Exp8WatchCrossAttentionTextCNNImageDistillModel
+    ),
+    "exp12_apro_cope_watch_cross_attn_textcnn": Exp12AProCoPEWatchCrossAttentionTextCNNModel,
     "exp8_mm_text_guided_top64_align": Exp8TextGuidedTop64AlignMILModel,
     "exp9_watch_no_text": Exp9WatchNoTextLongMILModel,
     "exp9_watch_no_context": Exp9WatchCrossAttentionNoContextModel,
@@ -1289,6 +1801,11 @@ def build_exp8_model(model_name: str, **kwargs: Any) -> nn.Module:
         "watch_fusion_mode",
         "use_text_gate",
         "textcnn_kernel_sizes",
+        "image_distill_temperature",
+        "position_variant",
+        "apro_position_dim",
+        "apro_warp_alpha",
+        "apro_fourier_frequencies",
     }
     model_kwargs = {key: value for key, value in kwargs.items() if key in base_keys}
     model_cls = EXP8_CLASS_REGISTRY.get(model_name)

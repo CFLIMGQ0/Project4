@@ -1,0 +1,76 @@
+task_name: task2
+gpu_ids: [1]
+num_workers: 2
+seed: 2026
+image_size: 224
+max_epochs: 30
+patience: 30
+max_exams_per_task: 0
+min_instances: 1
+group_by_patient: true
+split_ratio: [0.6, 0.2, 0.2]
+train_sampling_strategy: uniform
+eval_sampling_strategy: uniform
+task_selection_dir_name: task_data
+train_run_dir_name: train_runs
+experiment_dir_name: table2_multimodal_sotas
+single_run_dir_name: ""
+run_dir_prefix: run
+structured_min_category_count: 20
+class_balance:
+  enabled: true
+  apply_to: train_only
+  mode: multilabel_minority_oversample
+  target_strategy: per_label_majority
+  max_repeat_per_bag: 30
+  max_added_records: 10000
+  allow_overshoot_ratio: 0.05
+  top_candidate_pool: 32
+  candidate_sample_size: 256
+  prefer_multi_tail_positive: true
+  label_names: [label_esophageal_smt, label_esophageal_mucosal_or_tumor, label_gastritis]
+  tail_labels: []
+  report_filename: class_balance_report.json
+enabled_models: [task2_hasan_itf_2024]
+batch_size: 1
+eval_batch_size: 1
+train_max_instances: 64
+eval_max_instances: 64
+train_max_batch_instances: 128
+eval_max_batch_instances: 128
+pin_memory: true
+persistent_workers: false
+loader_prefetch_factor: 1
+image_cache_mode: disk
+image_cache_scope: shared
+image_cache_dir: /home/Lim/Project4/datasets/image_cache
+image_cache_warmup: false
+memory_cache_size: 0
+random_instance_dropout: 0.0
+optimizer_name: adamw
+lr: 0.00002
+weight_decay: 0.02
+warmup_ratio: 0.2
+grad_accum_steps: 4
+amp: true
+topk_evidence: 5
+loss_name: asymmetric
+monitor_metric: val_loss
+monitor_mode: min
+auto_explore: false
+auto_baselines: false
+auto_sotas: false
+auto_ablations: false
+auto_distinct: false
+auto_5fold: false
+auto_exp_1: false
+auto_exp_2: false
+auto_exp_3: false
+auto_exp_4: false
+auto_exp_5: false
+auto_exp_6: false
+auto_exp_7: false
+auto_exp_8: false
+auto_exp_8_mm_ablation: false
+auto_exp_9_ablation: false
+auto_exp_11_module_ablation: false

@@ -386,6 +386,27 @@ models:
     textcnn_kernel_sizes: [2, 3, 4]
     image_aux_weight: 0.0
 
+  # TASK3训练期多模态教师到纯图像学生的知识蒸馏实验。
+  exp8_mm_watch_cross_attn_textcnn_image_distill:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    num_heads: 4
+    num_layers: 2
+    use_label_graph: true
+    label_graph_type: label_hypergraph
+    label_hypergraph_edges: 2
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    image_aux_weight: 0.5
+    image_distill_weight: 1.0
+    image_distill_temperature: 2.0
+
   exp8_mm_text_guided_top64_align:
     backbone_name: convnext_tiny
     freeze_stages: 1
@@ -417,3 +438,81 @@ models:
     mamba_expand: 2
     mamba_kernel_size: 5
     use_label_graph: true
+
+  # 表2新增图文SOTA：统一使用相同图像底座和TextCNN，只适配各论文核心融合机制。
+  task2_hasan_itf_2024:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    num_heads: 4
+
+  task2_mmfnet_2024:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    num_heads: 4
+    window_size: 8
+    image_branch_weight: 0.1
+    text_branch_weight: 0.1
+
+  task2_saif_2025:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    num_heads: 4
+    correlation_threshold: 0.5
+    alignment_temperature: 1.0
+    alignment_weight: 0.1
+
+  task2_mmtf_2025:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    num_heads: 4
+    num_layers: 2
+    alignment_weight: 0.1
+
+  task2_radfuse_2025:
+    backbone_name: convnext_tiny
+    freeze_stages: 1
+    feature_dim: 512
+    attn_dim: 256
+    hidden_dim: 1024
+    dropout: 0.2
+    encoder_chunk_size: 16
+    text_vocab_size: 8192
+    text_embed_dim: 128
+    textcnn_kernel_sizes: [2, 3, 4]
+    num_heads: 4
+    num_layers: 2
+    contrast_temperature: 0.07
+    contrast_queue_size: 256
+    contrastive_weight: 0.1

@@ -21,7 +21,7 @@ def _ensure_project_runtime_python() -> None:
         return
     except ImportError:
         pass
-    candidate = Path("/home/Lim/anaconda3/envs/myenv/bin/python")
+    candidate = Path("/xmlg/Lim/conda/envs/myenv/bin/python")
     if candidate.is_file() and Path(sys.executable).resolve() != candidate.resolve():
         os.execv(str(candidate), [str(candidate), *sys.argv])
 
@@ -65,6 +65,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
     return parser.parse_args()
 
 
@@ -77,7 +79,9 @@ def read_yaml(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    # 多个独立单卡进程会并行启动。临时文件名包含进程号，
+    # 避免它们同时更新公共审计文件时互相覆盖或触发 FileNotFoundError。
+    temporary = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     temporary.write_text(
         json.dumps(to_builtin_type(payload), ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -94,7 +98,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         for key in row:
             if key not in fieldnames:
                 fieldnames.append(key)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     with temporary.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -118,13 +122,22 @@ def load_or_build_records(cfg: dict[str, Any], output_dir: Path) -> list[dict[st
     path_cfg = cfg["paths"]
     source_csv = Path(path_cfg["source_csv"]).expanduser().resolve()
     dataset_root = Path(path_cfg["dataset_root"]).expanduser().resolve()
-    cache_path = output_dir / "records_cache.json"
+    cache_path = Path(path_cfg.get("records_cache", output_dir / "records_cache.json")).expanduser().resolve()
     expected_meta = records_cache_meta(source_csv, dataset_root)
     if cache_path.is_file():
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
         if payload.get("meta") == expected_meta and isinstance(payload.get("records"), list):
             print(f"[TASK3] 读取样本缓存：{cache_path}，样本数={len(payload['records'])}")
             return payload["records"]
+        if bool(path_cfg.get("allow_migrated_records_cache", False)) and isinstance(payload.get("records"), list):
+            records = payload["records"]
+            if not records:
+                raise RuntimeError(f"迁移样本缓存为空：{cache_path}")
+            print(
+                f"[TASK3] 读取迁移样本缓存：{cache_path}，样本数={len(records)}；"
+                "保留记录内原始图像标识以匹配离线缓存。"
+            )
+            return records
 
     print("[TASK3] 首次构建样本缓存，将扫描检查目录中的图片。")
     records = build_task_records(
@@ -339,6 +352,8 @@ def parse_selection(raw: str, allowed: list[str], value_name: str) -> list[str]:
 def main() -> None:
     args = parse_args()
     cfg = read_yaml(args.config.expanduser().resolve())
+    if args.num_shards < 1 or not 0 <= args.shard_index < args.num_shards:
+        raise ValueError("分片参数必须满足num_shards>=1且0<=shard_index<num_shards")
     output_dir = Path(cfg["paths"]["output_dir"]).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     write_json(output_dir / "experiment_config.json", cfg)
@@ -392,69 +407,93 @@ def main() -> None:
         "task_selection_dir": str(Path(cfg["paths"]["source_csv"]).expanduser().resolve().parent.parent),
     }
 
-    for dataset_name in dataset_names:
+    jobs = [
+        (dataset_name, fold_index)
+        for dataset_name in dataset_names
+        for fold_index in selected_folds
+    ]
+    jobs = [
+        job
+        for index, job in enumerate(jobs)
+        if index % args.num_shards == args.shard_index
+    ]
+    print(f"[TASK3] 当前分片训练任务数={len(jobs)}，shard={args.shard_index + 1}/{args.num_shards}")
+
+    for dataset_name, fold_index in jobs:
         dataset_dir = output_dir / dataset_name
         folds = prepared_folds[dataset_name]
-        for fold_index in selected_folds:
-            run_dir = dataset_dir / f"fold_{fold_index}"
-            if args.force and run_dir.exists():
-                raise RuntimeError("为保护已有结果，TASK3不自动删除fold目录；请先人工确认后再处理")
-            if is_auto_series_run_complete(run_dir):
-                print(f"[TASK3] 跳过已完成：{dataset_name}/fold_{fold_index}")
-                continue
+        run_dir = dataset_dir / f"fold_{fold_index}"
+        if args.force and run_dir.exists():
+            raise RuntimeError("为保护已有结果，TASK3不自动删除fold目录；请先人工确认后再处理")
+        if is_auto_series_run_complete(run_dir):
+            print(f"[TASK3] 跳过已完成：{dataset_name}/fold_{fold_index}")
+            continue
 
-            test_index = fold_index - 1
-            val_index = fold_index % int(cfg["folds"])
-            split_data = {
-                "train": [record for index, fold in enumerate(folds) if index not in {test_index, val_index} for record in fold],
-                "val": list(folds[val_index]),
-                "test": list(folds[test_index]),
-            }
-            fold_seed = int(cfg["seed"]) + fold_index
-            effective_train_cfg = {**train_cfg, "seed": fold_seed, "class_balance": dict(cfg["class_balance"])}
-            fold_context = build_fold_context(
-                base_context=base_context,
-                task_csv=Path(cfg["paths"]["source_csv"]).expanduser().resolve(),
-                split_data=split_data,
-                train_cfg=effective_train_cfg,
-                task_name="task2",
-            )
-            balance_report = fold_context["tasks"]["task2"].get("balance_report")
-            if balance_report:
-                write_json(run_dir / "class_balance_report.json", balance_report)
-            resume_path = auto_series_resume_checkpoint(run_dir)
-            print(f"[TASK3] 开始训练：{dataset_name}/fold_{fold_index}，GPU={torch.cuda.get_device_name(0)}")
-            result = run_model_job(
-                model_name=model_name,
-                run_dir=run_dir,
-                train_cfg=effective_train_cfg,
-                model_cfg=model_cfg,
-                training_context=fold_context,
-                seed=fold_seed,
-                max_epochs=int(training_cfg["max_epochs"]),
-                patience=int(training_cfg["patience"]),
-                image_size=int(training_cfg["image_size"]),
-                num_workers=int(training_cfg["num_workers"]),
-                pretrained=bool(training_cfg["pretrained"]),
-                use_multi_gpu=False,
-                active_gpu_count=1,
-                run_test=bool(training_cfg["run_test"]),
-                run_overrides=dict(training_cfg["run_overrides"]),
-                model_param_override=dict(cfg["model"]["params"]),
-                entry_metadata={
-                    "task3": True,
-                    "dataset": dataset_name,
-                    "fold": fold_index,
-                    "text_encoder": "TextCNN",
-                    "unchanged_modules": ["M1", "M2", "M3", "M4"],
-                },
-                resume_path=resume_path,
-            )
-            row = extract_fold_result(result, dataset_name, fold_index, cfg)
-            print(f"[TASK3] 完成：{dataset_name}/fold_{fold_index}，macro_f1={row.get('macro_f1')}")
-            summarize_dataset(dataset_name, dataset_dir, cfg)
+        test_index = fold_index - 1
+        val_index = fold_index % int(cfg["folds"])
+        split_data = {
+            "train": [
+                record
+                for index, fold in enumerate(folds)
+                if index not in {test_index, val_index}
+                for record in fold
+            ],
+            "val": list(folds[val_index]),
+            "test": list(folds[test_index]),
+        }
+        fold_seed = int(cfg["seed"]) + fold_index
+        effective_train_cfg = {
+            **train_cfg,
+            "seed": fold_seed,
+            "class_balance": dict(cfg["class_balance"]),
+        }
+        fold_context = build_fold_context(
+            base_context=base_context,
+            task_csv=Path(cfg["paths"]["source_csv"]).expanduser().resolve(),
+            split_data=split_data,
+            train_cfg=effective_train_cfg,
+            task_name="task2",
+        )
+        balance_report = fold_context["tasks"]["task2"].get("balance_report")
+        if balance_report:
+            write_json(run_dir / "class_balance_report.json", balance_report)
+        resume_path = auto_series_resume_checkpoint(run_dir)
+        print(
+            f"[TASK3] 开始训练：{dataset_name}/fold_{fold_index}，"
+            f"GPU={torch.cuda.get_device_name(0)}"
+        )
+        result = run_model_job(
+            model_name=model_name,
+            run_dir=run_dir,
+            train_cfg=effective_train_cfg,
+            model_cfg=model_cfg,
+            training_context=fold_context,
+            seed=fold_seed,
+            max_epochs=int(training_cfg["max_epochs"]),
+            patience=int(training_cfg["patience"]),
+            image_size=int(training_cfg["image_size"]),
+            num_workers=int(training_cfg["num_workers"]),
+            pretrained=bool(training_cfg["pretrained"]),
+            use_multi_gpu=False,
+            active_gpu_count=1,
+            run_test=bool(training_cfg["run_test"]),
+            run_overrides=dict(training_cfg["run_overrides"]),
+            model_param_override=dict(cfg["model"]["params"]),
+            entry_metadata={
+                "task3": True,
+                "dataset": dataset_name,
+                "fold": fold_index,
+                "text_encoder": "TextCNN",
+                **dict(cfg.get("entry_metadata", {})),
+            },
+            resume_path=resume_path,
+        )
+        row = extract_fold_result(result, dataset_name, fold_index, cfg)
+        print(f"[TASK3] 完成：{dataset_name}/fold_{fold_index}，macro_f1={row.get('macro_f1')}")
+        summarize_dataset(dataset_name, dataset_dir, cfg)
 
-    summarize_all(output_dir, cfg)
+    if args.num_shards == 1:
+        summarize_all(output_dir, cfg)
     print(f"[TASK3] 当前任务全部完成：{output_dir}")
 
 

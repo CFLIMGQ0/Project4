@@ -295,6 +295,8 @@ class Trainer:
         self._forward_accepts_instance_types = "instance_types" in forward_parameters
         self._forward_accepts_pseudo_region_labels = "pseudo_region_labels" in forward_parameters
         self._forward_accepts_pseudo_relevance = "pseudo_relevance" in forward_parameters
+        self._forward_accepts_instance_indices = "instance_indices" in forward_parameters
+        self._forward_accepts_original_image_counts = "original_image_counts" in forward_parameters
         self._forward_accepts_current_epoch = "current_epoch" in forward_parameters
         self._forward_accepts_structured_categorical = "structured_categorical" in forward_parameters
         self._forward_accepts_structured_numeric = "structured_numeric" in forward_parameters
@@ -376,6 +378,8 @@ class Trainer:
             "image_paths": batch["image_paths"],
             "report_titles": batch["report_titles"],
             "img_nums": batch["img_nums"],
+            "instance_indices": batch["instance_indices"].to(self.device, non_blocking=True),
+            "original_image_counts": batch["original_image_counts"].to(self.device, non_blocking=True),
             "metas": batch["metas"],
         }
         if "instance_types" in batch:
@@ -415,6 +419,10 @@ class Trainer:
             kwargs["pseudo_region_labels"] = batch["pseudo_region_labels"]
         if self._forward_accepts_pseudo_relevance and "pseudo_relevance" in batch:
             kwargs["pseudo_relevance"] = batch["pseudo_relevance"]
+        if self._forward_accepts_instance_indices:
+            kwargs["instance_indices"] = batch["instance_indices"]
+        if self._forward_accepts_original_image_counts:
+            kwargs["original_image_counts"] = batch["original_image_counts"]
         if self._forward_accepts_current_epoch:
             kwargs["current_epoch"] = float(current_epoch)
         if self._forward_accepts_structured_categorical and "structured_categorical" in batch:
