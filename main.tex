@@ -213,9 +213,9 @@ Fold 5 & 589/195/193 & 203/66/71 & 579/193/193 & 349/116/114 \\
 \end{tabular}
 \end{table*}
 
-Before model training, we quantified label co-occurrence separately in the four gastroscopy datasets. The original matrices in the upper row of Figure~\ref{fig:label_cooccurrence} reveal pronounced, dataset-specific class imbalance. Gastritis was predominant in the WLE dataset; both esophageal mucosal lesions and gastritis were frequent in the chromoendoscopy dataset; esophageal mucosal lesions were predominant in the surgical gastroscopy dataset; and esophageal submucosal tumors were predominant in the EUS dataset. We therefore applied multi-label minority oversampling exclusively to the training portion of each fold, while leaving the validation and test sets unchanged. For each gastroscopy dataset, the lower row of Figure~\ref{fig:label_cooccurrence} was obtained by pooling the five independently rebalanced fold-specific training sets and then calculating label co-occurrence over all resulting training exposures. Validation and test samples were not included in this pooled distribution. The corresponding fold-specific rebalanced distributions are provided in Appendix Figure~\ref{fig:label_cooccurrence_foldwise}.
+Before model training, we quantified label co-occurrence separately in the four gastroscopy datasets. The original matrices in the upper row of Figure~\ref{fig:label_cooccurrence} reveal pronounced, dataset-specific class imbalance. Gastritis was predominant in the WLE dataset; both esophageal mucosal lesions and gastritis were frequent in the chromoendoscopy dataset; esophageal mucosal lesions were predominant in the surgical gastroscopy dataset; and esophageal submucosal tumors were predominant in the EUS dataset. We therefore applied multi-label minority oversampling exclusively to the training portion of each fold, while leaving the validation and test sets unchanged. For each gastroscopy dataset, the lower row of Figure~\ref{fig:label_cooccurrence} was obtained by pooling the five independently rebalanced fold-specific training sets and then calculating label co-occurrence over all resulting training exposures. Validation and test samples were not included in this pooled distribution.
 
-\textbf{中文翻译：} 模型训练前，我们分别统计四个胃镜数据集的标签共现关系。图~\ref{fig:label_cooccurrence}上排的原始共现矩阵显示，各数据集均存在明显且具有数据集特异性的类别不平衡：WLE数据集以胃炎为主，染色胃镜数据集中的食管黏膜病变和胃炎均较为常见，手术胃镜数据集以食管黏膜病变为主，EUS数据集则以食管黏膜下肿瘤为主。因此，我们仅对每折训练集实施多标签少数类过采样，验证集和测试集保持不变。对于每个胃镜数据集，图~\ref{fig:label_cooccurrence}下排先汇总五个折中分别完成重平衡的训练集，再基于汇总后的全部训练曝光计算标签共现比例；验证集和测试集不参与该汇总。各折训练集重平衡后的具体分布见附录图~\ref{fig:label_cooccurrence_foldwise}。
+\textbf{中文翻译：} 模型训练前，我们分别统计四个胃镜数据集的标签共现关系。图~\ref{fig:label_cooccurrence}上排的原始共现矩阵显示，各数据集均存在明显且具有数据集特异性的类别不平衡：WLE数据集以胃炎为主，染色胃镜数据集中的食管黏膜病变和胃炎均较为常见，手术胃镜数据集以食管黏膜病变为主，EUS数据集则以食管黏膜下肿瘤为主。因此，我们仅对每折训练集实施多标签少数类过采样，验证集和测试集保持不变。对于每个胃镜数据集，图~\ref{fig:label_cooccurrence}下排先汇总五个折中分别完成重平衡的训练集，再基于汇总后的全部训练曝光计算标签共现比例；验证集和测试集不参与该汇总。
 
 Across the eight matrices, direct co-occurrence between the two esophageal labels remained sparse, whereas their co-occurrence with gastritis varied substantially among the four gastroscopy datasets. Rebalancing reduced marginal class imbalance and increased training exposure to minority labels and their associated co-positive patterns. The rebalanced matrices therefore characterize the optimization distribution rather than the prevalence of findings in the original population. Together, these matrices distinguish the original label structure from the training-time exposure distribution and provide empirical motivation for explicitly modeling higher-order label relationships.
 
@@ -450,11 +450,12 @@ W_t\,\mathrm{LN}\!\left([H_i^{(2)};H_i^{(3)};H_i^{(4)}]\right)\\
 The visual and textual representations encode complementary forms of evidence at different granularities: $Z_i^{img}\in\mathbb{R}^{L\times d}$ contains one examination-level representation for each disease, whereas $T_i\in\mathbb{R}^{K\times d}$ retains token-level finding-description information. Directly pooling $T_i$ into a single vector would force all labels to share the same textual summary. We therefore used each hypergraph-refined visual label representation $z_{i\ell}^{img}$ as a query and the finding-description tokens as keys and values. For attention head $h\in\{1,\ldots,H\}$, where $H=4$ and $d_h=d/H$, the projected query, key, and value were
 \begin{equation}
 \begin{aligned}
-q_{i\ell}^{(h)}&=z_{i\ell}^{img}W_Q^{(h)},\qquad
+q_{i\ell}^{(h)}&=(z_{i\ell}^{img}+u_{\ell})W_Q^{(h)},\qquad
 k_{ik}^{(h)}=t_{ik}W_K^{(h)},\\
-v_{ik}^{(h)}&=t_{ik}W_V^{(h)}.
+v_{ik}^{(h)}&=t_{ik}W_V^{(h)},
 \end{aligned}
 \end{equation}
+where $u_{\ell}\in\mathbb{R}^{d}$ is a learnable label-identity embedding that preserves the distinction among disease queries during textual retrieval.
 Let $\mu_{ik}\in\{0,1\}$ indicate whether the $k$-th textual position is valid. The label-to-token attention scores and normalized weights were calculated as
 \begin{equation}
 \begin{aligned}
@@ -483,14 +484,26 @@ z_{i\ell}^{fuse}=z_{i\ell}^{img}+g_{i\ell}z_{i\ell}^{txt}.
 \end{equation}
 The residual form preserves the visual representation while allowing the model to introduce label-relevant semantic evidence with an examination- and label-dependent magnitude. When no valid finding-description text was available, $a_i=0$ and $z_{i\ell}^{fuse}=z_{i\ell}^{img}$.
 
+To explicitly constrain label--text correspondence, we further introduced a label-query discrimination loss. For a positive label $\ell$ and an absent label $r$, let $\widetilde{s}_{i\ell\leftarrow r}^{mm}$ denote the counterfactual logit obtained by replacing $z_{i\ell}^{txt}$ with $z_{ir}^{txt}$ while retaining the visual representation, gate, and classifier of label $\ell$. The valid comparison set was $\mathcal{P}_i=\{(\ell,r)\mid a_i=1,\ y_{i\ell}=1,\ y_{ir}=0,\ \ell\neq r\}$. The loss was defined as
+\begin{equation}
+\begin{aligned}
+\mathcal{L}_{LQD}={}&-\frac{1}{\sum_i|\mathcal{P}_i|}
+\sum_i\sum_{(\ell,r)\in\mathcal{P}_i}\Big[
+\log\sigma(s_{i\ell}^{mm})\\
+&+\log\left(1-\sigma(\widetilde{s}_{i\ell\leftarrow r}^{mm})\right)\Big].
+\end{aligned}
+\end{equation}
+This objective encourages the text retrieved by the matched query to support its positive disease prediction while preventing text retrieved by an absent disease query from acting as interchangeable evidence. Pairs of coexisting positive labels were excluded so that the constraint did not suppress clinically valid co-occurrence information.
+
 \textbf{中文翻译：} 视觉表征与文本表征以不同粒度编码互补证据：$Z_i^{img}\in\mathbb{R}^{L\times d}$为每种疾病保留一个检查级表征，而$T_i\in\mathbb{R}^{K\times d}$保留所见描述中的token级信息。若直接将$T_i$池化为单一向量，所有标签将被迫共享同一文本摘要。因此，本文将经过超图细化的视觉标签表征$z_{i\ell}^{img}$作为query，将所见描述token作为key和value。对于注意力头$h\in\{1,\ldots,H\}$，其中$H=4$且$d_h=d/H$，query、key和value的投影分别为
 \begin{equation}
 \begin{aligned}
-q_{i\ell}^{(h)}&=z_{i\ell}^{img}W_Q^{(h)},\qquad
+q_{i\ell}^{(h)}&=(z_{i\ell}^{img}+u_{\ell})W_Q^{(h)},\qquad
 k_{ik}^{(h)}=t_{ik}W_K^{(h)},\\
-v_{ik}^{(h)}&=t_{ik}W_V^{(h)}.
+v_{ik}^{(h)}&=t_{ik}W_V^{(h)},
 \end{aligned}
 \end{equation}
+其中$u_{\ell}\in\mathbb{R}^{d}$为可学习的标签身份嵌入，用于在文本检索过程中保持不同疾病query之间的区分性。
 令$\mu_{ik}\in\{0,1\}$表示第$k$个文本位置是否有效，标签到token的注意力得分和归一化权重计算为
 \begin{equation}
 \begin{aligned}
@@ -519,6 +532,17 @@ z_{i\ell}^{fuse}=z_{i\ell}^{img}+g_{i\ell}z_{i\ell}^{txt}.
 \end{equation}
 残差形式保留原始视觉表征，同时允许模型根据具体检查和疾病标签，以自适应幅度引入相关语义证据。当不存在有效所见描述文本时，$a_i=0$，此时$z_{i\ell}^{fuse}=z_{i\ell}^{img}$。
 
+为显式约束标签与文本之间的对应关系，本文进一步引入标签查询判别损失。对于阳性标签$\ell$和未出现的标签$r$，令$\widetilde{s}_{i\ell\leftarrow r}^{mm}$表示将$z_{i\ell}^{txt}$替换为$z_{ir}^{txt}$、同时保持标签$\ell$的视觉表征、门控和分类器不变时得到的反事实logit。有效比较集合定义为$\mathcal{P}_i=\{(\ell,r)\mid a_i=1,\ y_{i\ell}=1,\ y_{ir}=0,\ \ell\neq r\}$，相应损失为
+\begin{equation}
+\begin{aligned}
+\mathcal{L}_{LQD}={}&-\frac{1}{\sum_i|\mathcal{P}_i|}
+\sum_i\sum_{(\ell,r)\in\mathcal{P}_i}\Big[
+\log\sigma(s_{i\ell}^{mm})\\
+&+\log\left(1-\sigma(\widetilde{s}_{i\ell\leftarrow r}^{mm})\right)\Big].
+\end{aligned}
+\end{equation}
+该损失促使正确标签query检索的文本支持其阳性疾病预测，同时抑制未出现疾病query所检索的文本成为可互换证据。共存的阳性标签对不参与该约束，以保留临床上有效的疾病共存信息。
+
 \subsection{Prediction Branches}
 
 \subsubsection{Primary multimodal branch}
@@ -529,8 +553,9 @@ s_i^{mm}=C_{mm}(Z_i^{fuse}).
 \end{equation}
 Its parameters, together with the shared image encoder, text encoder, and cross-modal fusion modules, were optimized using examination-level asymmetric loss:
 \begin{equation}
-\mathcal{L}_{mm}=\mathcal{L}_{ASL}(s_i^{mm},y_i).
+\mathcal{L}_{mm}=\mathcal{L}_{ASL}(s_i^{mm},y_i)+\lambda_q\mathcal{L}_{LQD}.
 \end{equation}
+Here, $\lambda_q$ controls the label-query discrimination constraint.
 This branch constitutes the primary prediction pathway and uses both the endoscopic image sequence and the category-masked gastroscopic finding description.
 
 For knowledge transfer to the image-only branch, a multimodal model with the same pathway was first pretrained using $\mathcal{L}_{mm}$. Its selected parameters were then fixed and denoted by $\overline{\Theta}_{mm}$. Given the same examination, the frozen teacher produced logits
@@ -545,8 +570,9 @@ s_i^{mm}=C_{mm}(Z_i^{fuse}).
 \end{equation}
 该分支参数与共享图像编码器、文本编码器及跨模态融合模块共同使用检查级非对称损失进行优化：
 \begin{equation}
-\mathcal{L}_{mm}=\mathcal{L}_{ASL}(s_i^{mm},y_i).
+\mathcal{L}_{mm}=\mathcal{L}_{ASL}(s_i^{mm},y_i)+\lambda_q\mathcal{L}_{LQD}.
 \end{equation}
+其中$\lambda_q$用于控制标签查询判别约束的权重。
 该分支构成主要预测路径，同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。
 
 为向纯图像分支迁移知识，首先使用$\mathcal{L}_{mm}$预训练具有相同路径的多模态模型，随后固定所选模型参数，并记为$\overline{\Theta}_{mm}$。对于同一次检查，冻结教师生成logits：
@@ -623,13 +649,13 @@ s_i^{img}=C_{img}(Z_i^{img}).
 
 All experiments followed the patient-grouped five-fold protocol described above and used random seed 2026. Models were trained for at most 30 epochs with AdamW, an initial learning rate of $2\times10^{-5}$, a weight decay of 0.02, and an examination-level batch size of 1. Gradients were accumulated over four examinations. The learning rate was linearly warmed up during the first 20\% of optimization steps and then decayed following a cosine schedule. Automatic mixed precision was enabled, dropout was set to 0.2, and asymmetric loss was used for multi-label supervision. The experiments were executed as independent fold-level jobs on six NVIDIA GeForce RTX 4090 GPUs.
 
-For image encoding, input images were resized to 224$\times$224 pixels and processed by a pretrained ConvNeXt-Tiny with its first stage frozen. Unless otherwise specified, up to 64 images were uniformly sampled from each examination, and the projected feature dimension was 512. The context encoder contained two bidirectional Transformer layers with four attention heads, and the label hypergraph contained two latent hyperedges. Full APro-CoPE used a 64-dimensional transition space, eight Fourier frequencies, $\alpha=1.5$, mass conservation, and both absolute and relative position routes. For text encoding, finding descriptions were limited to 128 tokens and represented using a vocabulary of 8192 indices, 128-dimensional embeddings, and TextCNN kernels of sizes 2, 3, and 4. Label-query cross-attention used four heads, followed by label-wise gated residual fusion. The primary multimodal output used the endoscopic image sequence and category-masked gastroscopic finding description. In the image-only transfer experiments, the auxiliary image-only classification loss had a weight of 0.5; the distillation-loss weight was set to 0 or 1, and the temperature was $\tau=2$.
+For image encoding, input images were resized to 224$\times$224 pixels and processed by a pretrained ConvNeXt-Tiny with its first stage frozen. Unless otherwise specified, up to 64 images were uniformly sampled from each examination, and the projected feature dimension was 512. The context encoder contained two bidirectional Transformer layers with four attention heads, and the label hypergraph contained two latent hyperedges. Full APro-CoPE used a 64-dimensional transition space, eight Fourier frequencies, $\alpha=1.5$, mass conservation, and both absolute and relative position routes. For text encoding, finding descriptions were limited to 128 tokens and represented using a vocabulary of 8192 indices, 128-dimensional embeddings, and TextCNN kernels of sizes 2, 3, and 4. Label-query cross-attention used four heads, followed by label-wise gated residual fusion, and the label-query discrimination weight was $\lambda_q=0.01$. The primary multimodal output used the endoscopic image sequence and category-masked gastroscopic finding description. In the image-only transfer experiments, the auxiliary image-only classification loss had a weight of 0.5; the distillation-loss weight was set to 0 or 1, and the temperature was $\tau=2$.
 
 Macro F1 was used as the primary evaluation and model-selection metric because it assigns equal importance to all three target labels under class imbalance. The checkpoint with the highest validation macro F1 was selected for each fold, and the final results are reported as the mean and standard deviation across the five patient-grouped folds. All experimental comparisons passed statistical significance testing.
 
 \textbf{中文翻译：} 所有实验均采用前文所述的患者分组五折协议，并使用随机种子2026。模型采用AdamW训练最多30个epoch，初始学习率为$2\times10^{-5}$，权重衰减为0.02，检查级batch size为1，并对连续4次检查累积梯度。前20\%优化步采用线性学习率预热，随后使用余弦衰减。训练过程中启用自动混合精度，dropout设为0.2，多标签监督采用非对称损失。所有实验以折为单位，在6张NVIDIA GeForce RTX 4090 GPU上独立运行。
 
-图像端将输入图像缩放至224$\times$224像素，并采用冻结第一阶段的预训练ConvNeXt-Tiny进行编码。除另有说明外，每次检查均匀采样最多64张图像，投影后的特征维度为512。上下文编码器包含2层双向Transformer和4个注意力头，标签超图包含2个潜在超边。完整APro-CoPE采用64维转变空间、8个Fourier频率、$\alpha=1.5$、质量守恒以及绝对与相对双位置路由。文本端将所见描述长度限制为128个token，采用大小为8192的词表、128维嵌入以及卷积核大小为2、3和4的TextCNN进行编码。标签查询cross-attention包含4个注意力头，随后进行标签级门控残差融合。主要多模态输出同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。在纯图像迁移实验中，辅助纯图像分类损失的权重设为0.5，蒸馏损失权重设为0或1，温度为$\tau=2$。
+图像端将输入图像缩放至224$\times$224像素，并采用冻结第一阶段的预训练ConvNeXt-Tiny进行编码。除另有说明外，每次检查均匀采样最多64张图像，投影后的特征维度为512。上下文编码器包含2层双向Transformer和4个注意力头，标签超图包含2个潜在超边。完整APro-CoPE采用64维转变空间、8个Fourier频率、$\alpha=1.5$、质量守恒以及绝对与相对双位置路由。文本端将所见描述长度限制为128个token，采用大小为8192的词表、128维嵌入以及卷积核大小为2、3和4的TextCNN进行编码。标签查询cross-attention包含4个注意力头，随后进行标签级门控残差融合，标签查询判别损失的权重设为$\lambda_q=0.01$。主要多模态输出同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。在纯图像迁移实验中，辅助纯图像分类损失的权重设为0.5，蒸馏损失权重设为0或1，温度为$\tau=2$。
 
 本文采用宏平均F1作为主要评价指标和模型选择指标，因为在类别不平衡条件下，该指标对三个目标标签赋予相同权重。每折选择验证集宏平均F1最高的检查点，最终结果报告患者分组五折的均值和标准差。所有实验比较均已通过统计显著性检验。
 
@@ -897,6 +923,16 @@ LQCA & GRF & \tresult{\textbf{0.9149}}{\textbf{0.0114}} & \tresult{\textbf{0.887
 \par\raggedright\scriptsize LQCA, label-query cross-attention; GRF, gated residual fusion.
 \end{table*}
 
+To further determine whether the improvement associated with LQCA reflected label-specific rather than indiscriminate textual retrieval, we compared positive-label confidence under three retrieval conditions across the four gastroscopy datasets (Figure~\ref{fig:label_query_retrieval_specificity}). The correct condition retained the text representation retrieved by the corresponding label query, the cross-label condition reassigned retrieved representations across labels, and the pooled condition used a shared description representation. Positive-label confidence was highest under the correct label-query correspondence and decreased after cross-label reassignment or shared pooling. This pattern indicates that disease-matched label queries retrieve more effective label-specific textual evidence, thereby supporting the macro F1 improvement obtained by the model configuration using label-query cross-attention in Table~\ref{T_crossmodal_fusion}.
+
+\textbf{中文翻译：} 为进一步判断LQCA带来的性能提升是否源于标签特异性的文本检索，本文比较了四个胃镜数据集中三种检索条件下的阳性标签置信度（图~\ref{fig:label_query_retrieval_specificity}）。正确条件保留对应标签查询所检索的文本表征，跨标签条件在不同标签之间互换检索表征，共享池化条件则使用统一的所见描述表征。正确标签查询对应关系下的阳性标签置信度最高，而跨标签互换或共享池化后均出现下降。该结果表明，与疾病匹配的标签查询能够检索到更有效的标签特异性文本证据，从而促进表~\ref{T_crossmodal_fusion}中采用标签查询cross-attention的模型配置获得更高的宏平均F1。
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.62\textwidth]{figs/label_query_retrieval_specificity_four_datasets.png}
+\caption{Label-specific textual retrieval analysis across the four gastroscopy datasets. Correct retains the text representation retrieved by its corresponding label query, Cross-label reassigns retrieved representations across labels, and Pooled replaces them with a shared description representation. The line shows mean confidence assigned to positive labels after combining the four datasets.\label{fig:label_query_retrieval_specificity}}
+\end{figure*}
+
 \subsubsection{Full-factorial ablation of the main architectural components}
 
 To evaluate the individual contributions and interactions of the main architectural components, we tested all 16 combinations of APro-CoPE-based acquisition-aware Transformer context modeling, label hypergraph reasoning, label-query cross-attention, and gated residual fusion using 64 sampled images per examination. When label hypergraph reasoning was disabled, an ordinary learnable label graph was used. When both label-query cross-attention and gated residual fusion were disabled, prediction used the visual pathway; cross-attention without gated fusion was followed by direct addition, whereas gated fusion without cross-attention used a pooled finding-description representation.
@@ -1138,24 +1174,5 @@ Zhong D, Li X, Huang Z, Wang S, Yu Z, Hou M, et al. Multi-modal multi-scale repr
 Jahanian M, Karimi A, Eraghi NO and Zarafshan F. Multimodal transformers for joint diagnosis and retrieval from chest X-rays and radiology reports. \textit{Informatics in Medicine Unlocked} 2025; 58: 101672.
 
 \end{thebibliography}
-
-\clearpage
-\appendix
-\renewcommand{\thefigure}{A\arabic{figure}}
-\setcounter{figure}{0}
-\renewcommand{\thetable}{A\arabic{table}}
-\setcounter{table}{0}
-
-\section{Fold-specific label co-occurrence distributions}
-
-Figure~\ref{fig:label_cooccurrence_foldwise} expands the pooled rebalanced distributions shown in the lower row of Figure~\ref{fig:label_cooccurrence}. For each gastroscopy dataset, the original full-dataset distribution is shown once, followed by the distributions of the rebalanced training set in folds 1--5. Rebalancing was applied only to the training set of each fold; the unchanged validation and test sets are therefore not shown. The value of $n$ in each fold-specific panel denotes the number of training exposures after oversampling rather than the number of unique examinations.
-
-\textbf{中文翻译：} 图~\ref{fig:label_cooccurrence_foldwise}进一步展开了图~\ref{fig:label_cooccurrence}下排所汇总的重平衡分布。对于每个胃镜数据集，图中首先给出完整数据集的原始分布，随后依次展示第1--5折训练集重平衡后的分布。重平衡仅应用于每折训练集，因此分布保持不变的验证集和测试集未在图中重复展示。各折面板中的$n$表示过采样后的训练曝光数，而不是独立检查数量。
-
-\begin{figure*}[p]
-\centering
-\includegraphics[width=\textwidth,height=0.86\textheight,keepaspectratio]{figs/label_cooccurrence_foldwise_24panel.pdf}
-\caption{Fold-specific label co-occurrence distributions for the four gastroscopy datasets. Columns correspond to WLE, chromoendoscopy, surgical gastroscopy, and EUS. The first row shows the original full-dataset distributions, and the remaining rows show the rebalanced training distributions for folds 1--5. Rebalancing was restricted to each fold's training set; validation and test sets retained their original distributions and are not shown. Diagonal cells denote single-label positive frequencies, and off-diagonal cells denote pairwise co-positive frequencies. In the fold-specific panels, $n$ denotes post-oversampling training exposures rather than unique examinations. SMT, esophageal submucosal tumor; EML, esophageal mucosal lesion.\label{fig:label_cooccurrence_foldwise}}
-\end{figure*}
 
 \end{document}

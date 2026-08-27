@@ -188,9 +188,11 @@ def build_model(cfg: dict[str, Any], checkpoint_path: Path, device: torch.device
     except TypeError:
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
     missing, unexpected = model.load_state_dict(checkpoint["model_state"], strict=False)
-    if missing or unexpected:
+    disallowed_missing = [key for key in missing if key != "label_query_bias"]
+    if disallowed_missing or unexpected:
         raise RuntimeError(
-            f"检查点与模型结构不一致：missing={list(missing)}，unexpected={list(unexpected)}"
+            "检查点与模型结构不一致："
+            f"missing={list(disallowed_missing)}，unexpected={list(unexpected)}"
         )
     model.to(device)
     model.eval()
@@ -261,8 +263,9 @@ def extract_fused_label_embeddings(
         safe_mask[empty_rows, 0] = True
         text_tokens = text_tokens.clone()
         text_tokens[empty_rows, 0] = 0.0
+    text_queries = label_embeds + model.label_query_bias
     text_label_embeds, _ = model.text_cross_attn(
-        label_embeds,
+        text_queries,
         text_tokens,
         text_tokens,
         key_padding_mask=~safe_mask,

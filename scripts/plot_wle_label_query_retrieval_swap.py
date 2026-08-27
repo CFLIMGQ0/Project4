@@ -155,8 +155,9 @@ def counterfactual_probabilities(
         device=device,
     )
     safe_tokens, key_padding_mask = safe_text_inputs(text_tokens, text_mask)
+    text_queries = label_embeds + model.label_query_bias
     retrieved, _ = model.text_cross_attn(
-        label_embeds,
+        text_queries,
         safe_tokens,
         safe_tokens,
         key_padding_mask=key_padding_mask,

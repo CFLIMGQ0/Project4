@@ -1025,6 +1025,9 @@ class Exp8WatchCrossAttentionLongMILModel(Exp8LongMILBase):
             dropout=dropout,
             batch_first=True,
         )
+        self.label_query_bias = nn.Parameter(
+            torch.zeros(1, self.num_labels, self.feature_dim)
+        )
         self.text_gate = nn.Sequential(
             nn.LayerNorm(self.feature_dim * 2),
             nn.Linear(self.feature_dim * 2, self.feature_dim),
@@ -1053,8 +1056,9 @@ class Exp8WatchCrossAttentionLongMILModel(Exp8LongMILBase):
             device=images.device,
         )
         safe_tokens, key_padding_mask = _safe_key_padding_mask(text_tokens, text_mask)
+        text_queries = label_embeds + self.label_query_bias
         text_label_embeds, cross_attention = self.text_cross_attn(
-            label_embeds,
+            text_queries,
             safe_tokens,
             safe_tokens,
             key_padding_mask=key_padding_mask,
@@ -1077,14 +1081,50 @@ class Exp8WatchCrossAttentionLongMILModel(Exp8LongMILBase):
         fused_label_embeds = label_embeds + gates * text_label_embeds
         logits = self.classify(fused_label_embeds)
 
+        aux_losses = {
+            "image_aux": _optional_bce(image_only_logits, labels),
+        }
+        if self.training and labels is not None:
+            consistency_terms = []
+            for permutation in ((1, 2, 0), (2, 0, 1)):
+                replaced_text = text_label_embeds[:, permutation, :]
+                if use_gate:
+                    replaced_gates = torch.sigmoid(
+                        self.text_gate(torch.cat([label_embeds, replaced_text], dim=-1))
+                    )
+                    replaced_gates = replaced_gates * active
+                else:
+                    replaced_gates = torch.ones_like(gates) * active
+                replaced_logits = self.classify(
+                    label_embeds + replaced_gates * replaced_text
+                )
+                replaced_targets = labels[:, permutation]
+                valid_pair = (
+                    (labels > 0.5)
+                    & (replaced_targets < 0.5)
+                    & text_active.view(-1, 1)
+                )
+                if valid_pair.any():
+                    positive_term = F.softplus(-logits[valid_pair])
+                    replacement_term = F.softplus(replaced_logits[valid_pair])
+                    consistency_terms.append(
+                        0.5 * (positive_term + replacement_term)
+                    )
+            if consistency_terms:
+                aux_losses["label_query_consistency"] = torch.cat(
+                    consistency_terms
+                ).mean()
+            else:
+                aux_losses["label_query_consistency"] = torch.zeros(
+                    (), device=logits.device, dtype=logits.dtype
+                )
+
         extra_outputs.update(
             {
                 "image_only_logits": image_only_logits,
                 "watch_cross_attention": cross_attention,
                 "watch_text_gate": gates.squeeze(-1),
-                "aux_losses": {
-                    "image_aux": _optional_bce(image_only_logits, labels),
-                },
+                "aux_losses": aux_losses,
             }
         )
         return self.build_outputs(

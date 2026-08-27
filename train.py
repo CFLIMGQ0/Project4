@@ -5524,6 +5524,9 @@ def build_model_bundle(
             "image_distill": float(model_param_cfg.get("image_distill_weight", 0.0)),
             "attention_sparse": float(model_param_cfg.get("attention_sparse_weight", 0.0)),
             "consistency": float(model_param_cfg.get("consistency_weight", 0.0)),
+            "label_query_consistency": float(
+                model_param_cfg.get("label_query_consistency_weight", 0.0)
+            ),
         }
         trainer_cfg = TrainerConfig(
             task_type=task_type,
