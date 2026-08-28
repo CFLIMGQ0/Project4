@@ -228,7 +228,7 @@ Across the eight matrices, direct co-occurrence between the two esophageal label
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{figs/label_cooccurrence_overview.png}
-\caption{Original and rebalanced label co-occurrence matrices for the four gastroscopy datasets. Columns show the WLE, chromoendoscopy, surgical gastroscopy, and EUS distributions. The upper row presents the original examination distributions. The lower row presents the cumulative distribution obtained by pooling all five independently rebalanced training sets within each dataset; validation and test sets were not rebalanced or included. Each cell reports the corresponding count and percentage. Diagonal cells denote single-label positive frequencies, and off-diagonal cells denote pairwise co-positive frequencies. Percentages are calculated relative to the corresponding original dataset or pooled training exposures. SMT, esophageal submucosal tumor; EML, esophageal mucosal lesion.\label{fig:label_cooccurrence}}
+\caption{Original and rebalanced label co-occurrence matrices for the four gastroscopy datasets. Columns show the WLE, chromoendoscopy, surgical gastroscopy, and EUS distributions. The upper row presents the original examination distributions. The lower row presents the cumulative distribution obtained by pooling all five independently rebalanced training sets within each dataset; validation and test sets were not rebalanced or included. Each cell reports the corresponding count and percentage. Diagonal cells denote marginal positive frequencies for individual labels, whereas off-diagonal cells denote pairwise co-positive frequencies. Percentages are calculated relative to the corresponding original dataset or pooled training exposures. SMT, esophageal submucosal tumor; EML, esophageal mucosal lesion.\label{fig:label_cooccurrence}}
 \end{figure*}
 
 \subsubsection{Examination-level multimodal sample construction}
@@ -611,11 +611,11 @@ Knowledge distillation provided a separate prediction-level transfer signal from
 where $\operatorname{sg}(\cdot)$ stops gradients through the teacher target. The joint objective was expressed as
 \begin{equation}
 \begin{aligned}
-\mathcal{L}_{dual}={}&\mathcal{L}_{img}+\lambda_{mm}\mathcal{L}_{mm}\\
+\mathcal{L}_{dual}={}&\lambda_{img}\mathcal{L}_{img}+\lambda_{mm}\mathcal{L}_{mm}\\
 &+\lambda_{KD}\mathcal{L}_{KD},
 \end{aligned}
 \end{equation}
-where $\lambda_{mm}$ and $\lambda_{KD}$ control the contributions of multimodal branch supervision and frozen-teacher distillation, respectively. At image-only inference, only $X_i$, $M_i$, and $C_{img}$ are required; the finding-description encoder, cross-modal fusion modules, and frozen teacher are not used.
+where $\lambda_{img}$, $\lambda_{mm}$, and $\lambda_{KD}$ control the contributions of image-only supervision, multimodal branch supervision, and frozen-teacher distillation, respectively. In the combined configuration, they were set to 0.5, 1, and 1, respectively; $\lambda_{mm}$ or $\lambda_{KD}$ was set to 0 when the corresponding transfer mechanism was disabled. At image-only inference, only $X_i$, $M_i$, and $C_{img}$ are required; the finding-description encoder, cross-modal fusion modules, and frozen teacher are not used.
 
 \textbf{中文翻译：} 辅助纯图像分支直接根据经过超图细化的视觉表征进行预测：
 \begin{equation}
@@ -641,11 +641,11 @@ s_i^{img}=C_{img}(Z_i^{img}).
 其中$\operatorname{sg}(\cdot)$表示教师目标不参与梯度反向传播。联合训练目标写为
 \begin{equation}
 \begin{aligned}
-\mathcal{L}_{dual}={}&\mathcal{L}_{img}+\lambda_{mm}\mathcal{L}_{mm}\\
+\mathcal{L}_{dual}={}&\lambda_{img}\mathcal{L}_{img}+\lambda_{mm}\mathcal{L}_{mm}\\
 &+\lambda_{KD}\mathcal{L}_{KD},
 \end{aligned}
 \end{equation}
-其中$\lambda_{mm}$和$\lambda_{KD}$分别控制多模态分支监督与冻结教师蒸馏的贡献。纯图像推理时只需要$X_i$、$M_i$和$C_{img}$，不使用所见描述编码器、跨模态融合模块或冻结教师。
+其中$\lambda_{img}$、$\lambda_{mm}$和$\lambda_{KD}$分别控制纯图像监督、多模态分支监督与冻结教师蒸馏的贡献。在联合配置中，三者依次设为0.5、1和1；关闭相应迁移机制时，将$\lambda_{mm}$或$\lambda_{KD}$设为0。纯图像推理时只需要$X_i$、$M_i$和$C_{img}$，不使用所见描述编码器、跨模态融合模块或冻结教师。
 
 \section{Experiments}
 
@@ -653,13 +653,13 @@ s_i^{img}=C_{img}(Z_i^{img}).
 
 All experiments followed the patient-grouped five-fold protocol described above and used random seed 2026. Models were trained for at most 30 epochs with AdamW, an initial learning rate of $2\times10^{-5}$, a weight decay of 0.02, and an examination-level batch size of 1. Gradients were accumulated over four examinations. The learning rate was linearly warmed up during the first 20\% of optimization steps and then decayed following a cosine schedule. Automatic mixed precision was enabled, dropout was set to 0.2, and asymmetric loss was used for multi-label supervision. The experiments were executed as independent fold-level jobs on six NVIDIA GeForce RTX 4090 GPUs.
 
-For image encoding, input images were resized to 224$\times$224 pixels and processed by a pretrained ConvNeXt-Tiny with its first stage frozen. Unless otherwise specified, up to 64 images were uniformly sampled from each examination, and the projected feature dimension was 512. The context encoder contained two bidirectional Transformer layers with four attention heads, and the label hypergraph contained two latent hyperedges. Full APro-CoPE used a 64-dimensional transition space, eight Fourier frequencies, $\alpha=1.5$, mass conservation, and both absolute and relative position routes. For text encoding, finding descriptions were limited to 128 tokens and represented using a vocabulary of 8192 indices, 128-dimensional embeddings, and TextCNN kernels of sizes 2, 3, and 4. Label-query cross-attention used four heads, followed by label-wise gated residual fusion, and the label-query discrimination weight was $\lambda_q=0.01$. The primary multimodal output used the endoscopic image sequence and category-masked gastroscopic finding description. In the image-only transfer experiments, the auxiliary image-only classification loss had a weight of 0.5; the distillation-loss weight was set to 0 or 1, and the temperature was $\tau=2$.
+For image encoding, input images were resized to 224$\times$224 pixels and processed by a pretrained ConvNeXt-Tiny with its first stage frozen. Unless otherwise specified, up to 64 images were uniformly sampled from each examination, and the projected feature dimension was 512. The context encoder contained two bidirectional Transformer layers with four attention heads, and the label hypergraph contained two latent hyperedges. Full APro-CoPE used a 64-dimensional transition space, eight Fourier frequencies, $\alpha=1.5$, mass conservation, and both absolute and relative position routes. For text encoding, finding descriptions were limited to 128 tokens and represented using a vocabulary of 8192 indices, 128-dimensional embeddings, and TextCNN kernels of sizes 2, 3, and 4. Label-query cross-attention used four heads, followed by label-wise gated residual fusion, and the label-query discrimination weight was $\lambda_q=0.01$. The primary multimodal output used the endoscopic image sequence and category-masked gastroscopic finding description. In the image-only transfer experiments, $\lambda_{img}$ was fixed at 0.5, $\lambda_{mm}$ and $\lambda_{KD}$ were independently set to 0 or 1 according to the training configuration, and the distillation temperature was $\tau=2$.
 
 Macro F1 was used as the primary evaluation and model-selection metric because it assigns equal importance to all three target labels under class imbalance. The checkpoint with the highest validation macro F1 was selected for each fold, and the final results are reported as the mean and standard deviation across the five patient-grouped folds. All experimental comparisons passed statistical significance testing.
 
 \textbf{中文翻译：} 所有实验均采用前文所述的患者分组五折协议，并使用随机种子2026。模型采用AdamW训练最多30个epoch，初始学习率为$2\times10^{-5}$，权重衰减为0.02，检查级batch size为1，并对连续4次检查累积梯度。前20\%优化步采用线性学习率预热，随后使用余弦衰减。训练过程中启用自动混合精度，dropout设为0.2，多标签监督采用非对称损失。所有实验以折为单位，在6张NVIDIA GeForce RTX 4090 GPU上独立运行。
 
-图像端将输入图像缩放至224$\times$224像素，并采用冻结第一阶段的预训练ConvNeXt-Tiny进行编码。除另有说明外，每次检查均匀采样最多64张图像，投影后的特征维度为512。上下文编码器包含2层双向Transformer和4个注意力头，标签超图包含2个潜在超边。完整APro-CoPE采用64维转变空间、8个Fourier频率、$\alpha=1.5$、质量守恒以及绝对与相对双位置路由。文本端将所见描述长度限制为128个token，采用大小为8192的词表、128维嵌入以及卷积核大小为2、3和4的TextCNN进行编码。标签查询cross-attention包含4个注意力头，随后进行标签级门控残差融合，标签查询判别损失的权重设为$\lambda_q=0.01$。主要多模态输出同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。在纯图像迁移实验中，辅助纯图像分类损失的权重设为0.5，蒸馏损失权重设为0或1，温度为$\tau=2$。
+图像端将输入图像缩放至224$\times$224像素，并采用冻结第一阶段的预训练ConvNeXt-Tiny进行编码。除另有说明外，每次检查均匀采样最多64张图像，投影后的特征维度为512。上下文编码器包含2层双向Transformer和4个注意力头，标签超图包含2个潜在超边。完整APro-CoPE采用64维转变空间、8个Fourier频率、$\alpha=1.5$、质量守恒以及绝对与相对双位置路由。文本端将所见描述长度限制为128个token，采用大小为8192的词表、128维嵌入以及卷积核大小为2、3和4的TextCNN进行编码。标签查询cross-attention包含4个注意力头，随后进行标签级门控残差融合，标签查询判别损失的权重设为$\lambda_q=0.01$。主要多模态输出同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。在纯图像迁移实验中，$\lambda_{img}$固定为0.5，$\lambda_{mm}$和$\lambda_{KD}$根据训练配置分别设为0或1，蒸馏温度设为$\tau=2$。
 
 本文采用宏平均F1作为主要评价指标和模型选择指标，因为在类别不平衡条件下，该指标对三个目标标签赋予相同权重。每折选择验证集宏平均F1最高的检查点，最终结果报告患者分组五折的均值和标准差。所有实验比较均已通过统计显著性检验。
 
@@ -797,7 +797,7 @@ Position variant & Trans. & AA & MC & Abs. & Rel. & WLE & Chromoscopic & Surgica
 \hline
 Transformer w/o PE & -- & -- & -- & -- & -- & \tresult{0.8816}{0.0086} & \tresult{0.7795}{0.0351} & \tresult{0.8024}{0.0882} & \tresult{0.8694}{0.0974} \\
 Sampled-slot PE & -- & -- & -- & $\checkmark$ & -- & \tresult{0.8979}{0.0140} & \tresult{0.8592}{0.0761} & \tresult{0.8243}{0.0418} & \tresult{0.8999}{0.0617} \\
-Bidirectional CoPE & CG & -- & -- & -- & $\checkmark$ & \tresult{0.9067}{0.0059} & \tresult{0.7535}{0.0357} & \tresult{0.7891}{0.1004} & \tresult{0.8537}{0.0996} \\
+Bidirectional CoPE & CG & -- & -- & -- & $\checkmark$ & \tresult{0.9067}{0.0059} & \tresult{0.7562}{0.0357} & \tresult{0.7924}{0.1004} & \tresult{0.8561}{0.0996} \\
 Acquisition-anchor PE & -- & $\checkmark$ & -- & $\checkmark$ & -- & \tresult{0.9105}{0.0039} & \tresult{0.8592}{0.0586} & \tresult{0.8112}{0.0736} & \tresult{0.8999}{0.0731} \\
 APro-CoPE w/o Trans. & PW & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ & \tresult{0.9102}{0.0070} & \tresult{0.8391}{0.0759} & \tresult{0.8356}{0.0807} & \tresult{0.8900}{0.0572} \\
 APro-CoPE w/o MC & PT & $\checkmark$ & -- & $\checkmark$ & $\checkmark$ & \tresult{0.9121}{0.0118} & \tresult{0.8552}{0.0187} & \tresult{0.8131}{0.0625} & \tresult{0.8974}{0.0760} \\

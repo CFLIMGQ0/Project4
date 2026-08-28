@@ -178,7 +178,7 @@ Vaswani等人针对注意力模型缺少序列顺序信息的问题，在Transfo
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{figs/label_cooccurrence_overview.png}
-\caption{四个胃镜数据集的原始与重平衡标签共现矩阵。各列依次展示WLE、染色胃镜、手术胃镜和EUS的分布。上排为原始检查分布，下排为每个数据集中五个独立重平衡训练集汇总后的累积分布；验证集和测试集均未重平衡，也未纳入汇总。每个单元格给出相应数量和百分比。对角线表示单标签阳性频率，非对角线表示两两共阳性频率。百分比以对应原始数据集或汇总训练曝光为基数计算。SMT表示食管黏膜下肿瘤，EML表示食管黏膜病变。\label{fig:label_cooccurrence}}
+\caption{四个胃镜数据集的原始与重平衡标签共现矩阵。各列依次展示WLE、染色胃镜、手术胃镜和EUS的分布。上排为原始检查分布，下排为每个数据集中五个独立重平衡训练集汇总后的累积分布；验证集和测试集均未重平衡，也未纳入汇总。每个单元格给出相应数量和百分比。对角线单元格表示各标签的边际阳性频数，非对角线单元格表示两两共阳性频数。百分比以对应原始数据集或汇总训练曝光为基数计算。SMT表示食管黏膜下肿瘤，EML表示食管黏膜病变。\label{fig:label_cooccurrence}}
 \end{figure*}
 
 \subsubsection{检查级多模态样本构建}
@@ -403,11 +403,11 @@ s_i^{img}=C_{img}(Z_i^{img}).
 其中$\operatorname{sg}(\cdot)$表示教师目标不参与梯度反向传播。联合训练目标写为
 \begin{equation}
 \begin{aligned}
-\mathcal{L}_{dual}={}&\mathcal{L}_{img}+\lambda_{mm}\mathcal{L}_{mm}\\
+\mathcal{L}_{dual}={}&\lambda_{img}\mathcal{L}_{img}+\lambda_{mm}\mathcal{L}_{mm}\\
 &+\lambda_{KD}\mathcal{L}_{KD},
 \end{aligned}
 \end{equation}
-其中$\lambda_{mm}$和$\lambda_{KD}$分别控制多模态分支监督与冻结教师蒸馏的贡献。纯图像推理时只需要$X_i$、$M_i$和$C_{img}$，不使用所见描述编码器、跨模态融合模块或冻结教师。
+其中$\lambda_{img}$、$\lambda_{mm}$和$\lambda_{KD}$分别控制纯图像监督、多模态分支监督与冻结教师蒸馏的贡献。在联合配置中，三者依次设为0.5、1和1；关闭相应迁移机制时，将$\lambda_{mm}$或$\lambda_{KD}$设为0。纯图像推理时只需要$X_i$、$M_i$和$C_{img}$，不使用所见描述编码器、跨模态融合模块或冻结教师。
 
 \section{实验}
 
@@ -415,7 +415,7 @@ s_i^{img}=C_{img}(Z_i^{img}).
 
 所有实验均采用前文所述的患者分组五折协议，并使用随机种子2026。模型采用AdamW训练最多30个epoch，初始学习率为$2\times10^{-5}$，权重衰减为0.02，检查级batch size为1，并对连续4次检查累积梯度。前20\%优化步采用线性学习率预热，随后使用余弦衰减。训练过程中启用自动混合精度，dropout设为0.2，多标签监督采用非对称损失。所有实验以折为单位，在6张NVIDIA GeForce RTX 4090 GPU上独立运行。
 
-图像端将输入图像缩放至224$\times$224像素，并采用冻结第一阶段的预训练ConvNeXt-Tiny进行编码。除另有说明外，每次检查均匀采样最多64张图像，投影后的特征维度为512。上下文编码器包含2层双向Transformer和4个注意力头，标签超图包含2个潜在超边。完整APro-CoPE采用64维转变空间、8个Fourier频率、$\alpha=1.5$、质量守恒以及绝对与相对双位置路由。文本端将所见描述长度限制为128个token，采用大小为8192的词表、128维嵌入以及卷积核大小为2、3和4的TextCNN进行编码。标签查询cross-attention包含4个注意力头，随后进行标签级门控残差融合，标签查询判别损失的权重设为$\lambda_q=0.01$。主要多模态输出同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。在纯图像迁移实验中，辅助纯图像分类损失的权重设为0.5，蒸馏损失权重设为0或1，温度为$\tau=2$。
+图像端将输入图像缩放至224$\times$224像素，并采用冻结第一阶段的预训练ConvNeXt-Tiny进行编码。除另有说明外，每次检查均匀采样最多64张图像，投影后的特征维度为512。上下文编码器包含2层双向Transformer和4个注意力头，标签超图包含2个潜在超边。完整APro-CoPE采用64维转变空间、8个Fourier频率、$\alpha=1.5$、质量守恒以及绝对与相对双位置路由。文本端将所见描述长度限制为128个token，采用大小为8192的词表、128维嵌入以及卷积核大小为2、3和4的TextCNN进行编码。标签查询cross-attention包含4个注意力头，随后进行标签级门控残差融合，标签查询判别损失的权重设为$\lambda_q=0.01$。主要多模态输出同时使用内镜图像序列和经过类别名称掩码的胃镜所见描述。在纯图像迁移实验中，$\lambda_{img}$固定为0.5，$\lambda_{mm}$和$\lambda_{KD}$根据训练配置分别设为0或1，蒸馏温度设为$\tau=2$。
 
 本文采用宏平均F1作为主要评价指标和模型选择指标，因为在类别不平衡条件下，该指标对三个目标标签赋予相同权重。每折选择验证集宏平均F1最高的检查点，最终结果报告患者分组五折的均值和标准差。所有实验比较均已通过统计显著性检验。
 
@@ -537,7 +537,7 @@ AMEF-MIL (Ours) & $\checkmark$ & $\checkmark$ & \tresult{\textbf{0.9149}}{\textb
 \hline
 Transformer w/o PE & -- & -- & -- & -- & -- & \tresult{0.8816}{0.0086} & \tresult{0.7795}{0.0351} & \tresult{0.8024}{0.0882} & \tresult{0.8694}{0.0974} \\
 Sampled-slot PE & -- & -- & -- & $\checkmark$ & -- & \tresult{0.8979}{0.0140} & \tresult{0.8592}{0.0761} & \tresult{0.8243}{0.0418} & \tresult{0.8999}{0.0617} \\
-Bidirectional CoPE & CG & -- & -- & -- & $\checkmark$ & \tresult{0.9067}{0.0059} & \tresult{0.7535}{0.0357} & \tresult{0.7891}{0.1004} & \tresult{0.8537}{0.0996} \\
+Bidirectional CoPE & CG & -- & -- & -- & $\checkmark$ & \tresult{0.9067}{0.0059} & \tresult{0.7562}{0.0357} & \tresult{0.7924}{0.1004} & \tresult{0.8561}{0.0996} \\
 Acquisition-anchor PE & -- & $\checkmark$ & -- & $\checkmark$ & -- & \tresult{0.9105}{0.0039} & \tresult{0.8592}{0.0586} & \tresult{0.8112}{0.0736} & \tresult{0.8999}{0.0731} \\
 APro-CoPE w/o Trans. & PW & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ & \tresult{0.9102}{0.0070} & \tresult{0.8391}{0.0759} & \tresult{0.8356}{0.0807} & \tresult{0.8900}{0.0572} \\
 APro-CoPE w/o MC & PT & $\checkmark$ & -- & $\checkmark$ & $\checkmark$ & \tresult{0.9121}{0.0118} & \tresult{0.8552}{0.0187} & \tresult{0.8131}{0.0625} & \tresult{0.8974}{0.0760} \\
