@@ -1,0 +1,133 @@
+# TASK3：五个图文多模态对比模型在四类胃镜子数据集上的五折实验。
+#
+# 模型结构与超参数直接继承已完成的 TASK2 表2任务适配实验。
+# 数据划分、文本遮蔽、类别平衡和五折种子与既有 TASK3 实验保持一致。
+
+experiment_name: t3_multimodal_sotas_5fold
+seed: 2026
+folds: 5
+selection_alias: best_macro_f1
+
+paths:
+  source_csv: /home/Lim/Project4/datasets/task_data/task2/gastro_multilabel_task_datalist.csv
+  dataset_root: /home/Lim/Project4/datasets/main_data
+  # 直接复用 TASK3 主模型已经建立的样本缓存，不重新扫描图片。
+  records_cache: /home/Lim/Project4/outputs/train_runs/task3/t3_main_model/records_cache.json
+  main_model_output_dir: /home/Lim/Project4/outputs/train_runs/task3/t3_main_model
+  output_dir: /home/Lim/Project4/outputs/train_runs/task3/t3_multimodal_sotas_5fold
+
+datasets:
+  regular_white_light:
+    display_name: 常规白光胃镜
+    report_titles:
+      - 无痛胃镜检查报告
+      - 胃镜检查报告
+      - 一诊疗无痛胃镜报告
+      - 职工体检胃镜(无痛)报告
+      - 急诊胃镜下取异物报告
+  chromoscopic:
+    display_name: 染色胃镜
+    report_titles:
+      - 放大染色胃镜精查报告
+      - 无痛胃镜(含色素内镜)报告
+      - 国际部无痛胃镜检查（含色素内镜）报告
+      - 国际部胃镜检查（含色素内镜）报告
+  surgical:
+    display_name: 手术胃镜
+    report_titles:
+      - 胃镜手术(住院)报告
+      - 胃镜下切除手术报告
+      - 胃镜下其他手术报告
+      - 急诊胃镜报告
+  ultrasound:
+    display_name: 超声胃镜
+    report_titles:
+      - 超声胃镜检查报告
+      - 无痛超声胃镜报告
+
+metrics:
+  - macro_f1
+  - micro_f1
+  - macro_roc_auc
+  - macro_pr_auc
+  - subset_accuracy
+  - hamming_loss
+  - kappa
+
+# 仅对每折训练集进行检查级少数类重采样；验证集和测试集保持原始分布。
+class_balance:
+  enabled: true
+  apply_to: train_only
+  mode: multilabel_minority_oversample
+  target_strategy: per_label_majority
+  max_repeat_per_bag: 30
+  max_added_records: 10000
+  allow_overshoot_ratio: 0.05
+  top_candidate_pool: 32
+  candidate_sample_size: 256
+  prefer_multi_tail_positive: true
+  label_names:
+    - label_esophageal_smt
+    - label_esophageal_mucosal_or_tumor
+    - label_gastritis
+  tail_labels: []
+  report_filename: class_balance_report.json
+
+image_training:
+  image_size: 224
+  max_epochs: 30
+  patience: 30
+  num_workers: 2
+  pretrained: true
+  run_test: true
+  # 三个独立进程各占一张卡；单个模型仍保持原始 batch size=1。
+  use_multi_gpu: false
+  common_run_overrides:
+    image_cache_mode: disk
+    image_cache_scope: shared
+    image_cache_dir: /home/Lim/Project4/datasets/image_cache
+    image_cache_warmup: false
+    memory_cache_size: 0
+  checkpoint_retention:
+    keep:
+      - best_macro_f1.ckpt
+    remove_after_completed_test:
+      - best_micro_f1.ckpt
+      - best_val_loss.ckpt
+      - last.ckpt
+  # 100折各保留一个最佳Macro-F1权重，预计约40GB；30GB为停止新任务的安全下限。
+  min_free_disk_gb: 30
+
+# source_run_dir 用于原样继承各模型在完整 TASK2 表2实验中的模型参数和训练超参数。
+image_models:
+  - name: task2_hasan_itf_2024
+    display_name: Image–Text Feature Fusion (2024)
+    modality: multimodal
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task2/table2_multimodal_sotas/task2_1
+  - name: task2_mmfnet_2024
+    display_name: MMFNet (2024)
+    modality: multimodal
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task2/table2_multimodal_sotas/task2_2
+  - name: task2_saif_2025
+    display_name: SAIF (2025)
+    modality: multimodal
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task2/table2_multimodal_sotas/task2_3
+  - name: task2_mmtf_2025
+    display_name: MMTF (2025)
+    modality: multimodal
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task2/table2_multimodal_sotas/task2_4
+  - name: task2_radfuse_2025
+    display_name: RadFuse (2025)
+    modality: multimodal
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task2/table2_multimodal_sotas/task2_5
+
+# 本配置没有文本专用模型；保留空列表以复用统一汇总器。
+text_config: /home/Lim/Project4/src/configs/task2/exp10_text_classification.yaml
+text_models: []
+
+# 汇总时直接引用已经完成的 TASK3 主模型五折结果，不重复训练。
+main_model:
+  name: promef_mil
+  display_name: ProMEF-MIL
+  modality: multimodal
+  reuse_completed_results: true

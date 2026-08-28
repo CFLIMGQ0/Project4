@@ -702,6 +702,7 @@ def run_data_pipeline_probe(
             loader_prefetch_factor=int(run_cfg.get("loader_prefetch_factor", 2)),
             image_cache_mode=str(run_cfg.get("image_cache_mode", "none")),
             image_cache_dir=resolved_cache_dir,
+            image_cache_manifest=str(run_cfg.get("image_cache_manifest", "")).strip() or None,
             legacy_image_cache_dirs=legacy_cache_dirs,
             image_cache_warmup=bool(run_cfg.get("image_cache_warmup", False)),
             memory_cache_size=int(run_cfg.get("memory_cache_size", 0)),

@@ -65,6 +65,7 @@ model:
     text_vocab_size: 8192
     text_embed_dim: 128
     textcnn_kernel_sizes: [2, 3, 4]
+    label_query_consistency_weight: 0.01
     image_aux_weight: 0.0
 
 training:

@@ -86,7 +86,10 @@ from model import GastroLabelGraphMIL, RGHMIL
 from sotas import (
     GASTRO_SOTA_CLASS_REGISTRY,
     GASTRO_SOTA_MODEL_NAMES,
+    TASK2_MULTIMODAL_SOTA_CLASS_REGISTRY,
+    TASK2_MULTIMODAL_SOTA_MODEL_NAMES,
     build_gastro_sota,
+    build_task2_multimodal_sota,
 )
 from tasks import DEFAULT_GASTRO_TASK_NAME, get_task_spec, list_task_specs
 from training import (
@@ -116,6 +119,7 @@ CUSTOM_GASTRO_MODEL_NAMES = (
 )
 SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(MODEL_SEQUENCE + CUSTOM_GASTRO_MODEL_NAMES + GASTRO_BASELINE_MODEL_NAMES))
 SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(SUPPORTED_MODEL_NAMES + GASTRO_SOTA_MODEL_NAMES))
+SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(SUPPORTED_MODEL_NAMES + TASK2_MULTIMODAL_SOTA_MODEL_NAMES))
 SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(SUPPORTED_MODEL_NAMES + EXP1_MODEL_NAMES))
 SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(SUPPORTED_MODEL_NAMES + EXP2_MODEL_NAMES))
 SUPPORTED_MODEL_NAMES = tuple(dict.fromkeys(SUPPORTED_MODEL_NAMES + EXP4_MODEL_NAMES))
@@ -129,6 +133,7 @@ GASTRO_MODEL_NAMES = tuple(
             *CUSTOM_GASTRO_MODEL_NAMES,
             *GASTRO_BASELINE_MODEL_NAMES,
             *GASTRO_SOTA_MODEL_NAMES,
+            *TASK2_MULTIMODAL_SOTA_MODEL_NAMES,
             *EXP1_MODEL_NAMES,
             *EXP2_MODEL_NAMES,
             *EXP4_MODEL_NAMES,
@@ -2775,6 +2780,7 @@ def build_loaders(
     loader_prefetch_factor: int,
     image_cache_mode: str,
     image_cache_dir: str | Path | None,
+    image_cache_manifest: str | Path | None,
     legacy_image_cache_dirs: list[str | Path] | None,
     image_cache_warmup: bool,
     memory_cache_size: int,
@@ -2798,6 +2804,7 @@ def build_loaders(
         random_instance_dropout=random_instance_dropout,
         image_cache_mode=image_cache_mode,
         image_cache_dir=image_cache_dir,
+        image_cache_manifest=image_cache_manifest,
         legacy_image_cache_dirs=legacy_image_cache_dirs,
         memory_cache_size=memory_cache_size,
         roi_enabled=roi_enabled,
@@ -2821,6 +2828,7 @@ def build_loaders(
         random_instance_dropout=0.0,
         image_cache_mode=image_cache_mode,
         image_cache_dir=image_cache_dir,
+        image_cache_manifest=image_cache_manifest,
         legacy_image_cache_dirs=legacy_image_cache_dirs,
         memory_cache_size=memory_cache_size,
         roi_enabled=roi_enabled,
@@ -2844,6 +2852,7 @@ def build_loaders(
         random_instance_dropout=0.0,
         image_cache_mode=image_cache_mode,
         image_cache_dir=image_cache_dir,
+        image_cache_manifest=image_cache_manifest,
         legacy_image_cache_dirs=legacy_image_cache_dirs,
         memory_cache_size=memory_cache_size,
         roi_enabled=roi_enabled,
@@ -4846,17 +4855,40 @@ def resolve_run_cfg(train_cfg: dict[str, Any], model_name: str) -> dict[str, Any
                 "leakage_note": "exp_8 实验3：训练期使用安全报告字段做图文对齐，测试 logits 保持 image-only；不使用 watchResult。",
             }
         )
-    elif model_name in {"exp8_mm_watch_cross_attn", "exp8_mm_watch_cross_attn_textcnn"}:
+    elif model_name in {
+        "exp8_mm_watch_cross_attn",
+        "exp8_mm_watch_cross_attn_textcnn",
+        "exp8_mm_watch_cross_attn_textcnn_image_distill",
+        "exp12_apro_cope_watch_cross_attn_textcnn",
+    }:
         run_cfg.update(_build_exp6_long64_run_overrides())
         run_cfg.update(
             {
                 "structured_fields": [],
-                "modality_level": "report_assist",
-                "modality_fields": "image+watch",
-                "inference_inputs": "image+watch",
+                "modality_level": (
+                    "train_time_distill"
+                    if model_name == "exp8_mm_watch_cross_attn_textcnn_image_distill"
+                    else "report_assist"
+                ),
+                "modality_fields": (
+                    "image+masked_watch(train_only)"
+                    if model_name == "exp8_mm_watch_cross_attn_textcnn_image_distill"
+                    else "image+watch"
+                ),
+                "inference_inputs": (
+                    "image"
+                    if model_name == "exp8_mm_watch_cross_attn_textcnn_image_distill"
+                    else "image+watch"
+                ),
                 "leakage_note": (
-                    "测试阶段输入类别名称掩码后的 watch，属于报告辅助任务；不输入 watchResult。"
-                    if model_name == "exp8_mm_watch_cross_attn_textcnn"
+                    "训练阶段由输入类别名称掩码watch的多模态分支指导纯图像分支；"
+                    "验证和测试仅使用图像学生分支，不输入watch或watchResult。"
+                    if model_name == "exp8_mm_watch_cross_attn_textcnn_image_distill"
+                    else "测试阶段输入类别名称掩码后的 watch，属于报告辅助任务；不输入 watchResult。"
+                    if model_name in {
+                        "exp8_mm_watch_cross_attn_textcnn",
+                        "exp12_apro_cope_watch_cross_attn_textcnn",
+                    }
                     else "exp_8 实验4：测试阶段输入 watch，属于报告辅助任务；不输入 watchResult。"
                 ),
             }
@@ -4870,6 +4902,20 @@ def resolve_run_cfg(train_cfg: dict[str, Any], model_name: str) -> dict[str, Any
                 "modality_fields": "image+text_guided_top64",
                 "inference_inputs": "image+text_guided_fields",
                 "leakage_note": "exp_8 实验5：使用低到中风险文本字段进行实例重加权与对齐；当前实现为训练内 64 图重加权，不使用 watchResult。",
+            }
+        )
+    elif model_name in TASK2_MULTIMODAL_SOTA_CLASS_REGISTRY:
+        run_cfg.update(_build_exp6_long64_run_overrides())
+        run_cfg.update(
+            {
+                "structured_fields": [],
+                "modality_level": "report_assist_sota_adaptation",
+                "modality_fields": "image+masked_watch",
+                "inference_inputs": "image+masked_watch",
+                "leakage_note": (
+                    "表2图文SOTA任务适配复现：输入完整图像bag与类别名称掩码后的watch；"
+                    "不输入watchResult。结果不是原作者在本数据集上的官方实现结果。"
+                ),
             }
         )
     return run_cfg
@@ -5114,6 +5160,63 @@ def build_model_bundle(
             "attention_diversity": float(model_param_cfg.get("attention_diversity_weight", 0.05)),
             "instance_clustering": float(model_param_cfg.get("instance_clustering_weight", 0.2)),
             "pseudo_bag": float(model_param_cfg.get("pseudo_bag_weight", 0.2)),
+        }
+        trainer_cfg = TrainerConfig(
+            task_type=task_type,
+            max_epochs=max_epochs,
+            patience=patience,
+            lr=float(run_cfg.get("lr", 2e-4)),
+            optimizer_name=str(run_cfg.get("optimizer_name", "adamw")),
+            weight_decay=float(run_cfg.get("weight_decay", 1e-4)),
+            warmup_ratio=float(run_cfg.get("warmup_ratio", 0.1)),
+            grad_accum_steps=int(run_cfg.get("grad_accum_steps", 2)),
+            amp=bool(run_cfg.get("amp", True)),
+            monitor_metric=monitor_metric,
+            monitor_mode=monitor_mode,
+            topk_evidence=int(run_cfg.get("topk_evidence", 5)),
+            loss_name=str(run_cfg.get("loss_name", "asymmetric")),
+            pos_weight=pos_weight,
+            aux_loss_weights=aux_loss_weights,
+            use_multi_gpu=use_multi_gpu,
+            resume_path=resume_path,
+            run_test=run_test,
+        )
+        return model, trainer_cfg, resolved_task_name, label_names, class_names
+
+    if model_name in TASK2_MULTIMODAL_SOTA_CLASS_REGISTRY:
+        monitor_metric, monitor_mode = resolve_monitor_settings(
+            run_cfg,
+            default_metric="macro_f1",
+            default_mode="max",
+        )
+        model = build_task2_multimodal_sota(
+            model_name=model_name,
+            backbone_name=str(model_param_cfg.get("backbone_name", "convnext_tiny")),
+            pretrained=pretrained,
+            freeze_stages=int(model_param_cfg.get("freeze_stages", 1)),
+            feature_dim=int(model_param_cfg.get("feature_dim", 512)),
+            attn_dim=int(model_param_cfg.get("attn_dim", 256)),
+            hidden_dim=int(model_param_cfg.get("hidden_dim", 1024)),
+            num_labels=num_labels,
+            dropout=float(model_param_cfg.get("dropout", 0.2)),
+            encoder_chunk_size=int(model_param_cfg.get("encoder_chunk_size", 16)),
+            text_vocab_size=int(model_param_cfg.get("text_vocab_size", 8192)),
+            text_embed_dim=int(model_param_cfg.get("text_embed_dim", 128)),
+            textcnn_kernel_sizes=tuple(model_param_cfg.get("textcnn_kernel_sizes", (2, 3, 4))),
+            image_distill_temperature=float(model_param_cfg.get("image_distill_temperature", 2.0)),
+            num_heads=int(model_param_cfg.get("num_heads", 4)),
+            num_layers=int(model_param_cfg.get("num_layers", 2)),
+            correlation_threshold=float(model_param_cfg.get("correlation_threshold", 0.5)),
+            alignment_temperature=float(model_param_cfg.get("alignment_temperature", 1.0)),
+            contrast_temperature=float(model_param_cfg.get("contrast_temperature", 0.07)),
+            contrast_queue_size=int(model_param_cfg.get("contrast_queue_size", 256)),
+            window_size=int(model_param_cfg.get("window_size", 8)),
+        )
+        aux_loss_weights = {
+            "alignment": float(model_param_cfg.get("alignment_weight", 0.1)),
+            "contrastive": float(model_param_cfg.get("contrastive_weight", 0.1)),
+            "image_branch": float(model_param_cfg.get("image_branch_weight", 0.1)),
+            "text_branch": float(model_param_cfg.get("text_branch_weight", 0.1)),
         }
         trainer_cfg = TrainerConfig(
             task_type=task_type,
@@ -5406,6 +5509,10 @@ def build_model_bundle(
             watch_fusion_mode=str(model_param_cfg.get("watch_fusion_mode", "none")),
             use_text_gate=bool(model_param_cfg.get("use_text_gate", False)),
             textcnn_kernel_sizes=tuple(model_param_cfg.get("textcnn_kernel_sizes", (2, 3, 4))),
+            position_variant=str(model_param_cfg.get("position_variant", "apro_full")),
+            apro_position_dim=int(model_param_cfg.get("apro_position_dim", 64)),
+            apro_warp_alpha=float(model_param_cfg.get("apro_warp_alpha", 1.5)),
+            apro_fourier_frequencies=int(model_param_cfg.get("apro_fourier_frequencies", 8)),
         )
         aux_loss_weights = {
             "structured_gate_l1": float(model_param_cfg.get("structured_gate_l1_weight", 0.0)),
@@ -5414,8 +5521,12 @@ def build_model_bundle(
             "text_align": float(model_param_cfg.get("text_align_weight", 0.0)),
             "text_itc": float(model_param_cfg.get("text_itc_weight", 0.0)),
             "image_aux": float(model_param_cfg.get("image_aux_weight", 0.0)),
+            "image_distill": float(model_param_cfg.get("image_distill_weight", 0.0)),
             "attention_sparse": float(model_param_cfg.get("attention_sparse_weight", 0.0)),
             "consistency": float(model_param_cfg.get("consistency_weight", 0.0)),
+            "label_query_consistency": float(
+                model_param_cfg.get("label_query_consistency_weight", 0.0)
+            ),
         }
         trainer_cfg = TrainerConfig(
             task_type=task_type,
@@ -5601,6 +5712,7 @@ def run_single_model(
         loader_prefetch_factor=int(run_cfg.get("loader_prefetch_factor", 2)),
         image_cache_mode=str(run_cfg.get("image_cache_mode", "none")),
         image_cache_dir=resolved_cache_dir,
+        image_cache_manifest=str(run_cfg.get("image_cache_manifest", "")).strip() or None,
         legacy_image_cache_dirs=legacy_cache_dirs,
         image_cache_warmup=bool(run_cfg.get("image_cache_warmup", False)),
         memory_cache_size=int(run_cfg.get("memory_cache_size", 0)),

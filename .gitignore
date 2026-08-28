@@ -9,9 +9,50 @@ venv/
 .DS_Store
 Thumbs.db
 *.log
+
+# Local editor and agent settings
+.vscode/
+.vscode.backup/
+.claude/
+.agents/
+.codex/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+credentials.*
+secrets.*
+
+# Datasets, generated outputs, caches, and pretrained weights
+datasets/
+data/
 outputs/
 runs/
 checkpoints/
-data/raw/
-data/private/
-data/cache/
+pre_weights/
+image_cache/
+cache/
+
+# Model weights and exported model binaries
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.h5
+*.hdf5
+
+# LaTeX build products
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc
+
+# Machine-only GPU diagnostics
+/gpu_stress_*.py
+/gpu_stress_*.sh

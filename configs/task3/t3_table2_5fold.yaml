@@ -1,0 +1,147 @@
+# TASK3：将论文表2全部模型在四类胃镜子数据集上进行五折训练、验证与测试。
+
+experiment_name: t3_table2_5fold
+seed: 2026
+folds: 5
+selection_alias: best_macro_f1
+
+paths:
+  source_csv: /home/Lim/Project4/datasets/task_data/task2/gastro_multilabel_task_datalist.csv
+  dataset_root: /home/Lim/Project4/datasets/main_data
+  # 直接复用已完成 t3_main_model 的样本缓存，不再次扫描全部图片。
+  records_cache: /home/Lim/Project4/outputs/train_runs/task3/t3_main_model/records_cache.json
+  main_model_output_dir: /home/Lim/Project4/outputs/train_runs/task3/t3_main_model
+  output_dir: /home/Lim/Project4/outputs/train_runs/task3/t3_table2_5fold
+
+datasets:
+  regular_white_light:
+    display_name: 常规白光胃镜
+    report_titles:
+      - 无痛胃镜检查报告
+      - 胃镜检查报告
+      - 一诊疗无痛胃镜报告
+      - 职工体检胃镜(无痛)报告
+      - 急诊胃镜下取异物报告
+  chromoscopic:
+    display_name: 染色胃镜
+    report_titles:
+      - 放大染色胃镜精查报告
+      - 无痛胃镜(含色素内镜)报告
+      - 国际部无痛胃镜检查（含色素内镜）报告
+      - 国际部胃镜检查（含色素内镜）报告
+  surgical:
+    display_name: 手术胃镜
+    report_titles:
+      - 胃镜手术(住院)报告
+      - 胃镜下切除手术报告
+      - 胃镜下其他手术报告
+      - 急诊胃镜报告
+  ultrasound:
+    display_name: 超声胃镜
+    report_titles:
+      - 超声胃镜检查报告
+      - 无痛超声胃镜报告
+
+metrics:
+  - macro_f1
+  - micro_f1
+  - macro_roc_auc
+  - macro_pr_auc
+  - subset_accuracy
+  - hamming_loss
+  - kappa
+
+# 与 t3_main_model 一致，仅重采样训练集；验证集和测试集保持原始分布。
+class_balance:
+  enabled: true
+  apply_to: train_only
+  mode: multilabel_minority_oversample
+  target_strategy: per_label_majority
+  max_repeat_per_bag: 30
+  max_added_records: 10000
+  allow_overshoot_ratio: 0.05
+  top_candidate_pool: 32
+  candidate_sample_size: 256
+  prefer_multi_tail_positive: true
+  label_names:
+    - label_esophageal_smt
+    - label_esophageal_mucosal_or_tumor
+    - label_gastritis
+  tail_labels: []
+  report_filename: class_balance_report.json
+
+image_training:
+  image_size: 224
+  max_epochs: 30
+  patience: 30
+  num_workers: 8
+  pretrained: true
+  run_test: true
+  use_multi_gpu: true
+  # 数据已建立共享缓存，不进行缓存预热或重建。
+  common_run_overrides:
+    image_cache_mode: disk
+    image_cache_scope: shared
+    image_cache_dir: /home/Lim/Project4/datasets/image_cache
+    image_cache_warmup: false
+  checkpoint_retention:
+    keep:
+      - best_macro_f1.ckpt
+    remove_after_completed_test:
+      - best_micro_f1.ckpt
+      - best_val_loss.ckpt
+      - last.ckpt
+  min_free_disk_gb: 40
+
+# 模型参数和运行超参数直接继承论文表2对应的最终实验配置。
+image_models:
+  - name: attention_mil
+    display_name: Attention MIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_002_final_attention_mil
+  - name: mean_pooling
+    display_name: Mean Pooling
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_003_final_mean_pooling
+  - name: transformer_context_mil
+    display_name: Transformer-context MIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_004_final_transformer_context_mil
+  - name: topk_mil
+    display_name: Top-k MIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_005_final_topk_mil
+  - name: max_pooling
+    display_name: Max Pooling
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_006_final_max_pooling
+  - name: transmil
+    display_name: TransMIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_007_final_transmil
+  - name: dsmil
+    display_name: DSMIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_008_final_dsmil
+  - name: dtfd_mil
+    display_name: DTFD-MIL
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_009_final_dtfd_mil
+  - name: clam_mb
+    display_name: CLAM-MB
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_010_final_clam_mb
+  - name: clam_sb
+    display_name: CLAM-SB
+    source_run_dir: /home/Lim/Project4/outputs/train_runs/task1/task1_ablation/exp_task1_auto_module_instance_search/final_models_best_params/train_011_final_clam_sb
+
+# 保持表2 Text-only 实验原有模型及超参数。
+text_config: /home/Lim/Project4/src/configs/task2/exp10_text_classification.yaml
+text_models:
+  - name: hashed_mean_encoder
+    display_name: Hashed Mean Encoder
+  - name: vocab_attention_encoder
+    display_name: Vocabulary Attention Encoder
+  - name: textcnn_encoder
+    display_name: TextCNN Encoder
+  - name: bigru_encoder
+    display_name: BiGRU Encoder
+  - name: transformer_encoder
+    display_name: Transformer Encoder
+
+main_model:
+  name: promef_mil
+  display_name: ProMEF-MIL
+  modality: multimodal
+  reuse_completed_results: true

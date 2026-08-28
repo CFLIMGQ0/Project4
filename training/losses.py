@@ -43,18 +43,24 @@ class AsymmetricLossMultiLabel(nn.Module):
         self.eps = eps
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        xs_pos = torch.sigmoid(logits)
+        # ASL contains log/clamp operations that are not numerically safe in
+        # float16: ``1e-8`` underflows to zero and saturated sigmoid outputs can
+        # therefore produce ``0 * log(0) == NaN``.  Keep the same objective and
+        # hyperparameters, but evaluate it in float32 when AMP is enabled.
+        logits_float = logits.float()
+        targets_float = targets.float()
+        xs_pos = torch.sigmoid(logits_float)
         xs_neg = 1.0 - xs_pos
 
         if self.clip > 0:
             xs_neg = (xs_neg + self.clip).clamp(max=1.0)
 
-        loss_pos = targets * torch.log(xs_pos.clamp(min=self.eps))
-        loss_neg = (1.0 - targets) * torch.log(xs_neg.clamp(min=self.eps))
+        loss_pos = targets_float * torch.log(xs_pos.clamp(min=self.eps))
+        loss_neg = (1.0 - targets_float) * torch.log(xs_neg.clamp(min=self.eps))
         loss = loss_pos + loss_neg
 
-        pt = xs_pos * targets + xs_neg * (1.0 - targets)
-        gamma = self.gamma_pos * targets + self.gamma_neg * (1.0 - targets)
+        pt = xs_pos * targets_float + xs_neg * (1.0 - targets_float)
+        gamma = self.gamma_pos * targets_float + self.gamma_neg * (1.0 - targets_float)
         focal_weight = (1.0 - pt).pow(gamma)
         return (-loss * focal_weight).mean()
 

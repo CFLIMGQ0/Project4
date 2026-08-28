@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
+import json
 import math
 import os
 import random
 import re
 import shutil
 from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +81,37 @@ def _iter_progress(iterable, total: int | None = None, desc: str = "处理中"):
     if tqdm is not None:
         return tqdm(iterable, total=total, desc=desc)
     return iterable
+
+
+@lru_cache(maxsize=4)
+def load_image_cache_manifest(manifest_path_raw: str) -> tuple[dict[str, str], frozenset[int]]:
+    """读取迁移缓存索引；同一训练进程中的train/val/test共享一份映射。"""
+    manifest_path = Path(manifest_path_raw).expanduser().resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"未找到图像缓存manifest：{manifest_path}")
+    opener = gzip.open if manifest_path.suffix.lower() == ".gz" else open
+    mapping: dict[str, str] = {}
+    cache_image_sizes: set[int] = set()
+    with opener(manifest_path, "rt", encoding="utf-8") as file:
+        iterator = _iter_progress(file, desc="读取迁移图像缓存索引")
+        for line_number, line in enumerate(iterator, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            image_path = str(row.get("image_path", "")).strip()
+            cache_relpath = str(row.get("cache_relpath", "")).strip()
+            if not image_path or not cache_relpath:
+                raise ValueError(f"缓存manifest第{line_number}行缺少image_path或cache_relpath")
+            if image_path in mapping:
+                raise ValueError(f"缓存manifest存在重复图像路径：{image_path}")
+            relative = Path(cache_relpath)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"缓存manifest包含不安全相对路径：{cache_relpath}")
+            mapping[image_path] = cache_relpath
+            cache_image_sizes.add(int(row.get("cache_image_size", -1)))
+    if not mapping:
+        raise RuntimeError(f"图像缓存manifest为空：{manifest_path}")
+    return mapping, frozenset(cache_image_sizes)
 
 
 def to_int(value: Any) -> int:
@@ -710,6 +744,7 @@ class MILBagDataset(Dataset):
         random_instance_dropout: float = 0.0,
         image_cache_mode: str = "none",
         image_cache_dir: str | Path | None = None,
+        image_cache_manifest: str | Path | None = None,
         legacy_image_cache_dirs: list[str | Path] | None = None,
         memory_cache_size: int = 0,
         roi_index_path: str | Path | None = None,
@@ -760,11 +795,22 @@ class MILBagDataset(Dataset):
         self.use_memory_cache = self.image_cache_mode in {"memory", "memory_and_disk"}
         self.use_disk_cache = self.image_cache_mode in {"disk", "memory_and_disk"}
         self.image_cache_dir = None
+        self.image_cache_manifest: dict[str, str] = {}
         if self.use_disk_cache:
             if image_cache_dir is None or not str(image_cache_dir).strip():
                 raise ValueError("启用磁盘图像缓存时必须提供 image_cache_dir")
             self.image_cache_dir = Path(image_cache_dir).expanduser().resolve()
             self.image_cache_dir.mkdir(parents=True, exist_ok=True)
+            if image_cache_manifest is not None and str(image_cache_manifest).strip():
+                mapping, cache_image_sizes = load_image_cache_manifest(
+                    str(Path(image_cache_manifest).expanduser().resolve())
+                )
+                if cache_image_sizes != {self.cache_image_size}:
+                    raise ValueError(
+                        "缓存manifest图像尺寸与当前实验不一致："
+                        f"manifest={sorted(cache_image_sizes)}，当前={self.cache_image_size}"
+                    )
+                self.image_cache_manifest = mapping
         self.legacy_image_cache_dirs: list[Path] = []
         if self.use_disk_cache and legacy_image_cache_dirs:
             seen_legacy: set[Path] = set()
@@ -910,6 +956,14 @@ class MILBagDataset(Dataset):
             if candidate is not None
         ]
 
+    def _manifest_disk_cache_path(self, image_path: str | Path) -> Path | None:
+        if self.image_cache_dir is None or not self.image_cache_manifest:
+            return None
+        relative_path = self.image_cache_manifest.get(str(image_path))
+        if not relative_path:
+            return None
+        return self.image_cache_dir / relative_path
+
     def _load_disk_cache_file(self, cache_path: Path) -> np.ndarray:
         with cache_path.open("rb") as file:
             return np.load(file, allow_pickle=False)
@@ -935,6 +989,9 @@ class MILBagDataset(Dataset):
         primary_cache_path = self._disk_cache_path(image_path)
         if primary_cache_path is not None and primary_cache_path.is_file():
             return primary_cache_path, primary_cache_path
+        manifest_cache_path = self._manifest_disk_cache_path(image_path)
+        if manifest_cache_path is not None and manifest_cache_path.is_file():
+            return primary_cache_path, manifest_cache_path
         for legacy_cache_path in self._legacy_disk_cache_paths(image_path):
             if legacy_cache_path.is_file():
                 return primary_cache_path, legacy_cache_path
@@ -994,7 +1051,8 @@ class MILBagDataset(Dataset):
                     self.memory_cache.put(memory_key, cached_array)
                 return cached_array
             except Exception:
-                existing_cache_path.unlink(missing_ok=True)
+                if os.environ.get("PROJECT4_DISABLE_DISK_CACHE_WRITE") != "1":
+                    existing_cache_path.unlink(missing_ok=True)
 
         image_array = self._load_source_image_array(image_path)
         if primary_cache_path is not None:
@@ -1177,6 +1235,13 @@ class MILBagDataset(Dataset):
             "label": label,
             "exam_dir": record["exam_dir"],
             "image_paths": selected_paths,
+            # APro-CoPE 使用采样图像在原始完整检查序列中的真实位置。
+            # ROI crop 不属于原始采集序列，以 -1 标记；TASK3 不启用 ROI。
+            "instance_indices": torch.tensor(
+                [*selected_indices, *([-1] * len(roi_crop_paths))],
+                dtype=torch.long,
+            ),
+            "original_image_count": len(image_paths_all),
             "report_title": record.get("report_title", ""),
             "img_num": int(record.get("img_num", len(image_paths_all))),
             "meta": {},
@@ -1227,6 +1292,8 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
     image_paths: list[list[str]] = []
     report_titles: list[str] = []
     img_nums: list[int] = []
+    instance_indices = torch.full((batch_size, max_num_instances), -1, dtype=torch.long)
+    original_image_counts = torch.zeros((batch_size,), dtype=torch.long)
     metas: list[dict[str, Any]] = []
     has_instance_types = any("instance_types" in item for item in batch)
     has_pseudo_region_labels = any("pseudo_region_labels" in item for item in batch)
@@ -1268,6 +1335,8 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         image_paths.append(item["image_paths"])
         report_titles.append(item["report_title"])
         img_nums.append(item["img_num"])
+        instance_indices[batch_index, :num_instances] = item["instance_indices"]
+        original_image_counts[batch_index] = int(item["original_image_count"])
         metas.append(item["meta"])
         if instance_types is not None and "instance_types" in item:
             instance_types[batch_index, :num_instances] = item["instance_types"]
@@ -1299,6 +1368,8 @@ def mil_collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "image_paths": image_paths,
         "report_titles": report_titles,
         "img_nums": img_nums,
+        "instance_indices": instance_indices,
+        "original_image_counts": original_image_counts,
         "metas": metas,
     }
     if pseudo_region_labels is not None:
