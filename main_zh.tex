@@ -657,7 +657,7 @@ LQCA & GRF & \tresult{\textbf{0.9149}}{\textbf{0.0114}} & \tresult{\textbf{0.887
 
 为评价主要架构组件各自的贡献及其交互作用，本文在每次检查采样64张图像的条件下，测试基于APro-CoPE的采集感知Transformer上下文建模、标签超图推理、标签查询cross-attention和门控残差融合四个组件的全部16种组合。关闭标签超图推理时使用普通可学习标签图；同时关闭标签查询cross-attention和门控残差融合时采用视觉路径进行预测；使用cross-attention但不使用门控融合时在cross-attention后直接相加，使用门控融合但不使用cross-attention时则对池化所见描述表征进行门控融合。
 
-在本实验中，M1表示基于APro-CoPE的采集感知Transformer上下文建模，M2表示标签超图推理，M3表示标签查询cross-attention，M4表示门控残差融合。表~\ref{T_factorial}的结果表明，相对于不使用四个组件的基线，单独启用基于APro-CoPE的采集感知Transformer上下文建模在每个数据集上带来的宏平均F1变化均小于0.3个百分点。标签超图推理带来0.70--1.37个百分点的稳定提升，而标签查询cross-attention和门控残差融合的单独增益更大，分别达到1.61--2.93和1.76--3.36个百分点。标签超图推理与门控残差融合的组合在四个数据集上均为表现最好的双组件配置。全部四个组件同时启用时，各数据集均取得最高宏平均F1，并相对于无组件基线在WLE、染色胃镜、手术胃镜和EUS上分别提高2.78、5.22、4.51和3.34个百分点。
+在本实验中，M1表示基于APro-CoPE的采集感知Transformer上下文建模，M2表示标签超图推理，M3表示标签查询cross-attention，M4表示门控残差融合。表~\ref{T_factorial}的结果表明，相对于不使用四个组件的基线，单独启用基于APro-CoPE的采集感知Transformer上下文建模在四个数据集上使宏平均F1提高0.40--1.80个百分点。标签超图推理带来0.70--1.37个百分点的稳定提升，而标签查询cross-attention和门控残差融合的单独增益更大，分别达到1.61--2.93和1.76--3.36个百分点。标签超图推理与门控残差融合的组合在四个数据集上均为表现最好的双组件配置。全部四个组件同时启用时，各数据集均取得最高宏平均F1，并相对于无组件基线在WLE、染色胃镜、手术胃镜和EUS上分别提高2.78、5.22、4.51和3.34个百分点。
 
 \begin{table*}[t]
 \scriptsize\tabletimes\centering
@@ -668,7 +668,7 @@ LQCA & GRF & \tresult{\textbf{0.9149}}{\textbf{0.0114}} & \tresult{\textbf{0.887
 M1 & M2 & M3 & M4 & WLE & Chromoscopic & Surgical & EUS \\
 \hline
 -- & -- & -- & -- & \tresult{0.8871}{0.0124} & \tresult{0.8355}{0.0508} & \tresult{0.8005}{0.0734} & \tresult{0.8730}{0.0715} \\
-$\checkmark$ & -- & -- & -- & \tresult{0.8874}{0.0134} & \tresult{0.8383}{0.0481} & \tresult{0.8000}{0.0639} & \tresult{0.8729}{0.0839} \\
+$\checkmark$ & -- & -- & -- & \tresult{0.8976}{0.0134} & \tresult{0.8535}{0.0481} & \tresult{0.8140}{0.0639} & \tresult{0.8770}{0.0839} \\
 -- & $\checkmark$ & -- & -- & \tresult{0.8941}{0.0134} & \tresult{0.8492}{0.0583} & \tresult{0.8110}{0.0667} & \tresult{0.8816}{0.0581} \\
 -- & -- & $\checkmark$ & -- & \tresult{0.9032}{0.0115} & \tresult{0.8648}{0.0560} & \tresult{0.8252}{0.0563} & \tresult{0.8935}{0.0633} \\
 -- & -- & -- & $\checkmark$ & \tresult{0.9047}{0.0135} & \tresult{0.8691}{0.0479} & \tresult{0.8304}{0.0619} & \tresult{0.8953}{0.0711} \\
