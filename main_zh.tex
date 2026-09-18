@@ -431,33 +431,33 @@ s_i^{img}=C_{img}(Z_i^{img}).
 \scriptsize\tabletimes\centering
 \caption{四个胃镜数据集上纯图像、纯文本与多模态方法的比较。数值为患者分组五折宏平均F1的均值$\pm$标准差。img.和txt.分别表示内镜图像输入和经过类别名称掩码的胃镜所见描述输入。\label{T2}}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lcc*{4}{c}}
+\begin{tabular}{lcc*{5}{c}}
 \hline
-模型 & 图像 & 文本 & WLE & 染色胃镜 & 手术胃镜 & EUS \\
+模型 & 图像 & 文本 & WLE & 染色胃镜 & 手术胃镜 & EUS & CT-RATE \\
 \hline
-Attention MIL & $\checkmark$ & $\times$ & \tresult{0.7919}{0.0119} & \tresult{0.7391}{0.0448} & \tresult{0.7018}{0.1235} & \tresult{0.6268}{0.0342} \\
-Mean pooling & $\checkmark$ & $\times$ & \tresult{0.7931}{0.0088} & \tresult{0.7408}{0.0322} & \tresult{0.7173}{0.0744} & \tresult{0.5910}{0.0592} \\
-Transformer-context MIL & $\checkmark$ & $\times$ & \tresult{0.8004}{0.0160} & \tresult{0.7426}{0.0194} & \tresult{0.7765}{0.0886} & \tresult{0.5966}{0.0612} \\
-Top-$k$ MIL & $\checkmark$ & $\times$ & \tresult{0.7862}{0.0232} & \tresult{0.7511}{0.0406} & \tresult{0.7698}{0.0849} & \tresult{0.6037}{0.0887} \\
-Max pooling & $\checkmark$ & $\times$ & \tresult{0.7608}{0.0034} & \tresult{0.6842}{0.0261} & \tresult{0.6009}{0.0919} & \tresult{0.5505}{0.0756} \\
-TransMIL & $\checkmark$ & $\times$ & \tresult{0.8021}{0.0146} & \tresult{0.7217}{0.0368} & \tresult{0.7516}{0.0938} & \tresult{0.6045}{0.0539} \\
-DSMIL & $\checkmark$ & $\times$ & \tresult{0.7956}{0.0159} & \tresult{0.7468}{0.0448} & \tresult{0.6873}{0.0852} & \tresult{0.5765}{0.0765} \\
-DTFD-MIL & $\checkmark$ & $\times$ & \tresult{0.7714}{0.0141} & \tresult{0.7091}{0.0306} & \tresult{0.7134}{0.0853} & \tresult{0.5896}{0.0419} \\
-CLAM-MB & $\checkmark$ & $\times$ & \tresult{0.7741}{0.0090} & \tresult{0.7137}{0.0269} & \tresult{0.7094}{0.0865} & \tresult{0.5883}{0.0401} \\
-CLAM-SB & $\checkmark$ & $\times$ & \tresult{0.7642}{0.0040} & \tresult{0.6997}{0.0234} & \tresult{0.6785}{0.0479} & \tresult{0.5695}{0.0379} \\
+Attention MIL & $\checkmark$ & $\times$ & \tresult{0.7919}{0.0119} & \tresult{0.7391}{0.0448} & \tresult{0.7018}{0.1235} & \tresult{0.6268}{0.0342} & \tresult{0.4338}{0.0232} \\
+Mean pooling & $\checkmark$ & $\times$ & \tresult{0.7931}{0.0088} & \tresult{0.7408}{0.0322} & \tresult{0.7173}{0.0744} & \tresult{0.5910}{0.0592} & \tresult{0.4255}{0.0265} \\
+Transformer-context MIL & $\checkmark$ & $\times$ & \tresult{0.8004}{0.0160} & \tresult{0.7426}{0.0194} & \tresult{0.7765}{0.0886} & \tresult{0.5966}{0.0612} & \tresult{0.4215}{0.0196} \\
+Top-$k$ MIL & $\checkmark$ & $\times$ & \tresult{0.7862}{0.0232} & \tresult{0.7511}{0.0406} & \tresult{0.7698}{0.0849} & \tresult{0.6037}{0.0887} & \tresult{0.4364}{0.0196} \\
+Max pooling & $\checkmark$ & $\times$ & \tresult{0.7608}{0.0034} & \tresult{0.6842}{0.0261} & \tresult{0.6009}{0.0919} & \tresult{0.5505}{0.0756} & \tresult{0.4270}{0.0267} \\
+TransMIL & $\checkmark$ & $\times$ & \tresult{0.8021}{0.0146} & \tresult{0.7217}{0.0368} & \tresult{0.7516}{0.0938} & \tresult{0.6045}{0.0539} & \tresult{0.4358}{0.0190} \\
+DSMIL & $\checkmark$ & $\times$ & \tresult{0.7956}{0.0159} & \tresult{0.7468}{0.0448} & \tresult{0.6873}{0.0852} & \tresult{0.5765}{0.0765} & \tresult{0.4379}{0.0218} \\
+DTFD-MIL & $\checkmark$ & $\times$ & \tresult{0.7714}{0.0141} & \tresult{0.7091}{0.0306} & \tresult{0.7134}{0.0853} & \tresult{0.5896}{0.0419} & \tresult{0.4394}{0.0167} \\
+CLAM-MB & $\checkmark$ & $\times$ & \tresult{0.7741}{0.0090} & \tresult{0.7137}{0.0269} & \tresult{0.7094}{0.0865} & \tresult{0.5883}{0.0401} & \tresult{0.4424}{0.0136} \\
+CLAM-SB & $\checkmark$ & $\times$ & \tresult{0.7642}{0.0040} & \tresult{0.6997}{0.0234} & \tresult{0.6785}{0.0479} & \tresult{0.5695}{0.0379} & \tresult{0.4398}{0.0110} \\
 \hline
-Hashed mean & $\times$ & $\checkmark$ & \tresult{0.8901}{0.0184} & \tresult{0.8037}{0.0689} & \tresult{0.8349}{0.0187} & \tresult{0.8836}{0.0688} \\
-Vocabulary attention & $\times$ & $\checkmark$ & \tresult{0.8906}{0.0124} & \tresult{0.8045}{0.0708} & \tresult{0.8147}{0.0487} & \tresult{0.8957}{0.0542} \\
-TextCNN & $\times$ & $\checkmark$ & \tresult{0.9004}{0.0123} & \tresult{0.8652}{0.0332} & \tresult{0.8356}{0.0807} & \tresult{0.8982}{0.0515} \\
-BiGRU & $\times$ & $\checkmark$ & \tresult{0.8928}{0.0191} & \tresult{0.8085}{0.0818} & \tresult{0.8075}{0.0342} & \tresult{0.9019}{0.0531} \\
-Transformer & $\times$ & $\checkmark$ & \tresult{0.8915}{0.0163} & \tresult{0.8150}{0.0281} & \tresult{0.8285}{0.0174} & \tresult{0.8830}{0.0604} \\
+Hashed mean & $\times$ & $\checkmark$ & \tresult{0.8901}{0.0184} & \tresult{0.8037}{0.0689} & \tresult{0.8349}{0.0187} & \tresult{0.8836}{0.0688} & \tresult{0.6191}{0.0293} \\
+Vocabulary attention & $\times$ & $\checkmark$ & \tresult{0.8906}{0.0124} & \tresult{0.8045}{0.0708} & \tresult{0.8147}{0.0487} & \tresult{0.8957}{0.0542} & \tresult{0.7334}{0.0315} \\
+TextCNN & $\times$ & $\checkmark$ & \tresult{0.9004}{0.0123} & \tresult{0.8652}{0.0332} & \tresult{0.8356}{0.0807} & \tresult{0.8982}{0.0515} & \tresult{0.6888}{0.0615} \\
+BiGRU & $\times$ & $\checkmark$ & \tresult{0.8928}{0.0191} & \tresult{0.8085}{0.0818} & \tresult{0.8075}{0.0342} & \tresult{0.9019}{0.0531} & \tresult{0.6369}{0.0186} \\
+Transformer & $\times$ & $\checkmark$ & \tresult{0.8915}{0.0163} & \tresult{0.8150}{0.0281} & \tresult{0.8285}{0.0174} & \tresult{0.8830}{0.0604} & \tresult{0.7750}{0.0259} \\
 \hline
-MMFNet (2024)\cite{R29}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.9132}{0.0099} & \tresult{0.8371}{0.0647} & \tresult{0.8345}{0.0844} & \tresult{0.8999}{0.0731} \\
-RadFuse (2025)\cite{R32}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.9135}{0.0083} & \tresult{0.7990}{0.1013} & \tresult{0.8221}{0.0671} & \tresult{0.8517}{0.0712} \\
-SAIF (2025)\cite{R30}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.8413}{0.0166} & \tresult{0.7201}{0.0544} & \tresult{0.7482}{0.0821} & \tresult{0.6266}{0.0986} \\
-MMTF (2026)\cite{R31}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.9121}{0.0118} & \tresult{0.7320}{0.0415} & \tresult{0.7595}{0.1371} & \tresult{0.7846}{0.0974} \\
+MMFNet (2024)\cite{R29}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.9132}{0.0099} & \tresult{0.8371}{0.0647} & \tresult{0.8345}{0.0844} & \tresult{0.8999}{0.0731} & \tresult{0.5734}{0.0237} \\
+RadFuse (2025)\cite{R32}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.9135}{0.0083} & \tresult{0.7990}{0.1013} & \tresult{0.8221}{0.0671} & \tresult{0.8517}{0.0712} & \tresult{0.6788}{0.0439} \\
+SAIF (2025)\cite{R30}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.8413}{0.0166} & \tresult{0.7201}{0.0544} & \tresult{0.7482}{0.0821} & \tresult{0.6266}{0.0986} & \tresult{0.4481}{0.0200} \\
+MMTF (2026)\cite{R31}$^{\dagger}$ & $\checkmark$ & $\checkmark$ & \tresult{0.9121}{0.0118} & \tresult{0.7320}{0.0415} & \tresult{0.7595}{0.1371} & \tresult{0.7846}{0.0974} & \tresult{0.7779}{0.0402} \\
 \hline
-AMEF-MIL (Ours) & $\checkmark$ & $\checkmark$ & \tresult{\textbf{0.9149}}{\textbf{0.0114}} & \tresult{\textbf{0.8877}}{\textbf{0.0168}} & \tresult{\textbf{0.8456}}{\textbf{0.0224}} & \tresult{\textbf{0.9064}}{\textbf{0.0474}} \\
+AMEF-MIL (Ours) & $\checkmark$ & $\checkmark$ & \tresult{\textbf{0.9149}}{\textbf{0.0114}} & \tresult{\textbf{0.8877}}{\textbf{0.0168}} & \tresult{\textbf{0.8456}}{\textbf{0.0224}} & \tresult{\textbf{0.9064}}{\textbf{0.0474}} & \tresult{\textbf{0.8134}}{\textbf{0.0186}} \\
 \hline
 \end{tabular}
 }

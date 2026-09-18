@@ -100,6 +100,7 @@ CAPTIONS = {
 TABLE_HEADER_REPLACEMENTS = {
     "Fold & WLE & Chromoendoscopy & Surgical gastroscopy & EUS \\\\": "折 & WLE & 染色胃镜 & 手术胃镜 & EUS \\\\",
     "Model & img. & txt. & WLE & Chromoscopic & Surgical & EUS \\\\": "模型 & 图像 & 文本 & WLE & 染色胃镜 & 手术胃镜 & EUS \\\\",
+    "Model & img. & txt. & WLE & Chromoscopic & Surgical & EUS & CT-RATE \\\\": "模型 & 图像 & 文本 & WLE & 染色胃镜 & 手术胃镜 & EUS & CT-RATE \\\\",
     "Images & Method & WLE & Chromoscopic & Surgical & EUS \\\\": "图像数 & 方法 & WLE & 染色胃镜 & 手术胃镜 & EUS \\\\",
     "Position variant & Trans. & AA & MC & Abs. & Rel. & WLE & Chromoscopic & Surgical & EUS \\\\": "位置变体 & 转变 & AA & MC & 绝对 & 相对 & WLE & 染色胃镜 & 手术胃镜 & EUS \\\\",
     "MIL aggregation & Label reasoner & WLE & Chromoscopic & Surgical & EUS \\\\": "MIL聚合 & 标签推理器 & WLE & 染色胃镜 & 手术胃镜 & EUS \\\\",

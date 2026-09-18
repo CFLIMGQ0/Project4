@@ -196,13 +196,11 @@ python train.py --task task2
 - [TASK2.md](/home/Lim/Project4/src/TASK2.md)：TASK2 任务设计。
 - [MODELS.md](/home/Lim/Project4/src/MODELS.md)：TASK2 模型结构说明。
 - [TASK2_EXP.md](/home/Lim/Project4/src/TASK2_EXP.md)：TASK2 实验记录。
-- [temp.md](/home/Lim/Project4/src/temp.md)：TASK2 临时指标表。
 - [baselines/task1/gastro_baseline/TASK1_BASELINE.MD](/home/Lim/Project4/src/baselines/task1/gastro_baseline/TASK1_BASELINE.MD)：baseline 说明。
 - [sotas/task1/gastro_sota/TASK1_SOTA.MD](/home/Lim/Project4/src/sotas/task1/gastro_sota/TASK1_SOTA.MD)：SOTA 说明。
 - [configs/task1/TASK1_EXPLORE.MD](/home/Lim/Project4/src/configs/task1/TASK1_EXPLORE.MD)：自动探索说明。
 - [model/gastro_label_graph_mil/MODEL.MD](/home/Lim/Project4/src/model/gastro_label_graph_mil/MODEL.MD)：标签图模型结构说明。
 - [Paper/TASK1_PAPER_OVERVIEW.MD](/home/Lim/Project4/src/Paper/TASK1_PAPER_OVERVIEW.MD)：论文相关记录。
-- [Paper/Sage_LaTeX_Guidelines.tex](/home/Lim/Project4/src/Paper/Sage_LaTeX_Guidelines.tex)：期刊 LaTeX 模板说明。
 
 ## 说明
 
