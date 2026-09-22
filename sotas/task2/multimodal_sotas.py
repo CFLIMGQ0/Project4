@@ -672,12 +672,16 @@ class MMFNet2024(Task2MultimodalSOTABase):
         )
 
 
+from .task_adapted_vlms import TASK_ADAPTED_VLM_REGISTRY
+
+
 TASK2_MULTIMODAL_SOTA_CLASS_REGISTRY = {
     "task2_hasan_itf_2024": HasanImageTextFusion2024,
     "task2_mmfnet_2024": MMFNet2024,
     "task2_saif_2025": SAIF2025,
     "task2_mmtf_2025": MMTF2025,
     "task2_radfuse_2025": RadFuse2025,
+    **TASK_ADAPTED_VLM_REGISTRY,
 }
 TASK2_MULTIMODAL_SOTA_MODEL_NAMES = tuple(TASK2_MULTIMODAL_SOTA_CLASS_REGISTRY)
 

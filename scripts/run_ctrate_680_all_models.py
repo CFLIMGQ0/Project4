@@ -214,6 +214,10 @@ def selected_models(args):
     return list(MODELS) if args.models is None else args.models
 
 
+def compatible_digests(args, key, digest):
+    return {digest, *getattr(args, "compatible_protocols", {}).get(key, [])}
+
+
 def worker(args):
     import torch
     torch.set_num_threads(4)
@@ -223,7 +227,7 @@ def worker(args):
     digest = current["protocol_sha256"]
     assert json.loads((args.output_dir / "protocol.json").read_text())["protocol_sha256"] == digest
     rows, folds, y = read_inputs()
-    ids = np.arange(680, dtype=np.int64)
+    ids = np.arange(len(rows), dtype=np.int64)
     bags, tokens, masks = None, None, None
     params = parameters()
     jobs = [(key, fold) for key in selected_models(args) for fold in range(5)]
@@ -232,7 +236,7 @@ def worker(args):
             continue
         marker = args.output_dir / f"fold_{fold+1}" / key / "completed.json"
         if marker.exists():
-            assert json.loads(marker.read_text())["protocol_sha256"] == digest
+            assert json.loads(marker.read_text())["protocol_sha256"] in compatible_digests(args, key, digest)
             continue
         try:
             if key in TEXT_MODELS:
@@ -261,7 +265,7 @@ def aggregate(args, digest):
             if not (folder / "completed.json").exists():
                 continue
             metric = json.loads((folder / "test_metrics.json").read_text())
-            assert metric["protocol_sha256"] == digest
+            assert metric["protocol_sha256"] in compatible_digests(args, key, digest)
             metrics.append(metric)
             with (folder / "test_predictions.csv").open(encoding="utf-8-sig", newline="") as stream:
                 predictions.extend({**r, "fold": fold} for r in csv.DictReader(stream))
@@ -269,7 +273,7 @@ def aggregate(args, digest):
         if len(metrics) != 5:
             continue
         predictions.sort(key=lambda r: int(r["patient_id"]))
-        assert [int(r["patient_id"]) for r in predictions] == list(range(680))
+        assert [int(r["patient_id"]) for r in predictions] == list(range(len(targets)))
         y = np.asarray([[int(r[f"true_{n}"]) for n in LABELS] for r in predictions])
         p = np.asarray([[float(r[f"prob_{n}"]) for n in LABELS] for r in predictions])
         pred = np.asarray([[int(r[f"pred_{n}"]) for n in LABELS] for r in predictions])

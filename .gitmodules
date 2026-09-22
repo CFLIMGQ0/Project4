@@ -1,0 +1,12 @@
+[submodule "vendor/position_references/comrope"]
+	path = vendor/position_references/comrope
+	url = https://github.com/Longin-Yu/ComRoPE.git
+[submodule "vendor/position_references/dape_v2"]
+	path = vendor/position_references/dape_v2
+	url = https://github.com/chuanyang-Zheng/DAPE.git
+[submodule "vendor/position_references/path"]
+	path = vendor/position_references/path
+	url = https://github.com/fla-org/flash-linear-attention.git
+[submodule "vendor/position_references/videorope"]
+	path = vendor/position_references/videorope
+	url = https://github.com/Wiselnn570/VideoRoPE.git

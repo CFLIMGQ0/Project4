@@ -9,7 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from exp_4.models import Exp4BaseModel, TimePositionEncoding
-from model.gastro_label_graph_mil.modules import LabelHypergraphReasoner
+from model.common import GatedAttention, MultiLabelAttentionMIL
+from model.gastro_label_graph_mil.modules import LabelGraphReasoner, LabelHypergraphReasoner
 
 
 STRUCTURED_FIELD_NAMES = ("reportTitle", "age", "sex", "hp", "operationValue")
@@ -64,6 +65,41 @@ def _safe_key_padding_mask(tokens: torch.Tensor, token_mask: torch.Tensor) -> tu
         tokens = tokens.clone()
         tokens[empty_rows, 0] = 0.0
     return tokens, ~safe_mask
+
+
+def _safe_transformer_encoder_with_mask(
+    encoder: nn.TransformerEncoder,
+    features: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor:
+    context = features
+    for layer in encoder.layers:
+        def self_attention(values: torch.Tensor) -> torch.Tensor:
+            attended = layer.self_attn(
+                values,
+                values,
+                values,
+                attn_mask=attention_mask,
+                need_weights=False,
+                is_causal=False,
+            )[0]
+            return layer.dropout1(attended)
+
+        def feed_forward(values: torch.Tensor) -> torch.Tensor:
+            hidden = layer.linear1(values)
+            hidden = layer.activation(hidden)
+            hidden = layer.dropout(hidden)
+            return layer.dropout2(layer.linear2(hidden))
+
+        if layer.norm_first:
+            context = context + self_attention(layer.norm1(context))
+            context = context + feed_forward(layer.norm2(context))
+        else:
+            context = layer.norm1(context + self_attention(context))
+            context = layer.norm2(context + feed_forward(context))
+    if encoder.norm is not None:
+        context = encoder.norm(context)
+    return context
 
 
 def _masked_instance_softmax(scores: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -136,6 +172,10 @@ class AProCoPE(nn.Module):
         route: str = "both",
         warp_alpha: float = 1.5,
         fourier_frequencies: int = 8,
+        fourier_mlp_layers: int = 2,
+        transition_dim: int | None = None,
+        transition_groups: tuple[int, ...] | list[int] | None = None,
+        transition_include_gap: bool = True,
         dropout: float = 0.2,
     ) -> None:
         super().__init__()
@@ -146,35 +186,55 @@ class AProCoPE(nn.Module):
         self.mass_conservation = bool(mass_conservation)
         self.route = str(route).strip().lower()
         self.warp_alpha = max(0.0, float(warp_alpha))
+        self.transition_dim = max(
+            8,
+            int(self.position_dim if transition_dim is None else transition_dim),
+        )
+        self.transition_groups = tuple(range(1, 7)) if transition_groups is None else tuple(transition_groups)
+        if (
+            not self.transition_groups
+            or any(type(group) is not int or group not in range(1, 7) for group in self.transition_groups)
+            or self.transition_groups != tuple(sorted(set(self.transition_groups)))
+        ):
+            raise ValueError("transition_groups必须为1至6中无重复、递增的组编号")
+        if not isinstance(transition_include_gap, bool):
+            raise ValueError("transition_include_gap必须为布尔值")
+        self.transition_include_gap = transition_include_gap
         if self.transition_mode not in {"none", "pairwise", "persistent"}:
             raise ValueError(f"未知 APro-CoPE transition_mode: {transition_mode}")
         if self.route not in {"absolute", "relative", "both"}:
             raise ValueError(f"未知 APro-CoPE route: {route}")
 
         self.transition_projector = nn.Sequential(
-            nn.Linear(self.feature_dim, self.position_dim),
-            nn.LayerNorm(self.position_dim),
+            nn.Linear(self.feature_dim, self.transition_dim),
+            nn.LayerNorm(self.transition_dim),
         )
-        transition_input_dim = self.position_dim * 6 + 1
+        transition_input_dim = self.transition_dim * len(self.transition_groups) + int(self.transition_include_gap)
         self.transition_mlp = nn.Sequential(
             nn.LayerNorm(transition_input_dim),
-            nn.Linear(transition_input_dim, self.position_dim),
+            nn.Linear(transition_input_dim, self.transition_dim),
             nn.GELU(),
             nn.Dropout(float(dropout)),
-            nn.Linear(self.position_dim, 1),
+            nn.Linear(self.transition_dim, 1),
         )
         self.fourier = ContinuousFourierFeatures(fourier_frequencies)
         coordinate_dim = 3 * self.fourier.output_dim
-        self.absolute_projector = nn.Sequential(
-            nn.Linear(coordinate_dim, self.feature_dim),
-            nn.GELU(),
-            nn.Linear(self.feature_dim, self.feature_dim),
-        )
-        self.relative_bias = nn.Sequential(
-            nn.Linear(coordinate_dim, self.position_dim),
-            nn.GELU(),
-            nn.Linear(self.position_dim, self.num_heads),
-        )
+        if int(fourier_mlp_layers) == 1:
+            self.absolute_projector = nn.Linear(coordinate_dim, self.feature_dim)
+            self.relative_bias = nn.Linear(coordinate_dim, self.num_heads)
+        elif int(fourier_mlp_layers) == 2:
+            self.absolute_projector = nn.Sequential(
+                nn.Linear(coordinate_dim, self.feature_dim),
+                nn.GELU(),
+                nn.Linear(self.feature_dim, self.feature_dim),
+            )
+            self.relative_bias = nn.Sequential(
+                nn.Linear(coordinate_dim, self.position_dim),
+                nn.GELU(),
+                nn.Linear(self.position_dim, self.num_heads),
+            )
+        else:
+            raise ValueError(f"fourier_mlp_layers必须为1或2：{fourier_mlp_layers}")
 
     @staticmethod
     def acquisition_coordinates(
@@ -236,18 +296,18 @@ class AProCoPE(nn.Module):
                 future_delta = torch.zeros_like(future_delta)
                 future_abs = torch.zeros_like(future_abs)
                 persistence = torch.zeros_like(persistence)
-            transition_input = torch.cat(
-                [
-                    projected,
-                    delta_minus,
-                    future_delta,
-                    delta_minus.abs(),
-                    future_abs,
-                    persistence,
-                    gap.unsqueeze(-1),
-                ],
-                dim=-1,
+            components = (
+                projected,
+                delta_minus,
+                future_delta,
+                delta_minus.abs(),
+                future_abs,
+                persistence,
             )
+            selected_components = [components[group - 1] for group in self.transition_groups]
+            if self.transition_include_gap:
+                selected_components.append(gap.unsqueeze(-1))
+            transition_input = torch.cat(selected_components, dim=-1)
             eta = self.warp_alpha * torch.tanh(self.transition_mlp(transition_input).squeeze(-1))
             eta = eta * valid_gap.to(dtype=eta.dtype)
 
@@ -1086,7 +1146,11 @@ class Exp8WatchCrossAttentionLongMILModel(Exp8LongMILBase):
         }
         if self.training and labels is not None:
             consistency_terms = []
-            for permutation in ((1, 2, 0), (2, 0, 1)):
+            for offset in range(1, self.num_labels):
+                permutation = tuple(
+                    (label_index + offset) % self.num_labels
+                    for label_index in range(self.num_labels)
+                )
                 replaced_text = text_label_embeds[:, permutation, :]
                 if use_gate:
                     replaced_gates = torch.sigmoid(
@@ -1208,6 +1272,10 @@ class Exp12AProCoPEWatchCrossAttentionTextCNNModel(
         apro_position_dim: int = 64,
         apro_warp_alpha: float = 1.5,
         apro_fourier_frequencies: int = 8,
+        apro_fourier_mlp_layers: int = 2,
+        apro_transition_dim: int | None = None,
+        apro_transition_groups: tuple[int, ...] | list[int] | None = None,
+        apro_transition_include_gap: bool = True,
         num_heads: int = 4,
         **kwargs: Any,
     ) -> None:
@@ -1238,6 +1306,12 @@ class Exp12AProCoPEWatchCrossAttentionTextCNNModel(
                 route=route,
                 warp_alpha=float(apro_warp_alpha),
                 fourier_frequencies=int(apro_fourier_frequencies),
+                fourier_mlp_layers=int(apro_fourier_mlp_layers),
+                transition_dim=(
+                    None if apro_transition_dim is None else int(apro_transition_dim)
+                ),
+                transition_groups=apro_transition_groups,
+                transition_include_gap=apro_transition_include_gap,
                 dropout=dropout,
             )
         elif self.position_variant == "standard_cope":
@@ -1317,7 +1391,14 @@ class Exp12AProCoPEWatchCrossAttentionTextCNNModel(
             key_invalid = (~mask)[:, None, None, :]
             attention_bias = attention_bias.masked_fill(key_invalid, -1e4)
             encoder_mask = attention_bias.reshape(batch_size * num_heads, num_instances, num_instances)
-            context_features = self.context_encoder(features, mask=encoder_mask)
+            if getattr(self, "_safe_attention_mask_path", False):
+                context_features = _safe_transformer_encoder_with_mask(
+                    self.context_encoder,
+                    features,
+                    encoder_mask,
+                )
+            else:
+                context_features = self.context_encoder(features, mask=encoder_mask)
         context_features = context_features * mask.unsqueeze(-1).to(dtype=context_features.dtype)
         bag_embeds, attention = self.mil_pool(context_features, mask)
         label_embeds, graph_outputs = self.refine_labels(bag_embeds)
@@ -1353,6 +1434,297 @@ class Exp12AProCoPEWatchCrossAttentionTextCNNModel(
             watch_token_ids=watch_token_ids,
             watch_token_mask=watch_token_mask,
             use_gate=True,
+        )
+
+
+class Exp13LCCFAblationModel(Exp12AProCoPEWatchCrossAttentionTextCNNModel):
+    """LCCF 四阶段消融；保持 AMEF 上游位置与文本编码接口不变。"""
+
+    POOLING_VARIANTS = {"mean", "max", "shared_attention", "label_wise_attention"}
+    REASONING_VARIANTS = {"none", "ordinary_graph", "hypergraph"}
+    TEXT_VARIANTS = {"shared_mean", "shared_query", "label_query_no_identity", "label_query_identity"}
+    FUSION_VARIANTS = {"direct", "fixed", "label_constant", "exam_shared", "exam_label"}
+
+    def __init__(
+        self,
+        *,
+        lccf_pooling: str = "label_wise_attention",
+        lccf_reasoning: str = "hypergraph",
+        lccf_hypergraph_edges: int = 2,
+        lccf_text_retrieval: str = "label_query_identity",
+        lccf_fusion: str = "exam_label",
+        **kwargs: Any,
+    ) -> None:
+        self.lccf_pooling = str(lccf_pooling).strip().lower()
+        self.lccf_reasoning = str(lccf_reasoning).strip().lower()
+        self.lccf_text_retrieval = str(lccf_text_retrieval).strip().lower()
+        self.lccf_fusion = str(lccf_fusion).strip().lower()
+        if self.lccf_pooling not in self.POOLING_VARIANTS:
+            raise ValueError(f"未知 LCCF pooling: {lccf_pooling}")
+        if self.lccf_reasoning not in self.REASONING_VARIANTS:
+            raise ValueError(f"未知 LCCF reasoning: {lccf_reasoning}")
+        if self.lccf_text_retrieval not in self.TEXT_VARIANTS:
+            raise ValueError(f"未知 LCCF text retrieval: {lccf_text_retrieval}")
+        if self.lccf_fusion not in self.FUSION_VARIANTS:
+            raise ValueError(f"未知 LCCF fusion: {lccf_fusion}")
+        self.lccf_hypergraph_edges = max(1, int(lccf_hypergraph_edges))
+        attn_dim = int(kwargs.get("attn_dim", 256))
+        dropout = float(kwargs.get("dropout", 0.2))
+        kwargs["label_hypergraph_edges"] = self.lccf_hypergraph_edges
+        kwargs["label_graph_type"] = "learnable" if self.lccf_reasoning == "ordinary_graph" else "label_hypergraph"
+        kwargs["use_label_graph"] = self.lccf_reasoning != "none"
+        super().__init__(**kwargs)
+
+        if self.lccf_pooling != "label_wise_attention":
+            self.mil_pool = None
+        if self.lccf_reasoning == "ordinary_graph":
+            self.label_graph_reasoner = LabelGraphReasoner(
+                num_labels=self.num_labels,
+                feature_dim=self.feature_dim,
+                dropout=dropout,
+            )
+        elif self.lccf_reasoning == "none":
+            self.label_graph_reasoner = None
+        if self.lccf_pooling == "shared_attention":
+            self.lccf_shared_attention = GatedAttention(
+                in_dim=self.feature_dim,
+                attn_dim=attn_dim,
+                num_heads=1,
+                dropout=dropout,
+            )
+        else:
+            self.lccf_shared_attention = None
+        if self.lccf_fusion == "label_constant":
+            self.lccf_label_gate_logit = nn.Parameter(torch.zeros(self.num_labels, 1))
+        else:
+            self.lccf_label_gate_logit = None
+        if self.lccf_fusion == "exam_shared":
+            self.lccf_exam_gate = nn.Sequential(
+                nn.LayerNorm(self.feature_dim * 2),
+                nn.Linear(self.feature_dim * 2, self.feature_dim),
+                nn.GELU(),
+                nn.Linear(self.feature_dim, 1),
+            )
+        else:
+            self.lccf_exam_gate = None
+
+    def _lccf_pool_instances(
+        self,
+        features: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        weights = mask.to(dtype=features.dtype)
+        if self.lccf_pooling == "mean":
+            denominator = weights.sum(dim=1, keepdim=True).clamp_min(1.0)
+            pooled = (features * weights.unsqueeze(-1)).sum(dim=1) / denominator
+            embeds = pooled.unsqueeze(1).expand(-1, self.num_labels, -1)
+            attention = (weights / denominator).unsqueeze(1).expand(-1, self.num_labels, -1)
+            return embeds, attention
+        if self.lccf_pooling == "max":
+            masked = features.masked_fill(~mask.unsqueeze(-1), torch.finfo(features.dtype).min)
+            pooled = masked.amax(dim=1)
+            pooled = torch.where(mask.any(dim=1, keepdim=True), pooled, torch.zeros_like(pooled))
+            denominator = weights.sum(dim=1, keepdim=True).clamp_min(1.0)
+            attention = (weights / denominator).unsqueeze(1).expand(-1, self.num_labels, -1)
+            return pooled.unsqueeze(1).expand(-1, self.num_labels, -1), attention
+        if self.lccf_pooling == "shared_attention":
+            if self.lccf_shared_attention is None:
+                raise RuntimeError("LCCF shared attention 未初始化")
+            pooled, attention = self.lccf_shared_attention(features, mask)
+            return pooled.expand(-1, self.num_labels, -1), attention.expand(-1, self.num_labels, -1)
+        if self.mil_pool is None:
+            raise RuntimeError("LCCF label-wise attention 未初始化")
+        return self.mil_pool(features, mask)
+
+    def _lccf_reason(self, bag_embeds: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.label_graph_reasoner is None:
+            return bag_embeds, torch.eye(
+                self.num_labels,
+                device=bag_embeds.device,
+                dtype=bag_embeds.dtype,
+            )
+        return self.label_graph_reasoner(bag_embeds)
+
+    def _lccf_retrieve_text(
+        self,
+        label_embeds: torch.Tensor,
+        text_tokens: torch.Tensor,
+        text_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        safe_tokens, key_padding_mask = _safe_key_padding_mask(text_tokens, text_mask)
+        if self.lccf_text_retrieval == "shared_mean":
+            token_weights = text_mask.to(dtype=text_tokens.dtype).unsqueeze(-1)
+            pooled = (text_tokens * token_weights).sum(dim=1) / token_weights.sum(dim=1).clamp_min(1.0)
+            return pooled.unsqueeze(1).expand(-1, self.num_labels, -1), torch.empty(0, device=text_tokens.device)
+        if self.lccf_text_retrieval == "shared_query":
+            query = label_embeds.mean(dim=1, keepdim=True)
+            retrieved, attention = self.text_cross_attn(
+                query,
+                safe_tokens,
+                safe_tokens,
+                key_padding_mask=key_padding_mask,
+                need_weights=True,
+                average_attn_weights=True,
+            )
+            return retrieved.expand(-1, self.num_labels, -1), attention.expand(-1, self.num_labels, -1)
+        query = label_embeds
+        if self.lccf_text_retrieval == "label_query_identity":
+            query = query + self.label_query_bias
+        return self.text_cross_attn(
+            query,
+            safe_tokens,
+            safe_tokens,
+            key_padding_mask=key_padding_mask,
+            need_weights=True,
+            average_attn_weights=True,
+        )
+
+    def _lccf_fuse(
+        self,
+        label_embeds: torch.Tensor,
+        text_embeds: torch.Tensor,
+        active: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.lccf_fusion == "direct":
+            gates = torch.ones(
+                label_embeds.shape[0], self.num_labels, 1,
+                device=label_embeds.device, dtype=label_embeds.dtype,
+            )
+        elif self.lccf_fusion == "fixed":
+            gates = torch.full(
+                (label_embeds.shape[0], self.num_labels, 1), 0.5,
+                device=label_embeds.device, dtype=label_embeds.dtype,
+            )
+        elif self.lccf_fusion == "label_constant":
+            if self.lccf_label_gate_logit is None:
+                raise RuntimeError("LCCF label constant gate 未初始化")
+            gates = torch.sigmoid(self.lccf_label_gate_logit).view(1, self.num_labels, 1).expand(label_embeds.shape[0], -1, -1)
+        elif self.lccf_fusion == "exam_shared":
+            if self.lccf_exam_gate is None:
+                raise RuntimeError("LCCF examination-wise gate 未初始化")
+            pooled = torch.cat([label_embeds.mean(dim=1), text_embeds.mean(dim=1)], dim=-1)
+            gates = torch.sigmoid(self.lccf_exam_gate(pooled)).view(-1, 1, 1).expand(-1, self.num_labels, -1)
+        else:
+            gates = torch.sigmoid(self.text_gate(torch.cat([label_embeds, text_embeds], dim=-1)))
+        gates = gates * active.view(-1, 1, 1).to(dtype=gates.dtype)
+        return label_embeds + gates * text_embeds, gates
+
+    def _lccf_consistency_loss(
+        self,
+        logits: torch.Tensor,
+        label_embeds: torch.Tensor,
+        text_embeds: torch.Tensor,
+        active: torch.Tensor,
+        labels: torch.Tensor | tuple[torch.Tensor, torch.Tensor] | None,
+    ) -> torch.Tensor:
+        if labels is None or not self.training:
+            return logits.sum() * 0.0
+        if isinstance(labels, tuple):
+            targets, known = labels
+        else:
+            targets = labels
+            known = torch.ones_like(targets, dtype=torch.bool)
+        terms: list[torch.Tensor] = []
+        for shift in range(1, self.num_labels):
+            permutation = (torch.arange(self.num_labels, device=logits.device) + shift) % self.num_labels
+            swapped, _ = self._lccf_fuse(label_embeds, text_embeds[:, permutation, :], active)
+            swapped_logits = self.classify(swapped)
+            valid = (
+                known
+                & known[:, permutation]
+                & (targets > 0.5)
+                & (targets[:, permutation] < 0.5)
+                & active.view(-1, 1)
+            )
+            if valid.any():
+                terms.append(0.5 * (F.softplus(-logits[valid]) + F.softplus(swapped_logits[valid])))
+        return torch.cat(terms).mean() if terms else logits.sum() * 0.0
+
+    def encode_long_mil(
+        self,
+        images: torch.Tensor,
+        mask: torch.Tensor,
+        instance_indices: torch.Tensor | None = None,
+        original_image_counts: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        features, extra_outputs = self.encode_instances(images, mask)
+        features, attention_bias, position_outputs = self._encode_position(
+            features, mask, instance_indices, original_image_counts
+        )
+        if attention_bias is None:
+            context_features = self.context_encoder(features, src_key_padding_mask=~mask)
+        else:
+            batch_size, num_heads, num_instances, _ = attention_bias.shape
+            key_invalid = (~mask)[:, None, None, :]
+            encoder_mask = attention_bias.masked_fill(key_invalid, -1e4).reshape(
+                batch_size * num_heads, num_instances, num_instances
+            )
+            if getattr(self, "_safe_attention_mask_path", False):
+                context_features = _safe_transformer_encoder_with_mask(
+                    self.context_encoder,
+                    features,
+                    encoder_mask,
+                )
+            else:
+                context_features = self.context_encoder(features, mask=encoder_mask)
+        context_features = context_features * mask.unsqueeze(-1).to(dtype=context_features.dtype)
+        bag_embeds, attention = self._lccf_pool_instances(context_features, mask)
+        label_embeds, label_graph = self._lccf_reason(bag_embeds)
+        extra_outputs.update(position_outputs)
+        extra_outputs["label_graph"] = label_graph
+        return context_features, label_embeds, attention, extra_outputs
+
+    def forward(
+        self,
+        images: torch.Tensor,
+        mask: torch.Tensor,
+        labels: torch.Tensor | tuple[torch.Tensor, torch.Tensor] | None = None,
+        watch_token_ids: torch.Tensor | None = None,
+        watch_token_mask: torch.Tensor | None = None,
+        instance_indices: torch.Tensor | None = None,
+        original_image_counts: torch.Tensor | None = None,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
+        del kwargs
+        context_features, label_embeds, attention, extra_outputs = self.encode_long_mil(
+            images, mask, instance_indices, original_image_counts
+        )
+        image_only_logits = self.classify(label_embeds)
+        text_tokens, text_mask, _, text_active = self.text_encoder(
+            watch_token_ids,
+            watch_token_mask,
+            batch_size=images.shape[0],
+            device=images.device,
+        )
+        retrieved, cross_attention = self._lccf_retrieve_text(label_embeds, text_tokens, text_mask)
+        active = text_active.view(-1, 1, 1).to(dtype=retrieved.dtype)
+        retrieved = retrieved * active
+        fused, gates = self._lccf_fuse(label_embeds, retrieved, text_active)
+        logits = self.classify(fused)
+        targets = labels[0] if isinstance(labels, tuple) else labels
+        image_aux = _optional_bce(image_only_logits, targets)
+        if isinstance(labels, tuple):
+            known = labels[1]
+            values = F.binary_cross_entropy_with_logits(image_only_logits, targets, reduction="none")
+            image_aux = (values * known).sum() / known.sum().clamp_min(1)
+        extra_outputs.update(
+            {
+                "image_only_logits": image_only_logits,
+                "watch_cross_attention": cross_attention,
+                "watch_text_gate": gates.squeeze(-1),
+                "aux_losses": {
+                    "image_aux": image_aux,
+                    "label_query_consistency": self._lccf_consistency_loss(
+                        logits, label_embeds, retrieved, text_active, labels
+                    ),
+                },
+            }
+        )
+        return self.build_outputs(
+            logits=logits,
+            attention=attention,
+            features=context_features,
+            extra_outputs=extra_outputs,
         )
 
 
@@ -1799,6 +2171,7 @@ EXP8_CLASS_REGISTRY = {
         Exp8WatchCrossAttentionTextCNNImageDistillModel
     ),
     "exp12_apro_cope_watch_cross_attn_textcnn": Exp12AProCoPEWatchCrossAttentionTextCNNModel,
+    "exp13_lccf_ablation": Exp13LCCFAblationModel,
     "exp8_mm_text_guided_top64_align": Exp8TextGuidedTop64AlignMILModel,
     "exp9_watch_no_text": Exp9WatchNoTextLongMILModel,
     "exp9_watch_no_context": Exp9WatchCrossAttentionNoContextModel,
@@ -1846,6 +2219,15 @@ def build_exp8_model(model_name: str, **kwargs: Any) -> nn.Module:
         "apro_position_dim",
         "apro_warp_alpha",
         "apro_fourier_frequencies",
+        "apro_fourier_mlp_layers",
+        "apro_transition_dim",
+        "apro_transition_groups",
+        "apro_transition_include_gap",
+        "lccf_pooling",
+        "lccf_reasoning",
+        "lccf_hypergraph_edges",
+        "lccf_text_retrieval",
+        "lccf_fusion",
     }
     model_kwargs = {key: value for key, value in kwargs.items() if key in base_keys}
     model_cls = EXP8_CLASS_REGISTRY.get(model_name)

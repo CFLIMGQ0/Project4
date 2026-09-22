@@ -1,0 +1,32 @@
+seed: 42
+output_root: outputs/image_transfer_abcd_seed42_v2
+seed_policy: existing_base_seed_plus_100_times_fold
+lambda_q: 0.01
+tau: 2.0
+variants:
+  A: {lambda_img: 0.5, lambda_mm: 0.0, lambda_kd: 0.0}
+  B: {lambda_img: 0.5, lambda_mm: 0.0, lambda_kd: 1.0}
+  C: {lambda_img: 0.5, lambda_mm: 1.0, lambda_kd: 0.0}
+  D: {lambda_img: 0.5, lambda_mm: 1.0, lambda_kd: 1.0}
+datasets:
+  ct_rate:
+    input_root: outputs/ct_rate_680/experiment
+    teacher_root: outputs/lccf_ablation/ct_rate/full
+    split_file: patient_folds.json
+    identity_field: patient_id
+    case_id_field: exam_id
+    settings_source: outputs/lccf_ablation/ct_rate/full/protocol.json
+  amos_mm:
+    input_root: outputs/amos_mm/experiment
+    teacher_root: outputs/lccf_ablation/amos_mm/full
+    split_file: splits.json
+    identity_field: scan_id
+    case_id_field: scan_id
+    settings_source: outputs/lccf_ablation/amos_mm/full/protocol.json
+  mr_rate:
+    input_root: outputs/mr_rate_1k/experiment
+    teacher_root: outputs/lccf_ablation/mr_rate/full
+    split_file: patient_folds.json
+    identity_field: patient_uid
+    case_id_field: study_uid
+    settings_source: outputs/lccf_ablation/mr_rate/full/protocol.json
