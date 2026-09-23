@@ -1,0 +1,24 @@
+\section{Related Work}
+\label{sec:related_work}
+
+% Author-provided related-work text; English and Chinese are kept in paired blocks.
+% Citation groups follow the numbered groups in the supplied draft; see
+% refer/related_work_citation_notes.md for the mapping and evidence boundaries.
+
+Positional modeling introduces structural information into sequence representations through index-driven encodings~\cite{vaswani2017attention,shaw2018relative,su2021roformer,press2022alibi} and content-adaptive mechanisms~\cite{golovneva2024cope,yang2025path,zheng2024dape,zheng2025dapev2}. Research in these directions explores positional embeddings, rotary transformations, attention biases, and context-dependent position construction to improve structural representation and contextual modeling. Beyond positional encoding, image-based interval estimation investigates the recovery of relative slice positions and spacing from visual similarities~\cite{su2025ctslice,tang2021bodypart}. These methods typically exploit assumptions about the relationship between image similarity and spatial separation. Positional representation learning and spatial interval estimation thus provide complementary perspectives on how visual observations should be organized, although their objectives and underlying assumptions differ.
+
+\cntranslation{%
+位置建模通过索引驱动编码~\cite{vaswani2017attention,shaw2018relative,su2021roformer,press2022alibi}和内容自适应机制~\cite{golovneva2024cope,yang2025path,zheng2024dape,zheng2025dapev2}，将结构信息引入序列表征。相关研究围绕位置嵌入、旋转变换、注意力偏置及上下文相关的位置构造展开，以增强结构表达与上下文建模能力。除位置编码外，基于图像的间距估计研究尝试从视觉相似性中恢复切片的相对位置与间隔~\cite{su2025ctslice,tang2021bodypart}，通常依赖图像相似度与空间距离之间的关系假设。因此，位置表征学习与空间间距估计为视觉观测的组织提供了互补视角，但二者的优化目标与基本假设有所不同。
+}
+
+Multi-image learning aggregates visual observations under sample-level supervision through attention-based pooling, instance interaction, and hierarchical aggregation~\cite{ilse2018attention,lu2021clam,li2021dsmil,shao2021transmil,zhang2022dtfd}. Paired image--text learning further exploits complementary information through contrastive alignment, global--local correspondence, and cross-modal fusion~\cite{li2021albef,li2022blip,zhang2022convirt,huang2021gloria,zhou2022refers,zhong2026mmtf}. Related video--text and multimodal multi-instance studies also investigate multi-label prediction from visual and textual observations~\cite{li2022mallcnn,yang2018m3dn}. Meanwhile, label-aware representation learning and graph-based reasoning incorporate category-specific evidence and label dependencies into recognition~\cite{ridnik2021asymmetric,chen2019mlgcn,feng2019hypergraph,zhu2025mambaml}. Together, these studies address visual aggregation, cross-modal interaction, and label relationships under different input and supervision settings.
+
+\cntranslation{%
+多图像学习通过注意力池化、实例交互和层次化聚合，在样本级监督下整合多个视觉观测~\cite{ilse2018attention,lu2021clam,li2021dsmil,shao2021transmil,zhang2022dtfd}。图文配对学习进一步通过对比对齐、全局—局部对应和跨模态融合利用互补信息~\cite{li2021albef,li2022blip,zhang2022convirt,huang2021gloria,zhou2022refers,zhong2026mmtf}。相关视频—文本及多模态多实例研究也探索了基于视觉与文本观测的多标签预测~\cite{li2022mallcnn,yang2018m3dn}。与此同时，标签感知表征学习与图结构推理将类别特异性证据和标签依赖关系引入识别过程~\cite{ridnik2021asymmetric,chen2019mlgcn,feng2019hypergraph,zhu2025mambaml}。这些研究在不同输入与监督设定下，分别探索了视觉聚合、跨模态交互及标签关系建模。
+}
+
+In this work, we investigate positional-reference construction and label-specific evidence organization for discrete examination images paired with a single report. ACPE constructs content-adaptive contextual coordinates under acquisition-order and endpoint constraints. LCCF organizes visual and textual evidence around individual labels within a unified pipeline, supporting multimodal recognition of coexisting abnormalities at the examination level.
+
+\cntranslation{%
+本文面向离散检查图像与单份报告配对的场景，研究位置参照构建与标签级证据组织。ACPE 在采集顺序和端点约束下构建内容自适应的上下文坐标；LCCF 则在统一流程中围绕各个标签组织视觉与文本证据，支持检查级共存异常的多模态识别。
+}

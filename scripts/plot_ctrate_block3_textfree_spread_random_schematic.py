@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gastro-exam", default=DEFAULT_GASTRO_EXAM)
     parser.add_argument("--gastro-source-start", type=int, default=0)
     parser.add_argument("--gastro-source-end", type=int, default=140)
+    parser.add_argument(
+        "--hide-left-labels",
+        action="store_true",
+        help="omit the three left-side row labels from the exported schematic",
+    )
     return parser.parse_args()
 
 
@@ -362,7 +367,8 @@ def draw_endoscopy_sequence(axis, variant: dict, raw_x: np.ndarray, y_node: floa
 
 
 def draw(output_dir: Path, variant: dict, top_row: str,
-         gastro_frames: list[np.ndarray] | None = None) -> None:
+         gastro_frames: list[np.ndarray] | None = None,
+         hide_left_labels: bool = False) -> None:
     total = variant["total_slices"]
     selected = np.asarray(variant["selected_raw_indices"], dtype=np.int64)
     raw_x = np.arange(total, dtype=float) / float(total - 1)
@@ -475,18 +481,19 @@ def draw(output_dir: Path, variant: dict, top_row: str,
               "0.016",
               ha="center", va="top", fontsize=7, color=annotation_color)
 
-    label_position = -0.028 if top_row == "gastroscopy" else -0.012
-    axis.text(label_position, y_true + 0.44 if top_row == "gastroscopy" else y_full,
-              "Sampled endoscopic\nimages" if top_row == "gastroscopy" else "Complete CT\nsequence",
-              ha="right", va="center", fontsize=8,
-              fontweight="bold", color="#28343b")
-    true_label = ("Sample positions\n(physical space)" if top_row == "gastroscopy"
-                  else "Sampled-slice positions\n(real space)")
-    axis.text(label_position, y_true, true_label, ha="right", va="center", fontsize=8,
-              fontweight="bold", color="#28343b")
-    axis.text(label_position, y_slot, "Original PE\npositions",
-              ha="right", va="center", fontsize=8,
-              fontweight="bold", color="#28343b")
+    if not hide_left_labels:
+        label_position = -0.028 if top_row == "gastroscopy" else -0.012
+        axis.text(label_position, y_true + 0.44 if top_row == "gastroscopy" else y_full,
+                  "Sampled endoscopic\nimages" if top_row == "gastroscopy" else "Complete CT\nsequence",
+                  ha="right", va="center", fontsize=8,
+                  fontweight="bold", color="#28343b")
+        true_label = ("Sample positions\n(physical space)" if top_row == "gastroscopy"
+                      else "Sampled-slice positions\n(real space)")
+        axis.text(label_position, y_true, true_label, ha="right", va="center", fontsize=8,
+                  fontweight="bold", color="#28343b")
+        axis.text(label_position, y_slot, "Original PE\npositions",
+                  ha="right", va="center", fontsize=8,
+                  fontweight="bold", color="#28343b")
 
     for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
         axis.text(tick, -0.34, f"{tick:g}", ha="center", va="top", fontsize=7, color="#6e7780")
@@ -536,7 +543,7 @@ def main() -> None:
     gastro_frames = load_gastroscopy_frames(args, variant) if args.top_row == "gastroscopy" else None
     write_source_csv(output_dir, variant)
     (output_dir / "selection.json").write_text(json.dumps(variant, indent=2, ensure_ascii=False), encoding="utf-8")
-    draw(output_dir, variant, args.top_row, gastro_frames)
+    draw(output_dir, variant, args.top_row, gastro_frames, args.hide_left_labels)
     print(json.dumps({
         "case_index": variant["case_index"],
         "patient_id": variant["patient_id"],
