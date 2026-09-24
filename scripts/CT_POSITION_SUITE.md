@@ -47,6 +47,10 @@ ComRoPE仓库未提供许可证：仅将公开公式独立实现用于本地研�
 
 数据空间限制：输入是规则NIfTI体积，只能审计RAS仿射坐标；没有逐层DICOM采集位置，不能从规则仿射矩阵证明原始采集不存在非均匀间距。
 
+### Gap 指标补充
+
+`evaluate_ctrate_amef_position_recovery.py --reaggregate-existing` 可直接从已有 `per_slice_results.csv` 重算位置间距指标，不重新运行模型；表3采用 `outputs/ct_rate_680/position_recovery_block3_all136_seed42/` 的连续三大块删除结果，而不是全随机删除目录。主表保留 PRE、GRE、Acc@0.02、Acc@0.05、CrossingGapMAE、SGE、WGE，并增加相对于 Original PE 的 SWCG、SCR、SCR_count；SWCG/SCR 以百分比报告，SCR_count 保留为0–1比例。mismatch 只由真实相邻间距与 `1/(T-1)` 计算；Original PE 与 ACPE 使用同一 severe mask。逐区间结果同时保存 `true_gap`、`uniform_gap`、`acpe_gap`、`base_error`、`acpe_error`、`mismatch`、平方严重度 `weight`、`severe` 和 `improved`。结果写入 `paper_table.md`、`sge_summary.csv` 和 `mismatch_stratified.csv`；逐病例和逐区间明细分别见 `ct_summary.csv`、`interval_results.csv`。AMOS-MM 与 MR-RATE-1K 的 block3 五折结果使用 `aggregate_public_position_gap_metrics.py --protocol block3` 采用同一公式汇总。
+
 ## 六GPU队列与磁盘
 
 `ct_six_gpu_queue.py`固定查询204的4张卡和202的2张卡，记录索引、UUID、显存和利用率。默认每10秒更新，按可用显存放任务，**不要求卡完全空闲，也不限制每卡一个任务**。启动前缺卡直接报错；运行中主机失联写入状态和日志，不静默忽略。204的0/1号卡目前被其他任务占满，仅剩几十MiB；它们是可见但暂不可用，不会终止其他人的进程。

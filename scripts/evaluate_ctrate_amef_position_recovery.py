@@ -26,6 +26,7 @@ DEFAULT_CHECKPOINT_ROOT = ROOT / "outputs" / "ct_rate_680" / "all_models_fivefol
 DEFAULT_OUTPUT = ROOT / "outputs" / "ct_rate_680" / "position_recovery"
 DELETION_FRACTIONS = (0.0, 0.25, 0.5, 0.75)
 NONZERO_SEEDS = (42, 2026, 3407, 7919, 104729)
+GAP_EPS = 1e-8
 
 
 def save_json(path: Path, value: Any) -> None:
@@ -77,6 +78,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-eta-zero", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument(
+        "--reaggregate-existing",
+        action="store_true",
+        help="只从已有per_slice_results.csv重算位置恢复指标，不重新运行模型",
+    )
     return parser.parse_args()
 
 
@@ -304,6 +310,35 @@ def crossing_gap_values(
     true_gaps = np.diff(true_positions)
     baseline_gaps = np.diff(baseline_prediction)
     model_gaps = np.diff(model_prediction)
+    if len(true_gaps) == 0:
+        raise ValueError("位置恢复至少需要两个输入切片")
+    uniform_gap = 1.0 / float(len(true_positions) - 1)
+    mismatch = np.abs(true_gaps - uniform_gap) / (uniform_gap + GAP_EPS)
+    severe_mask = mismatch >= 0.5
+    strata = (
+        ("small", mismatch < 0.5),
+        ("medium", (mismatch >= 0.5) & (mismatch < 1.0)),
+        ("large", mismatch >= 1.0),
+    )
+    # Original PE 的 gap 恒为 uniform_gap；严重程度和基线误差直接使用该定义。
+    baseline_gap_error = np.abs(true_gaps - uniform_gap)
+    model_gap_error = np.abs(model_gaps - true_gaps)
+    model_gaps_finite = bool(np.isfinite(model_gaps).all())
+    weight = mismatch ** 2
+    severe_weight = weight[severe_mask]
+    baseline_severe_weighted_error = float(np.sum(severe_weight * baseline_gap_error[severe_mask]))
+    model_severe_weighted_error = (
+        float(np.sum(severe_weight * model_gap_error[severe_mask]))
+        if model_gaps_finite else float("nan")
+    )
+    model_improved = (model_gap_error < baseline_gap_error) if model_gaps_finite else np.zeros_like(severe_mask)
+    baseline_swcg_raw = (
+        100.0 * (1.0 - baseline_severe_weighted_error /
+                 (baseline_severe_weighted_error + GAP_EPS))
+        if severe_mask.any() else float("nan")
+    )
+    if math.isfinite(baseline_swcg_raw) and abs(baseline_swcg_raw) > 1e-2:
+        raise FloatingPointError(f"Original PE SWCG sanity check failed: {baseline_swcg_raw}")
     interval_rows: list[dict[str, Any]] = []
     crossing = []
     for interval_index, (left, right) in enumerate(zip(selected[:-1], selected[1:])):
@@ -320,6 +355,22 @@ def crossing_gap_values(
             "true_gap": float(true_gaps[interval_index]),
             "baseline_gap": float(baseline_gaps[interval_index]),
             "model_gap": float(model_gaps[interval_index]),
+            "uniform_gap": float(uniform_gap),
+            "mismatch": float(mismatch[interval_index]),
+            "severe_interval": bool(severe_mask[interval_index]),
+            "gap_stratum": (
+                "small" if mismatch[interval_index] < 0.5
+                else "medium" if mismatch[interval_index] < 1.0
+                else "large"
+            ),
+            "baseline_gap_error": float(baseline_gap_error[interval_index]),
+            "model_gap_error": float(model_gap_error[interval_index]),
+            "acpe_gap": float(model_gaps[interval_index]),
+            "base_error": float(baseline_gap_error[interval_index]),
+            "acpe_error": float(model_gap_error[interval_index]),
+            "weight": float(weight[interval_index]),
+            "severe": bool(severe_mask[interval_index]),
+            "improved": bool(model_improved[interval_index]),
             "crossing_gap": is_crossing,
             "crossing_segment_indices": json.dumps(ids, ensure_ascii=False),
         })
@@ -330,7 +381,47 @@ def crossing_gap_values(
         if crossing_mask.any() and np.isfinite(model_gaps[crossing_mask]).all() else float("nan"),
         "baseline_CrossingGapMAE": float(np.mean(np.abs(baseline_gaps[crossing_mask] - true_gaps[crossing_mask])))
         if crossing_mask.any() else float("nan"),
+        "severe_interval_count": int(severe_mask.sum()),
+        "baseline_SGE": float(np.mean(baseline_gap_error[severe_mask])) if severe_mask.any() else float("nan"),
+        "model_SGE": (
+            float(np.mean(model_gap_error[severe_mask]))
+            if severe_mask.any() and model_gaps_finite else float("nan")
+        ),
+        "baseline_SGE_valid": bool(severe_mask.any()),
+        "model_SGE_valid": bool(severe_mask.any() and model_gaps_finite),
+        "baseline_WGE": float(np.sum(mismatch * baseline_gap_error) / (np.sum(mismatch) + GAP_EPS)),
+        "model_WGE": (
+            float(np.sum(mismatch * model_gap_error) / (np.sum(mismatch) + GAP_EPS))
+            if model_gaps_finite else float("nan")
+        ),
+        # 按公式实际计算 baseline_swcg_raw 作 sanity check；报告值固定为理论基线 0%。
+        "baseline_SWCG": 0.0 if severe_mask.any() else float("nan"),
+        "baseline_SWCG_sanity_error": baseline_swcg_raw,
+        "model_SWCG": (
+            100.0 * (1.0 - model_severe_weighted_error /
+                     (baseline_severe_weighted_error + GAP_EPS))
+            if severe_mask.any() and model_gaps_finite else float("nan")
+        ),
+        "baseline_SCR": float("nan"),
+        "model_SCR": (
+            100.0 * float(np.sum(severe_weight * model_improved[severe_mask])) /
+            (float(np.sum(severe_weight)) + GAP_EPS)
+            if severe_mask.any() and model_gaps_finite else float("nan")
+        ),
+        "baseline_SCR_count": float("nan"),
+        "model_SCR_count": (
+            float(np.sum(model_improved[severe_mask])) / float(severe_mask.sum())
+            if severe_mask.any() and model_gaps_finite else float("nan")
+        ),
     }
+    for name, mask in strata:
+        values[f"baseline_{name}_GapMAE"] = (
+            float(np.mean(baseline_gap_error[mask])) if mask.any() else float("nan")
+        )
+        values[f"model_{name}_GapMAE"] = (
+            float(np.mean(model_gap_error[mask])) if mask.any() and model_gaps_finite else float("nan")
+        )
+        values[f"{name}_interval_count"] = int(mask.sum())
     return values, interval_rows
 
 
@@ -584,6 +675,12 @@ def write_paper_table(summary_rows: list[dict[str, Any]], output_dir: Path) -> N
         ("GRE", "GRE ↓"),
         ("Acc@0.02", "Acc@0.02 ↑"),
         ("Acc@0.05", "Acc@0.05 ↑"),
+        ("CrossingGapMAE", "CrossingGapMAE ↓"),
+        ("SGE", "SGE ↓"),
+        ("WGE", "WGE ↓"),
+        ("SWCG", "SWCG ↑"),
+        ("SCR", "SCR ↑"),
+        ("SCR_count", "SCR_count ↑"),
     )
     table_rows: list[dict[str, Any]] = []
     for summary in summary_rows:
@@ -594,32 +691,98 @@ def write_paper_table(summary_rows: list[dict[str, Any]], output_dir: Path) -> N
         for method, prefix in (("等距位置基线", "baseline"), ("ACPE", "model")):
             row = {"删除比例": deletion_label, "方法": method}
             for metric, label in metric_columns:
-                row[label] = format_table_metric(
-                    summary[f"{prefix}_{metric}_mean"],
-                    summary[f"{prefix}_{metric}_std"],
-                )
+                if prefix == "baseline" and metric in {"SCR", "SCR_count"}:
+                    row[label] = "--"
+                else:
+                    row[label] = format_table_metric(
+                        summary[f"{prefix}_{metric}_mean"],
+                        summary[f"{prefix}_{metric}_std"],
+                    )
             table_rows.append(row)
     fields = ["删除比例", "方法"] + [label for _, label in metric_columns]
     write_csv(output_dir / "paper_table.csv", table_rows, fields)
     lines = [
-        "| 删除比例 | 方法 | PRE ↓ | GRE ↓ | Acc@0.02 ↑ | Acc@0.05 ↑ |",
-        "| --- | --- | ---: | ---: | ---: | ---: |",
+        "| 删除比例 | 方法 | PRE ↓ | GRE ↓ | Acc@0.02 ↑ | Acc@0.05 ↑ | CrossingGapMAE ↓ | SGE ↓ | WGE ↓ | SWCG ↑ | SCR ↑ | SCR_count ↑ |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in table_rows:
         lines.append(
             f"| {row['删除比例']} | {row['方法']} | {row['PRE ↓']} | {row['GRE ↓']} | "
-            f"{row['Acc@0.02 ↑']} | {row['Acc@0.05 ↑']} |"
+            f"{row['Acc@0.02 ↑']} | {row['Acc@0.05 ↑']} | {row['CrossingGapMAE ↓']} | "
+            f"{row['SGE ↓']} | {row['WGE ↓']} | {row['SWCG ↑']} | "
+            f"{row['SCR ↑']} | {row['SCR_count ↑']} |"
         )
     lines.extend([
         "",
         "注：表中为均值 ± 标准差；先对每个 CT 的随机重复取均值，再对测试 CT 等权汇总，标准差为 CT 级均值的样本标准差（ddof=1）。",
         "ACPE 为论文命名；代码中复用的真实位置模块名称为 APro-CoPE。",
+        "SGE 只对含有 mismatch ≥ 0.5 区间的病例汇总；有效病例数和 severe interval 总数见 sge_summary.csv。",
+        "mismatch 只由真实位置与 uniform_gap=1/(T−1) 计算，Original PE 与 ACPE 共用同一 severe mask。",
+        "SWCG 和 SCR 以百分比报告，SCR_count 保留为 0–1 的未加权改善比例；三者只在 severe 区间上计算。Original PE 的 SWCG 用实际公式计算作 sanity check，SCR/SCR_count 记为 --。",
     ])
     (output_dir / "paper_table.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_sge_summary(summary_rows: list[dict[str, Any]], output_dir: Path) -> None:
+    rows: list[dict[str, Any]] = []
+    for summary in summary_rows:
+        fraction = float(summary["deletion_fraction"])
+        if fraction == 0.0:
+            continue
+        for method, prefix in (("Original PE", "baseline"), ("ACPE", "model")):
+            rows.append({
+                "Method": method,
+                "Missing ratio": f"{int(round(fraction * 100))}%",
+                "SGE mean": summary[f"{prefix}_SGE_mean"],
+                "SGE std": summary[f"{prefix}_SGE_std"],
+                "SGE valid cases": summary[f"{prefix}_SGE_n_ct"],
+                "Severe interval total": summary[f"{prefix}_SGE_severe_interval_total"],
+            })
+    write_csv(
+        output_dir / "sge_summary.csv",
+        rows,
+        ["Method", "Missing ratio", "SGE mean", "SGE std", "SGE valid cases", "Severe interval total"],
+    )
+
+
+def write_mismatch_stratified_csv(ct_rows: list[dict[str, Any]], output_dir: Path) -> None:
+    rows: list[dict[str, Any]] = []
+    for fraction in DELETION_FRACTIONS:
+        if fraction == 0.0:
+            continue
+        selected = [row for row in ct_rows if float(row["deletion_fraction"]) == fraction]
+        for method, prefix in (("Original PE", "baseline"), ("ACPE", "model")):
+            output: dict[str, Any] = {"Method": method, "Missing ratio": f"{int(round(fraction * 100))}%"}
+            for stratum in ("small", "medium", "large"):
+                values = [
+                    float(row[f"{prefix}_{stratum}_GapMAE"])
+                    for row in selected
+                    if math.isfinite(float(row[f"{prefix}_{stratum}_GapMAE"]))
+                ]
+                output[f"{stratum.title()} GapMAE"] = format_table_metric(
+                    float(np.mean(values)) if values else float("nan"), finite_std(values)
+                )
+                output[f"{stratum.title()} N"] = sum(
+                    int(row[f"{stratum}_interval_count"]) for row in selected
+                )
+            rows.append(output)
+    write_csv(
+        output_dir / "mismatch_stratified.csv",
+        rows,
+        [
+            "Method", "Missing ratio", "Small GapMAE", "Medium GapMAE", "Large GapMAE",
+            "Small N", "Medium N", "Large N",
+        ],
+    )
+
+
 def aggregate_results(repeat_rows: list[dict[str, Any]], output_dir: Path) -> None:
-    metrics = ("PRE", "GRE", "Acc@0.02", "Acc@0.05", "CrossingGapMAE")
+    metrics = (
+        "PRE", "GRE", "Acc@0.02", "Acc@0.05", "CrossingGapMAE", "SGE", "WGE",
+        "SWCG", "SCR", "SCR_count",
+    )
+    valid_only_metrics = {"SGE", "SWCG", "SCR", "SCR_count"}
+    strata = ("small", "medium", "large")
     by_condition_case: dict[tuple[float, int], list[dict[str, Any]]] = defaultdict(list)
     for row in repeat_rows:
         by_condition_case[(float(row["deletion_fraction"]), int(row["case_index"]))].append(row)
@@ -638,8 +801,31 @@ def aggregate_results(repeat_rows: list[dict[str, Any]], output_dir: Path) -> No
         for metric in metrics:
             model_values = [float(r[f"model_{metric}"]) for r in rows]
             baseline_values = [float(r[f"baseline_{metric}"]) for r in rows]
-            ct_row[f"model_{metric}"] = float(np.mean(model_values)) if all(math.isfinite(v) for v in model_values) else float("nan")
-            ct_row[f"baseline_{metric}"] = float(np.mean(baseline_values)) if all(math.isfinite(v) for v in baseline_values) else float("nan")
+            if metric in valid_only_metrics:
+                model_values = [value for value in model_values if math.isfinite(value)]
+                baseline_values = [value for value in baseline_values if math.isfinite(value)]
+            ct_row[f"model_{metric}"] = float(np.mean(model_values)) if model_values and all(math.isfinite(v) for v in model_values) else float("nan")
+            ct_row[f"baseline_{metric}"] = float(np.mean(baseline_values)) if baseline_values and all(math.isfinite(v) for v in baseline_values) else float("nan")
+        for prefix in ("model", "baseline"):
+            ct_row[f"{prefix}_SGE_valid_repeats"] = sum(
+                math.isfinite(float(row[f"{prefix}_SGE"])) for row in rows
+            )
+            ct_row[f"{prefix}_SGE_severe_interval_total"] = sum(
+                int(row["severe_interval_count"])
+                for row in rows
+                if math.isfinite(float(row[f"{prefix}_SGE"]))
+            )
+        for stratum in strata:
+            for prefix in ("model", "baseline"):
+                values = [
+                    float(row[f"{prefix}_{stratum}_GapMAE"])
+                    for row in rows
+                    if math.isfinite(float(row[f"{prefix}_{stratum}_GapMAE"]))
+                ]
+                ct_row[f"{prefix}_{stratum}_GapMAE"] = float(np.mean(values)) if values else float("nan")
+            ct_row[f"{stratum}_interval_count"] = sum(
+                int(row[f"{stratum}_interval_count"]) for row in rows
+            )
         ct_rows.append(ct_row)
 
     summary_rows: list[dict[str, Any]] = []
@@ -658,6 +844,12 @@ def aggregate_results(repeat_rows: list[dict[str, Any]], output_dir: Path) -> No
                 summary[f"{name}_{metric}_mean"] = float(np.mean(values)) if values else float("nan")
                 summary[f"{name}_{metric}_std"] = finite_std(values)
                 summary[f"{name}_{metric}_n_ct"] = len(values)
+                if metric == "SGE":
+                    summary[f"{name}_{metric}_severe_interval_total"] = sum(
+                        int(row[f"{name}_{metric}_severe_interval_total"])
+                        for row in rows
+                        if math.isfinite(float(row[f"{name}_{metric}"]))
+                    )
         summary_rows.append(summary)
 
     ct_fields = list(ct_rows[0]) if ct_rows else ["case_index", "patient_id", "deletion_fraction"]
@@ -665,6 +857,131 @@ def aggregate_results(repeat_rows: list[dict[str, Any]], output_dir: Path) -> No
     write_csv(output_dir / "ct_summary.csv", ct_rows, ct_fields)
     write_csv(output_dir / "summary.csv", summary_rows, summary_fields)
     write_paper_table(summary_rows, output_dir)
+    write_sge_summary(summary_rows, output_dir)
+    write_mismatch_stratified_csv(ct_rows, output_dir)
+
+
+def reaggregate_existing_output(output_dir: Path) -> None:
+    """从已有逐切片结果补算新指标，避免为改变评价指标重复运行模型。"""
+    per_slice_path = output_dir / "per_slice_results.csv"
+    if not per_slice_path.is_file():
+        raise FileNotFoundError(f"缺少已有逐切片结果：{per_slice_path}")
+    manifest_path = output_dir / "sampling_manifest.jsonl"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"缺少已有采样清单：{manifest_path}")
+    with per_slice_path.open(encoding="utf-8-sig", newline="") as stream:
+        slice_rows = list(csv.DictReader(stream))
+    manifest_rows: dict[tuple[int, str, int], dict[str, Any]] = {}
+    with manifest_path.open(encoding="utf-8") as stream:
+        for line in stream:
+            item = json.loads(line)
+            key = (int(item["case_index"]), f"{float(item['requested_delete_fraction']):.8f}", int(item["seed"]))
+            manifest_rows[key] = item
+    repeat_path = output_dir / "repeat_metrics.csv"
+    existing_repeats: dict[tuple[int, str, int], dict[str, Any]] = {}
+    if repeat_path.is_file():
+        with repeat_path.open(encoding="utf-8-sig", newline="") as stream:
+            for item in csv.DictReader(stream):
+                key = (int(item["case_index"]), f"{float(item['deletion_fraction']):.8f}", int(item["seed"]))
+                existing_repeats[key] = dict(item)
+
+    grouped: dict[tuple[int, str, int], list[dict[str, str]]] = defaultdict(list)
+    for item in slice_rows:
+        key = (int(item["case_index"]), f"{float(item['deletion_fraction']):.8f}", int(item["seed"]))
+        grouped[key].append(item)
+    repeat_rows: list[dict[str, Any]] = []
+    interval_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(grouped.items()):
+        case_index, fraction_key, seed = key
+        rows.sort(key=lambda item: int(item["selected_position"]))
+        fraction = float(fraction_key)
+        selected = np.asarray([int(item["raw_index"]) for item in rows], dtype=np.int64)
+        truth = np.asarray([float(item["true_position"]) for item in rows], dtype=np.float64)
+        baseline = np.asarray([float(item["baseline_position"]) for item in rows], dtype=np.float64)
+        model = np.asarray([float(item["model_position"]) for item in rows], dtype=np.float64)
+        manifest = manifest_rows.get(key)
+        if manifest is None:
+            raise KeyError(f"逐切片结果没有对应采样清单：{key}")
+        deleted_list = manifest.get("deleted_raw_indices", [])
+        max_deleted = max(deleted_list) if deleted_list else -1
+        total = int(max(selected.max(), max_deleted) + 1)
+        deleted_mask = np.zeros(total, dtype=bool)
+        deleted_indices = np.asarray(manifest.get("deleted_raw_indices", []), dtype=np.int64)
+        if len(deleted_indices):
+            deleted_mask[deleted_indices] = True
+        segment_ids = np.full(total, -1, dtype=np.int64)
+        crossing_values, current_interval_rows = crossing_gap_values(
+            selected, truth, baseline, model, deleted_mask, segment_ids
+        )
+        repeat = dict(existing_repeats.get(key, {}))
+        first = rows[0]
+        repeat.update({
+            "case_index": case_index,
+            "patient_id": first["patient_id"],
+            "deletion_fraction": fraction,
+            "actual_delete_fraction": float(first["actual_delete_fraction"]),
+            "input_instances": len(rows),
+            "seed": seed,
+            "model_status": first["model_status"],
+            "model_monotonic": first["model_monotonic"],
+            "model_invalid": first["model_status"] not in {"ok", "non_monotonic"},
+            "crossing_gap_count": crossing_values["crossing_gap_count"],
+            "severe_interval_count": crossing_values["severe_interval_count"],
+            "model_CrossingGapMAE": crossing_values["model_CrossingGapMAE"],
+            "baseline_CrossingGapMAE": crossing_values["baseline_CrossingGapMAE"],
+            "model_SGE": crossing_values["model_SGE"],
+            "baseline_SGE": crossing_values["baseline_SGE"],
+            "model_SGE_valid": crossing_values["model_SGE_valid"],
+            "baseline_SGE_valid": crossing_values["baseline_SGE_valid"],
+            "model_WGE": crossing_values["model_WGE"],
+            "baseline_WGE": crossing_values["baseline_WGE"],
+            "model_SWCG": crossing_values["model_SWCG"],
+            "baseline_SWCG": crossing_values["baseline_SWCG"],
+            "baseline_SWCG_sanity_error": crossing_values["baseline_SWCG_sanity_error"],
+            "model_SCR": crossing_values["model_SCR"],
+            "baseline_SCR": crossing_values["baseline_SCR"],
+            "model_SCR_count": crossing_values["model_SCR_count"],
+            "baseline_SCR_count": crossing_values["baseline_SCR_count"],
+        })
+        for stratum in ("small", "medium", "large"):
+            repeat[f"model_{stratum}_GapMAE"] = crossing_values[f"model_{stratum}_GapMAE"]
+            repeat[f"baseline_{stratum}_GapMAE"] = crossing_values[f"baseline_{stratum}_GapMAE"]
+            repeat[f"{stratum}_interval_count"] = crossing_values[f"{stratum}_interval_count"]
+        repeat_rows.append(repeat)
+        for interval_row in current_interval_rows:
+            interval_rows.append({
+                "case_index": case_index,
+                "patient_id": first["patient_id"],
+                "deletion_fraction": fraction,
+                "actual_delete_fraction": float(first["actual_delete_fraction"]),
+                "seed": seed,
+                **interval_row,
+                "model_status": first["model_status"],
+            })
+    write_csv(output_dir / "interval_results.csv", interval_rows, list(interval_rows[0]))
+    write_csv(output_dir / "repeat_metrics.csv", repeat_rows, list(repeat_rows[0]))
+    aggregate_results(repeat_rows, output_dir)
+    metadata_path = output_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else {}
+    metadata.update({
+        "metrics_reaggregated_from_existing": True,
+        "metrics_reaggregation_script": str(Path(__file__).resolve()),
+        "metrics_reaggregation_script_sha256": sha256(Path(__file__).resolve()),
+        "metrics_reaggregation_unix": time.time(),
+        "gap_robust_metrics": {
+            "epsilon": GAP_EPS,
+            "mismatch": "abs(true_gap - 1/(T-1)) / (1/(T-1) + epsilon)",
+            "severe_threshold": 0.5,
+            "SGE": "mean absolute gap error over severe intervals; cases without severe intervals are NA",
+            "WGE": "sum(mismatch * absolute gap error) / (sum(mismatch) + epsilon)",
+            "SWCG": "100 * (1 - sum(mismatch^2 * ACPE_error over severe) / (sum(mismatch^2 * base_error over severe) + epsilon))",
+            "SCR": "100 * sum(mismatch^2 * improved over severe) / (sum(mismatch^2 over severe) + epsilon)",
+            "SCR_count": "count(improved over severe) / severe interval count",
+            "strata": {"small": "mismatch < 0.5", "medium": "0.5 <= mismatch < 1.0", "large": "mismatch >= 1.0"},
+            "mask_source": "ground-truth positions and uniform gap only; shared by Original PE and ACPE",
+        },
+    })
+    save_json(metadata_path, metadata)
 
 
 def plot_curves(
@@ -826,6 +1143,11 @@ def main() -> None:
     global DATA
     if args.data_root is not None:
         DATA = args.data_root.resolve()
+    if args.reaggregate_existing:
+        output_dir = (args.output_dir or DEFAULT_OUTPUT).resolve()
+        reaggregate_existing_output(output_dir)
+        print(f"已有位置恢复结果重汇总完成：{output_dir}")
+        return
     checkpoint_path, fold, candidates = resolve_checkpoint(args.checkpoint_root, args.checkpoint)
     config_path = checkpoint_path.with_name("config.json")
     config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
@@ -999,6 +1321,18 @@ def main() -> None:
         "raw_feature_cache_protocol": cache_protocol,
         "device": str(device),
         "metric_std": "sample SD (ddof=1) over per-CT means; random repeats are averaged within each CT first",
+        "gap_robust_metrics": {
+            "epsilon": GAP_EPS,
+            "mismatch": "abs(true_gap - 1/(T-1)) / (1/(T-1) + epsilon)",
+            "severe_threshold": 0.5,
+            "SGE": "mean absolute gap error over severe intervals; cases without severe intervals are NA",
+            "WGE": "sum(mismatch * absolute gap error) / (sum(mismatch) + epsilon)",
+            "SWCG": "100 * (1 - sum(mismatch^2 * ACPE_error over severe) / (sum(mismatch^2 * base_error over severe) + epsilon))",
+            "SCR": "100 * sum(mismatch^2 * improved over severe) / (sum(mismatch^2 over severe) + epsilon)",
+            "SCR_count": "count(improved over severe) / severe interval count",
+            "strata": {"small": "mismatch < 0.5", "medium": "0.5 <= mismatch < 1.0", "large": "mismatch >= 1.0"},
+            "mask_source": "ground-truth positions and uniform gap only; shared by Original PE and ACPE",
+        },
         "range_diagnostic": {
             "alpha": diagnostic_alpha,
             "exp_2alpha": diagnostic_bound,
@@ -1099,6 +1433,24 @@ def main() -> None:
                     repeat[f"baseline_{metric}"] = baseline_metrics[metric]
                 repeat["model_CrossingGapMAE"] = crossing_values["model_CrossingGapMAE"]
                 repeat["baseline_CrossingGapMAE"] = crossing_values["baseline_CrossingGapMAE"]
+                repeat["severe_interval_count"] = crossing_values["severe_interval_count"]
+                repeat["model_SGE"] = crossing_values["model_SGE"]
+                repeat["baseline_SGE"] = crossing_values["baseline_SGE"]
+                repeat["model_SGE_valid"] = crossing_values["model_SGE_valid"]
+                repeat["baseline_SGE_valid"] = crossing_values["baseline_SGE_valid"]
+                repeat["model_WGE"] = crossing_values["model_WGE"]
+                repeat["baseline_WGE"] = crossing_values["baseline_WGE"]
+                repeat["model_SWCG"] = crossing_values["model_SWCG"]
+                repeat["baseline_SWCG"] = crossing_values["baseline_SWCG"]
+                repeat["baseline_SWCG_sanity_error"] = crossing_values["baseline_SWCG_sanity_error"]
+                repeat["model_SCR"] = crossing_values["model_SCR"]
+                repeat["baseline_SCR"] = crossing_values["baseline_SCR"]
+                repeat["model_SCR_count"] = crossing_values["model_SCR_count"]
+                repeat["baseline_SCR_count"] = crossing_values["baseline_SCR_count"]
+                for stratum in ("small", "medium", "large"):
+                    repeat[f"model_{stratum}_GapMAE"] = crossing_values[f"model_{stratum}_GapMAE"]
+                    repeat[f"baseline_{stratum}_GapMAE"] = crossing_values[f"baseline_{stratum}_GapMAE"]
+                    repeat[f"{stratum}_interval_count"] = crossing_values[f"{stratum}_interval_count"]
                 if args.debug_eta_zero:
                     if not np.allclose(model_prediction, baseline, atol=2e-5, rtol=2e-5):
                         raise ValueError("eta=0自检失败：ACPE上下文坐标未回到等距槽位")
