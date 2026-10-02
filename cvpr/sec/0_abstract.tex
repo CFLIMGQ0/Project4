@@ -1,7 +1,26 @@
 \begin{abstract}
-The ABSTRACT is to be in fully justified italicized text, at the top of the left-hand column, below the author and affiliation information.
-Use the word ``Abstract'' as the title, in 12-point Times, boldface type, centered relative to the column, initially capitalized.
-The abstract is to be in 10-point, single-spaced type.
-Leave two blank lines after the Abstract, then begin the main text.
-Look at previous \confName abstracts to get a feel for style and length.
+Examination-level multimodal multi-label recognition must combine an ordered
+set of images with a paired report, while different findings may depend on
+different images and textual evidence. Existing methods often encode sampled
+images with fixed index distances and fuse image--report features into a shared
+representation, which can distort contextual relationships and mix evidence
+across labels. We present Acquisition-aware Label-centric Multimodal Multiple
+Instance Learning (ALM-MIL), built on Acquisition-aware Contextual Position
+Encoding (ACPE) and Label-Centric Coexistence Fusion (LCCF). ACPE uses
+acquisition order as a structural anchor and learns content-adaptive contextual
+intervals from neighboring visual transitions, injecting the resulting
+coordinates through complementary absolute and relative routes. LCCF organizes
+evidence around individual labels by selecting label-specific visual instances,
+modeling label coexistence with hypergraph reasoning, retrieving
+label-conditioned textual evidence, and adaptively fusing the retrieved
+information. Experiments on four clinical cohorts and four public benchmarks
+demonstrate the superiority of ALM-MIL over existing models. Further
+experiments on structured image missingness and
+label-centric evidence organization validate ACPE's ability to model
+acquisition-aware contextual relations and LCCF's ability to organize
+label-specific multimodal evidence.
+
+\cntranslation{%
+检查级多模态多标签识别需要联合处理一组有序图像和一份配对报告，而不同异常可能依赖不同的图像和文本证据。现有方法通常使用固定的采集索引间距对采样图像进行编码，并将图像与报告特征融合为共享表征，容易造成上下文关系失真，并混合不同标签之间的证据。为此，我们提出采集感知的标签中心多模态多实例学习框架（Acquisition-aware Label-centric Multimodal Multiple Instance Learning，ALM-MIL），其核心由采集感知上下文位置编码（Acquisition-aware Contextual Position Encoding，ACPE）和标签中心共存融合（Label-Centric Coexistence Fusion，LCCF）组成。ACPE 以采集顺序作为结构参照，根据相邻图像的视觉变化学习内容自适应的上下文间隔，并通过互补的绝对路径和相对路径注入相应坐标。LCCF 围绕各个标签组织证据，通过选择标签特异性的视觉实例、利用超图推理建模标签共存关系、检索标签条件文本证据，并自适应融合检索结果，实现标签级多模态建模。我们在四个临床队列和四个公开基准上的实验验证了 ALM-MIL 相比现有模型的优越性。针对结构化图像缺失和标签中心证据组织的进一步实验，验证了 ACPE 建模采集感知上下文关系的能力，以及 LCCF 组织标签特异性多模态证据的能力。
+}
 \end{abstract}

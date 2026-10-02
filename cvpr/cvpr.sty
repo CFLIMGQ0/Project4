@@ -433,7 +433,9 @@
     \def\pid{\parbox{1in}{\begin{center}\bf\sf{\small \confName}\\\small \#\paperID\end{center}}}
     \AtTextUpperLeft{%paperID in corners
       \put(\LenToUnit{-65pt},\LenToUnit{45pt}){\pid}
-      \put(\LenToUnit{\textwidth-12pt},\LenToUnit{45pt}){\pid}
+      % Use an explicit dimension expression; the old token sequence left
+      % ``-12pt'' visible in the rendered header under XeLaTeX.
+      \put(\LenToUnit{\dimexpr\textwidth-12pt\relax},\LenToUnit{45pt}){\pid}
     }
     \AtTextUpperLeft{%confidential
       \put(0,\LenToUnit{1cm}){\parbox{\textwidth}{\centering\cvprtenhv
