@@ -199,14 +199,10 @@ c_{it}=r_{i1}+\sum_{k=2}^{t}\widetilde g_{ik},
 }
 
 \paragraph{Dual-route Position Injection.}
-ACPE injects the acquisition and contextual coordinates into the visual
-Transformer through two complementary routes.
-
-The absolute route assigns a positional signal to each image.  A continuous
-Fourier mapping $\phi$ encodes its acquisition anchor
-$r_{it}$, contextual coordinate $c_{it}$, and their difference $c_{it}-r_{it}$;
-$f_{\mathrm{abs}}$ projects the concatenated encoding into the instance feature
-space:
+ACPE injects acquisition and contextual coordinates through two routes.  The
+absolute route encodes the acquisition anchor $r_{it}$, contextual coordinate
+$c_{it}$, and their difference with a continuous Fourier mapping $\phi$, then
+projects the concatenated encoding into the instance feature space:
 \begin{equation}
 p^{\mathrm{abs}}_{it}
 =
@@ -216,14 +212,9 @@ f_{\mathrm{abs}}\bigl(
 \label{eq:acpe_abs_new}
 \end{equation}
 $p^{\mathrm{abs}}_{it}$ is added to the projected visual feature $u_{it}$
-before the bidirectional Transformer.  The image feature thus carries both
-its acquisition reference and its content-adjusted position.
-
-The relative route acts on pairs of images.  For images $t$ and $u$, the raw
-and contextual coordinate differences describe their signed separations;
-the difference between these separations captures the adjustment made by
-the contextual coordinates.  Each attention head $h$ maps these three terms
-to a pairwise bias:
+before the bidirectional Transformer.  The relative route maps raw and
+contextual pairwise separations, together with their difference, to a bias for
+each attention head:
 \begin{equation}
 \begin{aligned}
 b^{(h)}_{itu}
@@ -237,17 +228,14 @@ f^{(h)}_{\mathrm{rel}}\bigl(
 \label{eq:acpe_rel_new}
 \end{equation}
 $f^{(h)}_{\mathrm{rel}}$ uses a scaled tanh output to bound
-$b^{(h)}_{itu}$ within $[-2,2]$.  Adding this bias to the scaled dot-product
-attention logits lets pairwise attention use both acquisition and contextual
-separations.
+$b^{(h)}_{itu}$ within $[-2,2]$, and the bias is added to the scaled
+dot-product attention logits.
 
 \cntranslation{%
 \textbf{双路径位置注入。}
-ACPE 通过两条互补路径将采集坐标和上下文坐标注入视觉 Transformer。
-
-绝对路径为每张图像生成位置表示：连续 Fourier 映射 $\phi$ 分别编码采集锚点 $r_{it}$、
-上下文坐标 $c_{it}$ 及其差值 $c_{it}-r_{it}$，再由 $f_{\mathrm{abs}}$
-将拼接后的编码投影到实例特征空间：
+ACPE 通过两条路径注入采集坐标和上下文坐标。绝对路径使用连续 Fourier
+映射 $\phi$ 编码采集锚点 $r_{it}$、上下文坐标 $c_{it}$ 及其差值，并将
+拼接后的编码投影到实例特征空间：
 \[
 p^{\mathrm{abs}}_{it}
 =
@@ -256,11 +244,8 @@ f_{\mathrm{abs}}\bigl(
 \bigr).
 \]
 $p^{\mathrm{abs}}_{it}$ 在双向 Transformer 之前加到投影视觉特征 $u_{it}$ 上，
-使图像特征同时包含原始采集参照和随内容调整后的位置。
-
-相对路径作用于图像对。对于图像 $t$ 和 $u$，原始坐标差与上下文坐标差
-分别描述两者的有符号间隔；这两个间隔的差值反映上下文坐标带来的调整。
-每个注意力头 $h$ 将这三项映射为图像对的偏置：
+使其同时包含采集参照和内容调整后的位置。相对路径将原始间隔、上下文
+间隔及其差值映射为每个注意力头的图像对偏置：
 \[
 \begin{aligned}
 b^{(h)}_{itu}
@@ -273,8 +258,7 @@ f^{(h)}_{\mathrm{rel}}\bigl(
 \end{aligned}
 \]
 $f^{(h)}_{\mathrm{rel}}$ 使用缩放后的 tanh 将 $b^{(h)}_{itu}$ 限制在
-$[-2,2]$ 内。该偏置加到缩放点积注意力 logits 中，使图像对的注意力
-同时利用采集间隔和上下文间隔。
+$[-2,2]$ 内，并将该偏置加入缩放点积注意力 logits。
 }
 
 \subsection{Label-Centric Coexistence Fusion}
@@ -524,13 +508,9 @@ y_{i\ell}(1-p_{i\ell})^{\gamma_+}\log p_{i\ell}\\[-1mm]
 其中，$\mathcal{B}$ 表示训练批次。
 }
 
-The label-conditioned textual evidence module is further regularized by a
-label-query discrimination (LQD) loss.  For a training sample with a valid
-report, we select a positive label $\ell$ and an absent label $r$.  We replace
-the text vector retrieved for $\ell$ with the vector retrieved for $r$,
-recompute the label-wise gate and fused logit, and denote the resulting
-counterfactual logit by $\widetilde{s}_{i\ell\leftarrow r}$.  Co-positive
-label pairs are excluded.  Let
+For a valid report, we select a positive label $\ell$ and an absent label $r$,
+replace the text retrieved for $\ell$ with that retrieved for $r$, recompute
+the fused logit, and exclude co-positive label pairs.  Let
 \begin{equation}
 \mathcal{P}_i
 =
@@ -541,7 +521,7 @@ Q=\sum_{i\in\mathcal{B}}|\mathcal{P}_i|.
 \end{equation}
 
 \cntranslation{%
-此外，为增强标签条件文本证据整合的标签特异性，训练阶段引入标签查询判别损失（LQD）。对于存在有效报告的样本，选择一个正标签 $\ell$ 和一个缺失标签 $r$，将标签 $\ell$ 检索到的文本向量替换为标签 $r$ 检索到的文本向量，然后重新计算标签级门控和融合 logits，并将得到的反事实 logit 记为 $\widetilde{s}_{i\ell\leftarrow r}$。共为正的标签对被排除。定义
+对于有效报告，选择一个正标签 $\ell$ 和一个缺失标签 $r$，用 $r$ 检索到的文本替换 $\ell$ 的文本并重新计算融合 logit，同时排除共为正的标签对。定义
 \[
 \mathcal{P}_i
 =
