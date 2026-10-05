@@ -13,10 +13,17 @@ We evaluate ALM-MIL on four real-world clinical cohorts and four public medical 
 }
 
 \paragraph{Experimental Settings.}
-All experiments follow a five-fold evaluation protocol. For all datasets, data are split at the patient level, with three folds used for training, one for validation, and one for testing in each run. We uniformly sample up to 64 images from each examination while preserving the original acquisition order and resize them to \(224\times224\). A pretrained ConvNeXt-Tiny serves as the visual encoder, while the masked findings report is encoded by a multi-scale TextCNN. Models are optimized with AdamW for up to 30 epochs, using an initial learning rate of \(2\times10^{-5}\) and a weight decay of 0.02. Macro-F1 is used as the primary evaluation metric, hereafter denoted as F1. For each fold, we select the model with the highest validation F1 and evaluate it on the corresponding test fold. Final results are reported as the mean and standard deviation over five folds. Additional implementation details are provided in the Appendix.
+All experiments follow a five-fold evaluation protocol. For all datasets, data are split at the patient level, with three folds used for training, one for validation, and one for testing in each run. We uniformly sample up to 64 images from each examination while preserving the original acquisition order and resize them to \(224\times224\). A pretrained ConvNeXt-Tiny serves as the visual encoder, while the masked findings report is encoded by a multi-scale TextCNN. Models are optimized with AdamW for up to 30 epochs, using an initial learning rate of \(2\times10^{-5}\) and a weight decay of 0.02. Macro-F1 is used as the primary evaluation metric, hereafter denoted as F1. For each fold, we select the model with the highest validation F1 and evaluate it on the corresponding test fold. Final results are reported as the mean and standard deviation over five folds.
 
 \cntranslation{%
-\textbf{实验设置。} 所有实验均采用五折评估协议。对于所有数据集，我们均按照患者进行分组划分，每轮使用三折训练、一折验证和一折测试。每次检查按照原始采集顺序最多均匀采样 64 张图像，并统一缩放至 \(224\times224\)。视觉端采用预训练的 ConvNeXt-Tiny 作为编码器，遮蔽目标标签信息后的所见报告采用多尺度 TextCNN 编码。模型使用 AdamW 优化，最多训练 30 个 epoch，初始学习率设为 \(2\times10^{-5}\)，weight decay 为 0.02。我们采用 Macro-F1 作为主要评价指标，后文简称为 F1。每折选取验证集 F1 最高的模型，并在对应测试折上进行评估，最终报告五折结果的均值和标准差。其余实现细节见附录。
+\textbf{实验设置。} 所有实验均采用五折评估协议。对于所有数据集，我们均按照患者进行分组划分，每轮使用三折训练、一折验证和一折测试。每次检查按照原始采集顺序最多均匀采样 64 张图像，并统一缩放至 \(224\times224\)。视觉端采用预训练的 ConvNeXt-Tiny 作为编码器，遮蔽目标标签信息后的所见报告采用多尺度 TextCNN 编码。模型使用 AdamW 优化，最多训练 30 个 epoch，初始学习率设为 \(2\times10^{-5}\)，weight decay 为 0.02。我们采用 Macro-F1 作为主要评价指标，后文简称为 F1。每折选取验证集 F1 最高的模型，并在对应测试折上进行评估，最终报告五折结果的均值和标准差。
+}
+
+\paragraph{Additional Details.}
+Dataset construction and implementation details are provided in the Appendix.
+
+\cntranslation{%
+\textbf{补充细节。} 数据集构建与实现细节见附录。
 }
 
 \subsection{Overall Performance Comparison}
