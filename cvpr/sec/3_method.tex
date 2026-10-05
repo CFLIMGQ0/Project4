@@ -389,30 +389,27 @@ $Z_i^{\mathrm{img}}\in\mathbb{R}^{L\times d}$ 为每个标签保留一个细化�
 }
 
 \paragraph{Label-conditioned Textual Evidence Integration.}
-The refined visual matrix $Z_i^{\mathrm{img}}$ and token-level report
-features $F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$ are used to retrieve
-and adaptively inject textual evidence.  The paired report is category-masked
-and encoded at the token level.  For label $\ell$, a learnable label
+The refined visual matrix $Z_i^{\mathrm{img}}$ and token-level features
+$F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$ from the category-masked report
+are used to retrieve and adaptively inject textual evidence.  For label $\ell$, a learnable label
 embedding $u_\ell$ is added to its visual representation to form the query
 \begin{equation}
 q_{i\ell}=z_{i\ell}^{\mathrm{img}}+u_\ell.
 \label{eq:lccf_query_new}
 \end{equation}
-Using $q_{i\ell}$ as the query and the report tokens as keys and values, a
-masked multi-head cross-attention module obtains
+A masked multi-head cross-attention module uses $q_{i\ell}$ to retrieve
+textual evidence from the report tokens:
 \begin{equation}
 z_{i\ell}^{\mathrm{txt}}
 =\operatorname{CrossAttn}\!\left(q_{i\ell},F_i^{\mathrm{txt}},F_i^{\mathrm{txt}}\right).
 \label{eq:lccf_text_retrieval_new}
 \end{equation}
-Applying the report padding mask to the token keys and values, independent
-label queries produce label-specific attention distributions from the same
-report, yielding
+With the report padding mask applied, independent label queries produce
 $Z_i^{\mathrm{txt}}=[z_{i1}^{\mathrm{txt}},\ldots,
 z_{iL}^{\mathrm{txt}}]^{\top}\in\mathbb{R}^{L\times d}$.
 
-To control the contribution of the retrieved evidence, we compute a scalar
-gate for each examination--label pair:
+To control the retrieved evidence, we compute a scalar gate for each
+examination--label pair:
 \begin{equation}
 g_{i\ell}=a_i\,\sigma\!\left(\rho_g([z_{i\ell}^{\mathrm{img}};z_{i\ell}^{\mathrm{txt}}])\right),
 \label{eq:lccf_gate_fusion_new}
@@ -431,14 +428,14 @@ $Z_i^{\mathrm{fuse}}=[z_{i1}^{\mathrm{fuse}},\ldots,z_{iL}^{\mathrm{fuse}}]^{\to
 
 \cntranslation{%
 \textbf{标签条件文本证据整合。}
-细化后的视觉矩阵 $Z_i^{\mathrm{img}}$ 与报告的 token 级特征
+细化后的视觉矩阵 $Z_i^{\mathrm{img}}$ 与经过类别名称掩码的报告 token 特征
 $F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$ 用于检索并自适应注入文本证据。
-配对报告经过类别名称掩码，并保留 token 级表征。对于标签 $\ell$，将可学习的
+对于标签 $\ell$，将可学习的
 标签嵌入 $u_\ell$ 加到对应的视觉表征上，形成查询
 \[
 q_{i\ell}=z_{i\ell}^{\mathrm{img}}+u_\ell.
 \]
-以 $q_{i\ell}$ 为查询、报告 token 为键和值，使用带掩码的多头交叉注意力得到
+带掩码的多头交叉注意力以 $q_{i\ell}$ 为查询，从报告 token 中检索
 \[
 z_{i\ell}^{\mathrm{txt}}
 =\operatorname{CrossAttn}\!\left(q_{i\ell},F_i^{\mathrm{txt}},F_i^{\mathrm{txt}}\right).
