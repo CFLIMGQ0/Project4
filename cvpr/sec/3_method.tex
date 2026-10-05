@@ -349,13 +349,15 @@ are first aggregated to the latent hyperedges:
 U_i=S_{\mathrm{node}\rightarrow\mathrm{edge}}^{\top}f_m(Z_i).
 \label{eq:lccf_node_edge_new}
 \end{equation}
-Edge-to-node propagation then gives
+Here $U_i$ contains the latent hyperedge features; edge-to-node propagation
+then gives
 \begin{equation}
 \widetilde Z_i=S_{\mathrm{edge}\rightarrow\mathrm{node}}U_i.
 \label{eq:lccf_edge_node_new}
 \end{equation}
-The message is propagated back to the label nodes and combined with the
-original representations through a residual update:
+$\widetilde Z_i$ is the hypergraph-refined message returned to the label
+nodes, which is combined with the original label features through a residual
+update:
 \begin{equation}
 Z_i^{\mathrm{img}}=Z_i+\rho([Z_i;\widetilde Z_i]).
 \label{eq:lccf_hypergraph_new}
@@ -374,11 +376,11 @@ $S_{\mathrm{edge}\rightarrow\mathrm{node}}$。节点特征首先聚合到潜在�
 \[
 U_i=S_{\mathrm{node}\rightarrow\mathrm{edge}}^{\top}f_m(Z_i).
 \]
-随后进行超边到节点的传播：
+其中，$U_i$ 表示潜在超边特征；随后进行超边到节点的传播：
 \[
 \widetilde Z_i=S_{\mathrm{edge}\rightarrow\mathrm{node}}U_i.
 \]
-消息返回标签节点后，通过残差更新与原始标签表征结合：
+$\widetilde Z_i$ 表示返回标签节点的超图细化消息，随后通过残差更新将其与原始标签特征结合：
 \[
 Z_i^{\mathrm{img}}=Z_i+\rho([Z_i;\widetilde Z_i]).
 \]
