@@ -1,72 +1,77 @@
 \section{Method}
 \label{sec:method}
 
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{fig/fig2.pdf}
+    \caption[Overview of ALM-MIL.]{%
+        Overview of ALM-MIL. ACPE constructs contextual coordinates and injects
+        positional information through absolute and relative routes. LCCF
+        combines label-specific visual aggregation, label hypergraph reasoning,
+        and label-conditioned text retrieval with gated fusion to predict
+        coexisting findings.\cntranslation{%
+        ALM-MIL 整体框架。ACPE 构建上下文坐标，并通过绝对与相对路径注入位置信息。
+        LCCF 结合标签特异性视觉聚合、标签超图推理，以及带门控融合的标签条件文本检索，
+        预测检查中的共存异常。}%
+    }
+    \label{fig:alm_mil_framework}
+\end{figure*}
+
 We propose Acquisition-aware Label-centric Multimodal Multiple Instance
 Learning (ALM-MIL) for examination-level multimodal multi-label recognition.
-For examination $i$, the input consists of an ordered image sequence and one
-paired report.  Given $N_i$ acquired images, we uniformly sample the sequence
-to a maximum length $T$ when $N_i>T$; when $N_i<T$, we pad it to $T$ and mark
-the padded positions with a valid-image mask.  Let $T_i=\min(N_i,T)$ denote
-the number of valid images.  The examination-level target is a multi-label vector
-$y_i\in\{0,1\}^{L}$, where multiple categories may be positive
-simultaneously.
-
-ALM-MIL first maps each valid image to an instance representation using a
-shared visual encoder.  Acquisition-aware Contextual Position Encoding (ACPE)
-then constructs contextual positional relationships from the acquisition
-indices and visual changes between neighboring images.  The resulting
-position-aware features are processed by a bidirectional Transformer.  In
-parallel, the paired report is category-masked and encoded by a multi-scale
-text convolutional neural network (TextCNN) into token features.  Label-Centric Coexistence Fusion (LCCF) organizes visual and
-textual evidence around each label, performs label-level coexistence
-reasoning, and produces one fused representation for every category.  The
-fused representations are finally used to predict the $L$ examination-level
-labels.
+For examination $i$, the input consists of an ordered sequence of $N_i$ images
+and one paired report.  Sequences longer than the maximum length $T$ are
+uniformly sampled, while shorter sequences are padded and marked with a
+valid-image mask, yielding $T_i=\min(N_i,T)$ valid images.  The target is an
+examination-level multi-label vector $y_i\in\{0,1\}^{L}$, where multiple
+labels may be positive simultaneously.  As shown in
+Fig.~\ref{fig:alm_mil_framework}, ALM-MIL encodes each valid image into an
+instance representation, applies Acquisition-aware Contextual Position
+Encoding (ACPE) and a bidirectional Transformer to model image relationships,
+and encodes the category-masked report into token features.  Label-Centric
+Coexistence Fusion (LCCF) then organizes visual and textual evidence around
+each label through label-specific visual aggregation, coexistence reasoning,
+and adaptive textual fusion, producing one representation for each of the
+$L$ labels for final prediction.
 
 \cntranslation{%
 本文提出采集感知的标签中心多模态多实例学习框架
 （Acquisition-aware Label-centric Multimodal Multiple Instance Learning，
-ALM-MIL），用于检查级多模态多标签识别。对于检查 $i$，输入由一组有序
-图像和一份配对报告组成。给定检查中的 $N_i$ 张采集图像，当图像数量
-超过最大长度 $T$ 时，按顺序等距采样至 $T$ 张；当图像数量少于 $T$ 张时，
-将序列补齐至 $T$，并用有效图像掩码标记补齐位置。记
-$T_i=\min(N_i,T)$ 为有效图像数。检查级目标为多标签
-向量 $y_i\in\{0,1\}^{L}$，其中多个类别可以同时为正。
-
-ALM-MIL 首先通过共享视觉编码器将每张有效图像映射为实例表征。随后，
-采集感知上下文位置编码（Acquisition-aware Contextual Position Encoding，
-ACPE）利用采集索引以及相邻图像之间的视觉变化构建上下文位置关系，
-并由双向 Transformer 处理得到带位置信息的视觉特征。与此同时，对配对
-报告中的类别名称进行掩码，并通过多尺度文本卷积神经网络（TextCNN）
-将报告编码为 token 特征。标签中心共存
-融合（Label-Centric Coexistence Fusion，LCCF）围绕各个标签组织视觉与
-文本证据，进行标签级共存推理，并为每个类别生成一个融合表征。最终，
-这些融合表征用于预测 $L$ 个检查级标签。
+ALM-MIL），用于检查级多模态多标签识别。对于检查 $i$，输入由 $N_i$ 张
+有序图像和一份配对报告组成。当图像数量超过最大长度 $T$ 时进行等距采样，
+否则补齐至 $T$ 并标记有效图像掩码，从而得到 $T_i=\min(N_i,T)$ 张有效图像。
+目标为检查级多标签向量 $y_i\in\{0,1\}^{L}$，其中多个标签可以同时为正。
+如图~\ref{fig:alm_mil_framework} 所示，ALM-MIL 首先将每张有效图像编码为
+实例表征，再通过采集感知上下文位置编码（Acquisition-aware Contextual
+Position Encoding，ACPE）和双向 Transformer 建模图像关系，并将经过类别
+掩码的报告编码为 token 特征。随后，标签中心共存融合（Label-Centric
+Coexistence Fusion，LCCF）围绕各个标签组织视觉与文本证据，通过标签级
+视觉聚合、共存关系推理和自适应文本融合，为 $L$ 个标签分别生成表征并进行
+最终预测。
 }
 
 \subsection{Acquisition-aware Contextual Position Encoding}
 \label{sec:acpe}
 
 \paragraph{Acquisition Anchoring.}
-ACPE starts from the acquisition order of the retained images.  Let $s_{it}$
-denote the acquisition index of the $t$-th retained image, and normalize it
-to obtain the acquisition anchor
+ACPE starts from the ordered slots of the retained images.  Let $t$ denote the
+slot index of a retained image and define its normalized slot anchor as
 \begin{equation}
-r_{it}=\frac{s_{it}}{\max(N_i-1,1)}.
+r_{it}=\frac{t-1}{\max(T_i-1,1)}.
 \label{eq:acpe_anchor_new}
 \end{equation}
-The corresponding raw acquisition gap is then
+The corresponding raw slot gap is then
 $\Delta r_{it}=r_{it}-r_{i,t-1}$.  This anchor provides the positional
 reference from which ACPE constructs contextual coordinates.
 
 \cntranslation{%
 \textbf{采集锚定。}
-ACPE 从保留图像的采集顺序开始。令 $s_{it}$ 表示第 $t$ 张保留图像的
-采集索引，并将其归一化为采集锚点
+ACPE 从保留图像的有序槽位开始。令 $t$ 表示保留图像的槽位索引，并将其
+归一化为槽位锚点
 \[
-r_{it}=\frac{s_{it}}{\max(N_i-1,1)}.
+r_{it}=\frac{t-1}{\max(T_i-1,1)}.
 \]
-随后，对应的原始采集间距定义为
+随后，对应的原始槽位间距定义为
 $\Delta r_{it}=r_{it}-r_{i,t-1}$。该锚点为 ACPE 构建上下文坐标提供位置参照。
 }
 
@@ -93,19 +98,17 @@ next image, respectively.  The magnitudes $m^-_{it}$ and $m^+_{it}$ measure
 the element-wise strength of these two changes without retaining their signs.
 The interaction $q_{it}$ compares the two transitions element-wise: positive
 components indicate same-direction continuation, whereas negative components
-indicate a reversal.  We concatenate these visual cues with the raw
-acquisition gap to form the context descriptor
+indicate a reversal.  We use these visual cues to form the context descriptor
 \begin{equation}
 \begin{aligned}
 \xi_{it}=\bigl[&u_{it},\delta^-_{it},\delta^+_{it},
 m^-_{it},m^+_{it},\\[-1mm]
-&q_{it},\Delta r_{it}\bigr].
+&q_{it}\bigr].
 \end{aligned}
 \label{eq:acpe_descriptor}
 \end{equation}
-The descriptor $\xi_{it}$ collects these cues and is provided to the
-deformation estimator; $\Delta r_{it}$ is the raw gap defined from the
-acquisition anchors.
+The descriptor $\xi_{it}$ collects these visual cues and is provided to the
+deformation estimator.
 An MLP produces a bounded deformation through
 \begin{equation}
 \eta_{it}=\alpha\tanh\!\bigl(f_\eta(\xi_{it})\bigr),
@@ -130,12 +133,12 @@ q_{it}&=\delta^-_{it}\odot\delta^+_{it}.
 \right.
 \]
 其中，$\delta^-_{it}$ 和 $\delta^+_{it}$ 分别表示从前一张图像到当前图像以及从当前图像到后一张图像的有符号特征变化；$m^-_{it}$ 和 $m^+_{it}$ 表示两侧变化的逐元素强度，不保留变化的符号；$q_{it}$ 是两个有符号转变的逐元素交互项，正分量表示同向延续，负分量表示变化反转。
-我们将这些视觉线索与原始采集间距拼接为上下文描述：
+我们使用这些视觉线索构成上下文描述：
 \[
 \xi_{it}=\bigl[u_{it},\delta^-_{it},\delta^+_{it},
-m^-_{it},m^+_{it},q_{it},\Delta r_{it}\bigr].
+m^-_{it},m^+_{it},q_{it}\bigr].
 \]
-其中，$\xi_{it}$ 是输入变形估计器的上下文描述子，$\Delta r_{it}$ 是由采集锚点定义的原始间距。
+其中，$\xi_{it}$ 是输入变形估计器的上下文描述子。
 多层感知机根据该描述子产生有界变形量：
 \[
 \eta_{it}=\alpha\tanh\!\bigl(f_\eta(\xi_{it})\bigr),
@@ -305,9 +308,9 @@ label-specific visual representation is then obtained as
 z_{i\ell}=\sum_{t=1}^{T}a_{i\ell t}h_{it}.
 \label{eq:lccf_visual_aggregate_new}
 \end{equation}
-The gated image mapping is shared across labels, whereas each label has its
-own $w_\ell$.  Thus, different labels can select different images, and one
-image can contribute to multiple labels.  Stacking the outputs gives
+The gated image mapping is shared across labels, while each label has its own
+$w_\ell$, allowing different labels to select different images and share an
+image when appropriate; stacking the outputs gives
 $Z_i=[z_{i1},\ldots,z_{iL}]^{\top}\in\mathbb{R}^{L\times d}$.
 
 \cntranslation{%
@@ -331,7 +334,7 @@ a_{i\ell t}
 \[
 z_{i\ell}=\sum_{t=1}^{T}a_{i\ell t}h_{it}.
 \]
-图像特征变换在标签之间共享，而每个标签具有独立的 $w_\ell$。因此，不同标签可以选择不同图像，同一张图像也可以同时为多个标签提供证据。将所有标签视觉表征堆叠得到
+图像特征变换在标签之间共享，而每个标签具有独立的 $w_\ell$，使不同标签能够选择不同图像，并在需要时共享同一图像的证据；将所有标签视觉表征堆叠得到
 $Z_i=[z_{i1},\ldots,z_{iL}]^{\top}\in\mathbb{R}^{L\times d}$。
 }
 
@@ -346,23 +349,23 @@ are first aggregated to the latent hyperedges:
 U_i=S_{\mathrm{node}\rightarrow\mathrm{edge}}^{\top}f_m(Z_i).
 \label{eq:lccf_node_edge_new}
 \end{equation}
-Here $U_i$ contains the features of the latent hyperedges.  Edge-to-node
-propagation then gives
+Here $U_i$ contains the latent hyperedge features; edge-to-node propagation
+then gives
 \begin{equation}
 \widetilde Z_i=S_{\mathrm{edge}\rightarrow\mathrm{node}}U_i.
 \label{eq:lccf_edge_node_new}
 \end{equation}
 $\widetilde Z_i$ is the hypergraph-refined message returned to the label
-nodes.  A residual update combines it with the original label features:
+nodes, which is combined with the original label features through a residual
+update:
 \begin{equation}
 Z_i^{\mathrm{img}}=Z_i+\rho([Z_i;\widetilde Z_i]).
 \label{eq:lccf_hypergraph_new}
 \end{equation}
-The latent hypergraph exchanges information among multiple coexisting labels
-through shared hyperedges, while $B$ remains a learned model parameter.  The residual connection
-preserves the original label-specific visual evidence, and
-$Z_i^{\mathrm{img}}\in\mathbb{R}^{L\times d}$ still contains one refined
-visual vector for each label.
+Parameterized by $B$, the latent hypergraph exchanges higher-order information
+among coexisting labels, while the residual connection preserves label-specific
+visual evidence and $Z_i^{\mathrm{img}}\in\mathbb{R}^{L\times d}$ retains one
+refined vector per label.
 
 \cntranslation{%
 \textbf{共存感知超图推理。}
@@ -373,16 +376,16 @@ $S_{\mathrm{edge}\rightarrow\mathrm{node}}$。节点特征首先聚合到潜在�
 \[
 U_i=S_{\mathrm{node}\rightarrow\mathrm{edge}}^{\top}f_m(Z_i).
 \]
-其中，$U_i$ 表示潜在超边的特征。随后进行超边到节点的传播：
+其中，$U_i$ 表示潜在超边特征；随后进行超边到节点的传播：
 \[
 \widetilde Z_i=S_{\mathrm{edge}\rightarrow\mathrm{node}}U_i.
 \]
-$\widetilde Z_i$ 表示返回标签节点的超图细化消息。最后，通过残差更新将其与原始标签特征结合：
+$\widetilde Z_i$ 表示返回标签节点的超图细化消息，随后通过残差更新将其与原始标签特征结合：
 \[
 Z_i^{\mathrm{img}}=Z_i+\rho([Z_i;\widetilde Z_i]).
 \]
-潜在超图通过共享超边在多个共存标签之间交换高阶关系信息，$B$ 是可学习的模型参数。残差连接保留原始的标签特异性视觉证据，输出
-$Z_i^{\mathrm{img}}\in\mathbb{R}^{L\times d}$ 仍为每个标签保留一个细化后的视觉向量。
+以 $B$ 为可学习参数的潜在超图通过共享超边在共存标签之间交换高阶信息，同时由残差连接保留标签特异性的视觉证据，使
+$Z_i^{\mathrm{img}}\in\mathbb{R}^{L\times d}$ 为每个标签保留一个细化向量。
 }
 
 \paragraph{Label-conditioned Textual Evidence Integration.}
@@ -402,9 +405,9 @@ z_{i\ell}^{\mathrm{txt}}
 =\operatorname{CrossAttn}\!\left(q_{i\ell},F_i^{\mathrm{txt}},F_i^{\mathrm{txt}}\right).
 \label{eq:lccf_text_retrieval_new}
 \end{equation}
-The report padding mask is applied to the token keys and values.  Because
-each label uses an independent query, the same report can yield label-specific
-token attention distributions.  Stacking the retrieved vectors gives
+Applying the report padding mask to the token keys and values, independent
+label queries produce label-specific attention distributions from the same
+report, yielding
 $Z_i^{\mathrm{txt}}=[z_{i1}^{\mathrm{txt}},\ldots,
 z_{iL}^{\mathrm{txt}}]^{\top}\in\mathbb{R}^{L\times d}$.
 
@@ -420,9 +423,9 @@ z_{i\ell}^{\mathrm{fuse}}
 =z_{i\ell}^{\mathrm{img}}+g_{i\ell}z_{i\ell}^{\mathrm{txt}}.
 \label{eq:lccf_fusion_new}
 \end{equation}
-Here $a_i$ is zero when no valid report is available.  The gate therefore
-adapts the textual contribution while the residual path preserves the
-label-specific visual evidence.  The fused matrix is
+With $a_i=0$ when no valid report is available, the gate adapts the textual
+contribution while the residual path preserves label-specific visual evidence,
+yielding
 $Z_i^{\mathrm{fuse}}=[z_{i1}^{\mathrm{fuse}},\ldots,z_{iL}^{\mathrm{fuse}}]^{\top}
 \in\mathbb{R}^{L\times d}$.
 
@@ -440,8 +443,8 @@ q_{i\ell}=z_{i\ell}^{\mathrm{img}}+u_\ell.
 z_{i\ell}^{\mathrm{txt}}
 =\operatorname{CrossAttn}\!\left(q_{i\ell},F_i^{\mathrm{txt}},F_i^{\mathrm{txt}}\right).
 \]
-报告补齐位置的掩码作用于 token 的键和值。由于每个标签使用独立查询，同一份
-报告可以为不同标签产生不同的 token 注意力分布。将检索到的向量堆叠得到
+报告补齐位置的掩码作用于 token 的键和值；不同标签通过独立查询从同一份报告
+中产生标签特异性的注意力分布，并得到
 $Z_i^{\mathrm{txt}}=[z_{i1}^{\mathrm{txt}},\ldots,z_{iL}^{\mathrm{txt}}]^{\top}
 \in\mathbb{R}^{L\times d}$。
 
@@ -454,8 +457,8 @@ g_{i\ell}=a_i\,\sigma\!\left(\rho_g([z_{i\ell}^{\mathrm{img}};z_{i\ell}^{\mathrm
 z_{i\ell}^{\mathrm{fuse}}
 =z_{i\ell}^{\mathrm{img}}+g_{i\ell}z_{i\ell}^{\mathrm{txt}}.
 \]
-当没有有效报告时，$a_i=0$；门控因此能够自适应调节文本贡献，而残差路径保留
-标签特异性的视觉证据。最终得到
+当没有有效报告时 $a_i=0$，门控自适应调节文本贡献，残差路径保留标签特异性的
+视觉证据，最终得到
 $Z_i^{\mathrm{fuse}}=[z_{i1}^{\mathrm{fuse}},\ldots,z_{iL}^{\mathrm{fuse}}]^{\top}
 \in\mathbb{R}^{L\times d}$。
 }
