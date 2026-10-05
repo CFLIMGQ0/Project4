@@ -389,10 +389,10 @@ $Z_i^{\mathrm{img}}\in\mathbb{R}^{L\times d}$ 为每个标签保留一个细化�
 }
 
 \paragraph{Label-conditioned Textual Evidence Integration.}
-The refined visual matrix $Z_i^{\mathrm{img}}$ and token-level features
-$F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$ from the category-masked report
-are used to retrieve and adaptively inject textual evidence.  For label $\ell$, a learnable label
-embedding $u_\ell$ is added to its visual representation to form the query
+Given the refined visual matrix $Z_i^{\mathrm{img}}$ and token-level features
+$F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$ from the category-masked report,
+we form a label-specific query by adding a learnable embedding $u_\ell$ to the
+visual representation:
 \begin{equation}
 q_{i\ell}=z_{i\ell}^{\mathrm{img}}+u_\ell.
 \label{eq:lccf_query_new}
@@ -404,17 +404,18 @@ z_{i\ell}^{\mathrm{txt}}
 =\operatorname{CrossAttn}\!\left(q_{i\ell},F_i^{\mathrm{txt}},F_i^{\mathrm{txt}}\right).
 \label{eq:lccf_text_retrieval_new}
 \end{equation}
-With the report padding mask applied, independent label queries produce
+With the report padding mask applied, independent queries produce
 $Z_i^{\mathrm{txt}}=[z_{i1}^{\mathrm{txt}},\ldots,
 z_{iL}^{\mathrm{txt}}]^{\top}\in\mathbb{R}^{L\times d}$.
 
-To control the retrieved evidence, we compute a scalar gate for each
-examination--label pair:
+A scalar gate controls the retrieved contribution for each examination--label
+pair:
 \begin{equation}
 g_{i\ell}=a_i\,\sigma\!\left(\rho_g([z_{i\ell}^{\mathrm{img}};z_{i\ell}^{\mathrm{txt}}])\right),
 \label{eq:lccf_gate_fusion_new}
 \end{equation}
-and fuse it with the visual representation through a residual connection:
+We then fuse the retrieved evidence with the visual representation through a
+residual connection:
 \begin{equation}
 z_{i\ell}^{\mathrm{fuse}}
 =z_{i\ell}^{\mathrm{img}}+g_{i\ell}z_{i\ell}^{\mathrm{txt}}.
@@ -428,10 +429,9 @@ $Z_i^{\mathrm{fuse}}=[z_{i1}^{\mathrm{fuse}},\ldots,z_{iL}^{\mathrm{fuse}}]^{\to
 
 \cntranslation{%
 \textbf{标签条件文本证据整合。}
-细化后的视觉矩阵 $Z_i^{\mathrm{img}}$ 与经过类别名称掩码的报告 token 特征
-$F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$ 用于检索并自适应注入文本证据。
-对于标签 $\ell$，将可学习的
-标签嵌入 $u_\ell$ 加到对应的视觉表征上，形成查询
+给定细化后的视觉矩阵 $Z_i^{\mathrm{img}}$ 和经过类别名称掩码的报告 token 特征
+$F_i^{\mathrm{txt}}\in\mathbb{R}^{K_i\times d}$，将可学习的标签嵌入 $u_\ell$
+加到对应的视觉表征上，形成标签特异性查询
 \[
 q_{i\ell}=z_{i\ell}^{\mathrm{img}}+u_\ell.
 \]
@@ -440,12 +440,12 @@ q_{i\ell}=z_{i\ell}^{\mathrm{img}}+u_\ell.
 z_{i\ell}^{\mathrm{txt}}
 =\operatorname{CrossAttn}\!\left(q_{i\ell},F_i^{\mathrm{txt}},F_i^{\mathrm{txt}}\right).
 \]
-报告补齐位置的掩码作用于 token 的键和值；不同标签通过独立查询从同一份报告
-中产生标签特异性的注意力分布，并得到
+在报告补齐位置的掩码下，不同标签通过独立查询从同一份报告中产生
+标签特异性的注意力分布，并得到
 $Z_i^{\mathrm{txt}}=[z_{i1}^{\mathrm{txt}},\ldots,z_{iL}^{\mathrm{txt}}]^{\top}
 \in\mathbb{R}^{L\times d}$。
 
-为控制文本证据的注入强度，对每个检查—标签对计算一个标量门控：
+对每个检查—标签对计算标量门控，以控制文本贡献：
 \[
 g_{i\ell}=a_i\,\sigma\!\left(\rho_g([z_{i\ell}^{\mathrm{img}};z_{i\ell}^{\mathrm{txt}}])\right).
 \]
