@@ -81,10 +81,10 @@ $^{\dagger}$ 表示针对当前任务适配或重新实现的方法；$^{\ddagge
 \end{minipage}
 \end{table*}
 
-We compare ALM-MIL with image-only, text-only, and multimodal baselines on all eight datasets, as summarized in Table~\ref{tab:overall_comparison}. Across the four clinical cohorts and three of the four public datasets, ALM-MIL achieves the highest mean F1, outperforming both unimodal and multimodal baselines. On AA-Mini, its performance is lower than Med3DVLM and other multimodal baselines, possibly because the weak co-occurrence correlations among its target labels provide limited relational information for LCCF. Overall, these results support the applicability of ALM-MIL across imaging modalities and target-label configurations.
+We compare ALM-MIL with image-only, text-only, and multimodal baselines on all eight datasets, as summarized in Table~\ref{tab:overall_comparison}. Across the four clinical cohorts and three of the four public datasets, ALM-MIL achieves the highest mean F1, outperforming both unimodal and multimodal baselines. On AA-Mini, its performance is lower than Med3DVLM and other multimodal baselines. This may be related to the weak co-occurrence correlations among AA-Mini's target labels, which provide limited relational information for LCCF to exploit and thus leave less room for further classification gains. Overall, the leading results achieved by our model on these endoscopic, CT, and MRI examinations support the applicability of the framework across imaging modalities and target-label configurations. The following sections examine the contributions of ACPE and LCCF through targeted analyses.
 
 \cntranslation{%
-我们在全部八个数据集上，将 ALM-MIL 与纯图像、纯文本及多模态基线进行比较，结果汇总于表~\ref{tab:overall_comparison}。ALM-MIL 在四个临床队列和四个公开数据集中的三个数据集上取得最高的平均 F1，优于纯图像、纯文本及多模态基线。在 AA-Mini 上，其性能低于 Med3DVLM 等多模态基线，可能是因为该数据集目标标签之间较弱的共现相关性为 LCCF 提供的关系信息有限。总体而言，这些结果支持 ALM-MIL 在不同成像模态与目标标签设置下的适用性。
+我们在全部八个数据集上，将 ALM-MIL 与纯图像、纯文本及多模态基线进行比较，结果汇总于表~\ref{tab:overall_comparison}。ALM-MIL 在四个临床队列和四个公开数据集中的三个数据集上取得最高的平均 F1，优于纯图像、纯文本及多模态基线。在 AA-Mini 上，其性能低于 Med3DVLM 等多模态基线。这可能与 AA-Mini 各目标标签之间较弱的共现相关性有关：标签关系能够提供的互补信息有限，因此 LCCF 可利用的关系信息较少，难以进一步提升分类性能。总体而言，我们的模型在这些内镜、CT 和 MRI 检查中取得的领先结果支持了该框架在不同成像模态与目标标签设置下的适用性。后续章节将通过针对性分析，进一步考察 ACPE 和 LCCF 的贡献。
 }
 
 \subsection{Robustness under Structured Image Missingness}
