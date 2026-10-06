@@ -120,10 +120,10 @@ To assess whether ACPE mitigates positional-reference mismatch under irregular s
 
 % 本节先记录对照设置与分析目的；所有结果留空，待作者确认数据后补写结论。
 \paragraph{Comparison with positional modeling methods.}
-To evaluate ACPE's improvements in classification performance for ordered images, we compare it with representative state-of-the-art positional modeling methods. We replace only the positional component in ALM-MIL with Original PE or one of ComRoPE-AP, VideoRoPE, PaTH, and DAPE V2-KERPLE. Table~\ref{tab:position_mechanism_comparison} reports the resulting five-fold F1 scores. ACPE ranks highest on all four public datasets, indicating that its contextual positional representation is more effective for this ordered multi-image setting than the alternative positional mechanisms.
+To evaluate ACPE's improvements in classification performance for ordered images, we compare it with representative state-of-the-art positional modeling methods. We replace only the positional component in ALM-MIL with one of ComRoPE-AP, VideoRoPE, PaTH, and DAPE V2-KERPLE. Table~\ref{tab:position_mechanism_comparison} reports the resulting five-fold F1 scores. ACPE ranks highest on all four public datasets, indicating that its contextual positional representation is more effective for this ordered multi-image setting than the alternative positional mechanisms.
 
 \cntranslation{%
-\textbf{位置建模方法比较。} 为评估 ACPE 在有序图像分类中的性能提升，我们将其与代表性的先进位置建模方法进行比较。我们仅在 ALM-MIL 中替换位置建模组件，分别采用 Original PE、ComRoPE-AP、VideoRoPE、PaTH 和 DAPE V2-KERPLE。表~\ref{tab:position_mechanism_comparison} 给出了五折 F1 结果。ACPE 在四个公开数据集上均取得最高结果，说明其上下文位置表征在当前有序多图像场景中比其他位置机制更有效。
+\textbf{位置建模方法比较。} 为评估 ACPE 在有序图像分类中的性能提升，我们将其与代表性的先进位置建模方法进行比较。我们仅在 ALM-MIL 中替换位置建模组件，分别采用 ComRoPE-AP、VideoRoPE、PaTH 和 DAPE V2-KERPLE。表~\ref{tab:position_mechanism_comparison} 给出了五折 F1 结果。ACPE 在四个公开数据集上均取得最高结果，说明其上下文位置表征在当前有序多图像场景中比其他位置机制更有效。
 }
 
 \begin{table}[t]
@@ -184,10 +184,10 @@ $\checkmark$ & $\checkmark$ & $\checkmark$ & $\checkmark$ & \textbf{81.34\scaleb
 \end{table}
 
 \paragraph{Position-injection route ablation.}
-We observe that, with all images retained, ACPE exhibits pronounced over-correction relative to Original PE yet achieves a higher F1. This suggests that the absolute and relative injection routes may provide complementary benefits, so we evaluate each route separately and their combination. Table~\ref{tab:position_route_ablation} reports the resulting F1 scores. Combining both routes gives the strongest result on every dataset, showing that absolute coordinate features and relative attention biases contribute distinct information and can improve recognition even when coordinate agreement with the raw acquisition reference is not maximal.
+We observe that, with all images retained, ACPE exhibits pronounced over-correction relative to Original PE yet achieves a higher F1. This suggests that the absolute and relative injection routes may provide complementary benefits, so we evaluate each route separately and their combination. Table~\ref{tab:position_route_ablation} reports the resulting F1 scores. Combining both routes gives the strongest result on every dataset, showing that absolute coordinate features and relative attention biases contribute distinct information and can improve recognition.
 
 \cntranslation{%
-\textbf{位置注入路径消融。} 我们观察到，在保留全部图像时，ACPE 相比 Original PE 存在明显的过度修正现象，却取得了更高的 F1。这表明绝对路径和相对路径可能提供互补的识别收益，因此我们分别评估两条路径及其组合。表~\ref{tab:position_route_ablation} 给出了相应的 F1 结果。两条路径结合时在所有数据集上均取得最强结果，表明绝对坐标特征与相对注意力偏置提供了不同信息，即使坐标与原始采集参照的一致性并非最高，也能够提升识别性能。
+\textbf{位置注入路径消融。} 我们观察到，在保留全部图像时，ACPE 相比 Original PE 存在明显的过度修正现象，却取得了更高的 F1。这表明绝对路径和相对路径可能提供互补的识别收益，因此我们分别评估两条路径及其组合。表~\ref{tab:position_route_ablation} 给出了相应的 F1 结果。两条路径结合时在所有数据集上均取得最强结果，表明绝对坐标特征与相对注意力偏置提供了不同信息，并能够提升识别性能。
 }
 
 \begin{table}[t]
